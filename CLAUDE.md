@@ -44,16 +44,39 @@ dropped (serde if revived). Stack: crossterm (behind a `Backend` trait) →
 vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
 
 ## Current state
-- Planning docs written and committed; methodology established.
-- **No Cargo crate yet** — only `mise.toml` (rust = latest) and `docs/`.
-- Git initialized on `main`; 2 commits so far.
+- Planning docs written; methodology established.
+- **Crate scaffolded** (`Cargo.toml` pkg `tvision`, edition 2024; `src/lib.rs`
+  with the house-style root re-exports + a Phase 0 module map; `NOTICE`).
+- **Phase 0 started** (per `docs/PORT-ORDER.md`):
+  - rows 1–2 `Point`/`Rect` → `src/view/geometry.rs` (`r#move`/`r#union` keep the
+    keyword-colliding names);
+  - rows 3–4 `Color`/`Style`/`Modifiers` → `src/color.rs` (D6; all 7 `sl*` flags;
+    `Style::reversed()` ports `reverseAttribute`);
+  - row 6 `Cell` → `src/screen/cell.rs` (D6+D13; grapheme symbol + `wide`/`trail`,
+    derives `PartialEq` for the row-18 diff);
+  - row 8 `Text` → `src/text.rs` (D13; `width`/`measure`/`scroll`/`next`/`draw_one`/
+    `draw_str[_ex]`. Built on `unicode-segmentation` graphemes + `unicode-width`;
+    drops magiblot's UTF-8 DFA — one grapheme cluster = one cell, width from the
+    base char, ZWJ sequences clustered);
+  - row 7 `DrawBuffer` → `src/screen/draw_buffer.rs` (`move_char`/`move_str[_part]`/
+    `move_cstr[_part]`/`move_buf`/`put_char`/`put_attribute`; delegates text to row
+    8; dropped the `0 = retain` sentinel — `move_char` always writes both).
+  - 39 unit tests green; `cargo clippy --all-targets` and `cargo fmt --check` clean.
+  - Coordinates are `i32` (faithful to magiblot's `int`).
+  - Deps: `unicode-segmentation`, `unicode-width`.
+- Git on `main`; the crate scaffold + Phase 0 rows are **uncommitted** (commit
+  only when asked).
 
 ## Next step
-Scaffold the `tvision` crate (Cargo.toml, `lib.rs`, module skeleton per
-PORTING-GUIDE §13), then build the **Phase 0 `INFRA`** substrate (geometry,
-`Color`/`Style`, vendored cell buffer + diff, `ViewId` arena, `Backend` +
-`HeadlessBackend`, `Clock`/timer, capture stack, `Context`). That substrate
-unlocks every later `MECHANICAL` widget and all snapshot tests.
+Continue Phase 0 in dependency order: `Key`/`Event` (rows 10–11, `src/event` —
+D1 modern key values from crossterm, D4 `enum Event` + `EventMask`); `Command`/
+command set (row 12, `src/command` — `Command(u16)` open newtype + `HashSet`).
+Then the `INFRA`: quantization ladder (row 5, in `backend`), `ViewId` arena (row
+17), vendored ratatui back-buffer + diff (row 18 — copy ratatui's `Buffer`/`Cell`
++diff, keep its MIT header), `Backend` + `CrosstermBackend` + `HeadlessBackend`
+(row 19), `Clock` + timer queue (row 20), capture stack (row 21), `Context`/
+`DrawCtx` (row 22). That substrate unlocks every later `MECHANICAL` widget and all
+snapshot tests.
 
 ## Conventions
 - English for all code/comments/identifiers (user-facing strings may be localized).

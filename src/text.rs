@@ -1,0 +1,393 @@
+//! Width-aware Unicode text — faithful port of the `TText` primitives
+//! (`ttext.h`, `source/platform/ttext.cpp`), under deviation **D13**.
+//!
+//! magiblot's `TText` hand-decodes UTF-8 with a DFA and iterates per *codepoint*,
+//! appending zero-width combining marks onto the previous cell at draw time.
+//! Rust strings are already valid UTF-8, and `unicode-segmentation` yields
+//! grapheme clusters directly, so D13 lets us drop the DFA and the
+//! append-combining-mark machinery: **one grapheme cluster is one cell** (two for
+//! a double-width glyph), and a cluster's column width comes from its base char.
+//! This also clusters ZWJ emoji sequences into a single cell — the intentional
+//! delta beyond magiblot's per-codepoint model, which split them.
+//!
+//! All layout/cursor math here measures in **display columns**, exactly as
+//! `TText` does.
+//!
+//! ### Cell occupancy of a grapheme
+//! Driven by the base char's [`unicode_width`] (mirroring magiblot's
+//! `bool wide = mb.width > 1`):
+//! * control char (`width() == None`) → the replacement glyph `�`, 1 column;
+//! * zero-width (combining-only / ZWJ-only cluster) → 0 columns (occupies no cell);
+//! * width 1 → 1 column;
+//! * width ≥ 2 → a *wide* lead cell + a trailing continuation cell (2 columns).
+
+use crate::color::Style;
+use crate::screen::Cell;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthChar;
+
+/// The replacement glyph drawn for an unprintable (control) character — matches
+/// magiblot's `�` substitution in `drawOneImpl`.
+const REPLACEMENT: &str = "\u{FFFD}";
+
+/// Width, in display columns, the first grapheme of `g` occupies. `g` must be a
+/// single grapheme cluster. Returns `None` only for the empty string.
+fn grapheme_columns(g: &str) -> usize {
+    match g.chars().next() {
+        None => 0,
+        // C0/C1 control chars have no width; magiblot draws `�` (1 column).
+        Some(c) => UnicodeWidthChar::width(c).unwrap_or(1),
+    }
+}
+
+/// Byte length and column width of the first grapheme in `text`, or `None` when
+/// `text` is empty. Port of `TText::next` / `nextImpl`, collapsed to the grapheme
+/// model.
+pub fn next(text: &str) -> Option<(usize, usize)> {
+    let g = text.graphemes(true).next()?;
+    Some((g.len(), grapheme_columns(g)))
+}
+
+/// Width, the character (grapheme) count, and the number of non-zero-width
+/// graphemes of `text`. Port of `TTextMetrics`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TextMetrics {
+    pub width: usize,
+    /// Total grapheme clusters. NB: `TTextMetrics::characterCount` counts
+    /// *codepoints*; we count *clusters* (they differ across combining
+    /// sequences — see D13 in the porting guide).
+    pub character_count: usize,
+    /// Graphemes that occupy at least one column (`graphemeCount`).
+    pub grapheme_count: usize,
+}
+
+/// Display width of `text` in columns. Port of `TText::width`.
+pub fn width(text: &str) -> usize {
+    text.graphemes(true).map(grapheme_columns).sum()
+}
+
+/// Width + grapheme metrics of `text`. Port of `TText::measure`.
+pub fn measure(text: &str) -> TextMetrics {
+    let mut m = TextMetrics::default();
+    for g in text.graphemes(true) {
+        let w = grapheme_columns(g);
+        m.width += w;
+        m.character_count += 1;
+        m.grapheme_count += (w > 0) as usize;
+    }
+    m
+}
+
+/// Byte length of a leading substring of `text` that is `count` columns wide,
+/// together with that substring's actual width. Port of `TText::scroll`.
+///
+/// If `text` is narrower than `count`, the whole string is returned. Negative
+/// `count` is treated as 0 (faithful to the C++ `int` parameter). When column
+/// `count` falls in the middle of a double-width grapheme, `include_incomplete`
+/// decides whether that grapheme is included.
+pub fn scroll(text: &str, count: i32, include_incomplete: bool) -> (usize, usize) {
+    if count <= 0 {
+        return (0, 0);
+    }
+    let count = count as usize;
+    let mut i = 0; // byte offset
+    let mut w = 0; // accumulated width
+    loop {
+        let (i2, w2) = (i, w);
+        match next(&text[i..]) {
+            None => break,
+            Some((len, gw)) => {
+                i += len;
+                w += gw;
+                if w == count {
+                    break;
+                }
+                if w > count {
+                    if !include_incomplete {
+                        i = i2;
+                        w = w2;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    (i, w)
+}
+
+/// Write a single grapheme from `text` (at byte offset `j`) into `cells` at index
+/// `i`. Returns `(bytes_consumed, cells_advanced)`. Port of `TText::drawOneImpl`.
+///
+/// `cells_advanced` is 0 when there is no room (the caller stops), 0 for a
+/// zero-width grapheme (consumed but draws nothing), 1 for a normal glyph, and 2
+/// for a wide glyph that had room for its trailing cell.
+fn draw_one_impl(cells: &mut [Cell], i: usize, text: &str, j: usize) -> (usize, usize) {
+    let Some((len, w)) = next(&text[j..]) else {
+        return (0, 0);
+    };
+    let g = &text[j..j + len];
+    if w == 0 {
+        // Zero-width cluster (lone combining mark / ZWJ): consume, draw nothing.
+        // (Combining marks attach to their base inside the grapheme already.)
+        return (len, 0);
+    }
+    if i >= cells.len() {
+        // No room — signal the caller to stop (mirrors C++ fall-through to {0,0}).
+        return (0, 0);
+    }
+    let is_control = g
+        .chars()
+        .next()
+        .is_some_and(|c| UnicodeWidthChar::width(c).is_none());
+    if is_control {
+        cells[i].set_str(REPLACEMENT, false);
+        return (len, 1);
+    }
+    if w > 1 {
+        let has_trail = i + 1 < cells.len();
+        cells[i].set_str(g, true);
+        if has_trail {
+            cells[i + 1].set_wide_trail();
+        }
+        (len, 1 + has_trail as usize)
+    } else {
+        cells[i].set_str(g, false);
+        (len, 1)
+    }
+}
+
+/// Apply `transform` to a cell's style in place.
+fn apply(cell: &mut Cell, transform: &mut impl FnMut(&mut Style)) {
+    let mut s = cell.style();
+    transform(&mut s);
+    cell.set_style(s);
+}
+
+/// Write a single grapheme from `text` (at byte offset `j`) into `cells` at index
+/// `i`, applying `transform` to the [`Style`] of each cell written. Returns
+/// `(bytes_consumed, cells_advanced)`. Port of `TText::drawOne` / `drawOneT`.
+///
+/// A wide glyph applies `transform` to both its lead and trailing cell.
+/// `cells_advanced == 0` with `bytes_consumed == 0` means there was no room — the
+/// caller should stop.
+pub fn draw_one(
+    cells: &mut [Cell],
+    i: usize,
+    text: &str,
+    j: usize,
+    mut transform: impl FnMut(&mut Style),
+) -> (usize, usize) {
+    let (len, advanced) = draw_one_impl(cells, i, text, j);
+    if advanced >= 1 {
+        apply(&mut cells[i], &mut transform);
+    }
+    if advanced > 1 {
+        apply(&mut cells[i + 1], &mut transform);
+    }
+    (len, advanced)
+}
+
+/// Copy `text` into `cells` starting at cell index `indent`, beginning from
+/// column `text_indent` of `text`, applying `transform` to the [`Style`] of each
+/// cell written. Returns the number of cells filled. Port of `TText::drawStrEx`.
+///
+/// When `text_indent` lands in the middle of a double-width grapheme, a single
+/// space is emitted in its place (faithful to `drawStrExT`).
+pub fn draw_str_ex(
+    cells: &mut [Cell],
+    indent: usize,
+    text: &str,
+    text_indent: i32,
+    mut transform: impl FnMut(&mut Style),
+) -> usize {
+    let mut i = indent;
+    let mut j = 0; // byte offset into text
+
+    if text_indent > 0 {
+        let (skipped_bytes, lead_width) = scroll(text, text_indent, true);
+        j = skipped_bytes;
+        if lead_width > text_indent as usize && i < cells.len() {
+            // Skipped past the middle of a wide glyph — pad with a space.
+            cells[i].set_char(' ');
+            apply(&mut cells[i], &mut transform);
+            i += 1;
+        }
+    }
+
+    loop {
+        let (len, advanced) = draw_one(cells, i, text, j, &mut transform);
+        i += advanced;
+        j += len;
+        if len == 0 {
+            break;
+        }
+    }
+    i - indent
+}
+
+/// Copy `text` into `cells` at `indent`/`text_indent` with a fixed `style`.
+/// Port of the fixed-attribute `TText::drawStr` overload.
+pub fn draw_str(
+    cells: &mut [Cell],
+    indent: usize,
+    text: &str,
+    text_indent: i32,
+    style: Style,
+) -> usize {
+    draw_str_ex(cells, indent, text, text_indent, |s| *s = style)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::color::Color;
+
+    fn render(cells: &[Cell]) -> String {
+        cells.iter().map(|c| c.symbol()).collect()
+    }
+
+    #[test]
+    fn width_ascii_and_wide() {
+        assert_eq!(width("hello"), 5);
+        assert_eq!(width(""), 0);
+        assert_eq!(width("中文"), 4); // two double-width ideographs
+        assert_eq!(width("a中b"), 4); // 1 + 2 + 1
+    }
+
+    #[test]
+    fn width_combining_clusters_as_one() {
+        // "e" + combining acute = one grapheme, width 1.
+        assert_eq!(width("e\u{0301}"), 1);
+        // Precomposed é is also width 1.
+        assert_eq!(width("é"), 1);
+    }
+
+    #[test]
+    fn measure_counts() {
+        let m = measure("a中");
+        assert_eq!(m.width, 3);
+        assert_eq!(m.character_count, 2);
+        assert_eq!(m.grapheme_count, 2);
+
+        // A combining mark clusters with its base: one grapheme, width 1.
+        let m2 = measure("e\u{0301}");
+        assert_eq!(m2.character_count, 1);
+        assert_eq!(m2.width, 1);
+    }
+
+    #[test]
+    fn scroll_basic() {
+        // First 3 columns of "abcdef" -> 3 bytes, width 3.
+        assert_eq!(scroll("abcdef", 3, true), (3, 3));
+        // Wider than the string -> whole string.
+        assert_eq!(scroll("abc", 10, true), (3, 3));
+        // Non-positive count -> empty.
+        assert_eq!(scroll("abc", 0, true), (0, 0));
+        assert_eq!(scroll("abc", -5, true), (0, 0));
+    }
+
+    #[test]
+    fn scroll_straddles_wide_glyph() {
+        // "中" is 2 columns. Asking for 1 column lands mid-glyph.
+        // include_incomplete = true -> include the glyph (2 bytes? no, 3 bytes UTF-8).
+        let (bytes_incl, w_incl) = scroll("中x", 1, true);
+        assert_eq!((bytes_incl, w_incl), ("中".len(), 2));
+        // include_incomplete = false -> exclude it (stop before).
+        let (bytes_excl, w_excl) = scroll("中x", 1, false);
+        assert_eq!((bytes_excl, w_excl), (0, 0));
+    }
+
+    #[test]
+    fn draw_str_ascii() {
+        let mut cells = vec![Cell::default(); 10];
+        let style = Style::new(Color::Bios(0xF), Color::Bios(0x1));
+        let n = draw_str(&mut cells, 0, "hi", 0, style);
+        assert_eq!(n, 2);
+        assert_eq!(cells[0].symbol(), "h");
+        assert_eq!(cells[0].style(), style);
+        assert_eq!(cells[1].symbol(), "i");
+        // untouched cells remain blank
+        assert_eq!(cells[2].symbol(), " ");
+    }
+
+    #[test]
+    fn draw_str_wide_glyph_sets_trail() {
+        let mut cells = vec![Cell::default(); 10];
+        let n = draw_str(&mut cells, 0, "中", 0, Style::default());
+        assert_eq!(n, 2); // lead + trail
+        assert!(cells[0].is_wide());
+        assert_eq!(cells[0].symbol(), "中");
+        assert!(cells[1].is_wide_trail());
+        assert_eq!(cells[1].symbol(), "");
+    }
+
+    #[test]
+    fn draw_str_indent_into_cells() {
+        let mut cells = vec![Cell::default(); 10];
+        draw_str(&mut cells, 3, "ab", 0, Style::default());
+        assert_eq!(cells[2].symbol(), " ");
+        assert_eq!(cells[3].symbol(), "a");
+        assert_eq!(cells[4].symbol(), "b");
+    }
+
+    #[test]
+    fn draw_str_text_indent_skips_columns() {
+        let mut cells = vec![Cell::default(); 10];
+        let n = draw_str(&mut cells, 0, "abcdef", 2, Style::default());
+        assert_eq!(n, 4);
+        assert_eq!(render(&cells[..4]), "cdef");
+    }
+
+    #[test]
+    fn draw_str_text_indent_mid_wide_glyph_pads_space() {
+        // "中" occupies columns 0..2. Starting at column 1 splits it -> a space.
+        let mut cells = vec![Cell::default(); 10];
+        let n = draw_str(&mut cells, 0, "中x", 1, Style::default());
+        assert_eq!(cells[0].symbol(), " "); // padding for the split wide glyph
+        assert_eq!(cells[1].symbol(), "x");
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn draw_str_truncates_at_cell_boundary() {
+        let mut cells = vec![Cell::default(); 3];
+        let n = draw_str(&mut cells, 0, "abcdef", 0, Style::default());
+        assert_eq!(n, 3);
+        assert_eq!(render(&cells), "abc");
+    }
+
+    #[test]
+    fn draw_str_wide_glyph_truncated_when_no_room_for_trail() {
+        // Only one cell free, but a wide glyph needs two: lead is written,
+        // trail is truncated, count is 1.
+        let mut cells = vec![Cell::default(); 1];
+        let n = draw_str(&mut cells, 0, "中", 0, Style::default());
+        assert_eq!(n, 1);
+        assert!(cells[0].is_wide());
+    }
+
+    #[test]
+    fn draw_str_control_char_becomes_replacement() {
+        let mut cells = vec![Cell::default(); 5];
+        let n = draw_str(&mut cells, 0, "a\u{0007}b", 0, Style::default()); // BEL
+        assert_eq!(n, 3);
+        assert_eq!(cells[0].symbol(), "a");
+        assert_eq!(cells[1].symbol(), REPLACEMENT);
+        assert_eq!(cells[2].symbol(), "b");
+    }
+
+    #[test]
+    fn draw_str_ex_transform_sees_each_cell() {
+        let mut cells = vec![Cell::default(); 5];
+        let mut count = 0;
+        draw_str_ex(&mut cells, 0, "中a", 0, |s| {
+            count += 1;
+            s.modifiers.bold = true;
+        });
+        // lead + trail + 'a' = 3 transform calls
+        assert_eq!(count, 3);
+        assert!(cells[0].style().modifiers.bold);
+        assert!(cells[1].style().modifiers.bold); // trail too
+        assert!(cells[2].style().modifiers.bold);
+    }
+}

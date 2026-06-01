@@ -225,6 +225,15 @@ default`, the 6×6×6 cube + grayscale ramp + BIOS↔xterm bit-swap) ports **fai
 — it's good code — but lives in the `Backend` (D11), not the theme. The "reverse"
 attribute and the per-cell "exclude from shadow" marker become `Modifiers`.
 
+> **`TDrawBuffer` consequences (ratified during the row 7 port).** Two follow-on
+> *chosen* deviations, because typed attributes have no `0` sentinel: (1)
+> `moveChar`'s overload where a `0` char/attribute means "retain what's already
+> there" is **dropped** — `move_char` always writes both char and `Style`;
+> single-cell retain-edits use `put_char` / `put_attribute`. (2) `moveBuf`, which
+> reinterpreted a raw byte buffer as a string, becomes a **typed cell copy**
+> (`move_buf(indent, &[Cell])`). The width-clipping/`capacity` logic of
+> `moveStr`/`moveCStr`/`moveChar` ports faithfully.
+
 ---
 
 ## D7 — Palette chains + hardcoded glyphs → Theme · *chosen*
@@ -397,6 +406,18 @@ boundary that splits a double-width glyph), and a cell-writer taking a per-cell
 as `TText` does; only the clustering is stricter. A width-2 cell is followed by a
 blank continuation cell.
 
+> **D13 sub-decisions ratified during the row 8 port:**
+> - *Unprintable chars → `�`, not CP437.* magiblot routes control bytes and
+>   extended-ASCII through a CP437 translation table (the classic "☺ shows up in
+>   the text" behaviour a TV veteran expects). The UTF-8-native port **drops the
+>   CP437 table**: a control char (one with no `unicode-width`) is drawn as the
+>   replacement glyph U+FFFD `�`, width 1. *(chosen — a visible behaviour change)*
+> - *`measure` counts grapheme clusters.* `TTextMetrics::characterCount` counts
+>   codepoints; our `TextMetrics::character_count` counts **grapheme clusters**
+>   (equal except across combining sequences — C++ counts `e`+◌́ as 2, we count 1).
+>   `grapheme_count` is the number of clusters with width > 0. If a future consumer
+>   genuinely needs the codepoint count, add it then.
+
 ---
 
 ## Vendoring & licensing
@@ -433,6 +454,7 @@ blank continuation cell.
 | `TValidator` family | `Validator` trait + impls | D2 |
 | `THardwareInfo` / `TScreen` | `Backend` trait (`Crossterm`/`Headless`) | D11 |
 | `TText` | `text` module (`width`/`scroll`/cell-writer) | D13 |
+| `TDrawBuffer` | `screen::DrawBuffer` (`move_char`/`move_str`/`move_cstr`/`move_buf`) | D6, D8, D13 |
 | `owner` / `current` / `selected` | `ViewId` handles | D3 |
 | `drawHide`/`drawShow`/`drawUnder*`, buffered group | — (dropped; redraw + diff) | D8 |
 | `TStreamable`, `TResourceFile` | — (dropped; serde if revived) | D12 |

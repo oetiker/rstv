@@ -1,0 +1,20 @@
+[package]
+name = "tvision"
+version = "0.1.0"
+edition = "2024"
+description = "An idiomatic Rust port of Turbo Vision (magiblot/tvision)."
+license = "MIT"
+repository = "https://github.com/oetiker/rstv"
+keywords = ["tui", "terminal", "turbo-vision", "widgets"]
+categories = ["command-line-interface"]
+
+# House style: consumers alias the crate as `tv` (`tv = { package = "tvision" }`)
+# and reach everything through `tv::` — the path is the namespace the old `T`
+# prefix was faking (PORTING-GUIDE D1).
+
+[dependencies]
+unicode-segmentation = "1.13.2" # text module: grapheme clustering (D13, row 8)
+unicode-width = "0.2.2"         # text module: display column widths (D13, row 8)
+# Added lazily as the port reaches the rows that need them:
+#   crossterm              -> backend module (D11, row 19)
+# dev-dependency `insta`   -> snapshot tests (D11)

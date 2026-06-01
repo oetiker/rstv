@@ -1,0 +1,27 @@
+tvision (rstv)
+==============
+
+An idiomatic Rust port of Turbo Vision.
+
+This project is a port of magiblot/tvision, a modern C++ maintenance fork of
+Borland's Turbo Vision. It carries forward the upstream terms:
+
+  * Turbo Vision was placed in the public domain by Borland International.
+
+  * magiblot/tvision is distributed under the MIT License.
+    Copyright (c) 2019-2024 magiblot <magiblot@hotmail.com>
+    https://github.com/magiblot/tvision
+
+  * The rstv Rust port is distributed under the MIT License.
+    Copyright (c) 2026 Tobias Oetiker
+
+Third-party code vendored into this repository (added as the port reaches the
+rows that need it) retains its own license header in the vendored file(s):
+
+  * ratatui (MIT) — its cell `Buffer` + cell-diff engine is copied (not
+    depended upon) and adapted for Turbo Vision roles (PORT-ORDER row 18, D8).
+    The MIT header is preserved in the vendored source file(s).
+    https://github.com/ratatui/ratatui
+
+crossterm (MIT) is used as a normal dependency, hidden behind the `Backend`
+trait (D11); it is not vendored.
