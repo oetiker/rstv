@@ -238,6 +238,36 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
     `window` module at row 33.** Two-stage reviewed (SPEC-PASS + QUALITY-PASS;
     fixed title-clone, dead-`l`, edge-glyph naming, empty-title flanking spaces).
     229 unit + 3 integration tests green; clippy/fmt clean.
+  - **Row 31 `TProgram` DONE** (FOUNDATION, module `app` = `src/app/{mod,program}.rs`;
+    + new `View::cursor_request` in `view.rs` + a `Group` override): TV's single
+    event loop (D9), making the row-21 capture stack and row-20 timer queue
+    **live**. `Program` **embeds a `Group`** (D2) + loop machinery (`Renderer`,
+    `CaptureStack`, `TimerQueue`, injected `Box<dyn Clock>`, `out_events` queue,
+    `pending_captures`, `CommandSet`, desktop `ViewId`, `end_state`). **`pump_once`**
+    is the D9 `getEvent`→`handleEvent`→(eventError): drain queue → poll → capture
+    stack **first** → `program_handle_event` (Alt-N stubbed, group delegate,
+    `cmQuit`→`end_modal`) → apply deferred captures → resetCursor → whole-tree
+    redraw+diff. **Borrow model:** top-of-fn `let Program{..}=self` destructure +
+    free fns with explicit field borrows (preserves `Context`'s disjoint fields —
+    the pattern to copy). **`run`** ports `TGroup::execute` incl. the outer
+    `while(!valid(end_state))`; factory-injected ctor (status-line/menu-bar `None`
+    stubs, real `Group`+`Background` desktop, made `current`). **resetCursor** =
+    defaulted `View::cursor_request` (base: focused+cursor_vis) + `Group` descends
+    `current` accumulating origin → absolute cursor (set before render).
+    **Command-enable:** `curCommandSet` is an explicit allowlist (">255 always
+    enabled" DROPPED, D1); `cmZoom/cmClose/cmResize/cmNext/cmPrev` seeded disabled;
+    enable/disable flips `command_set_changed`→idle `cmCommandSetChanged` broadcast;
+    disabled `Event::Command` filtered at the program boundary. **Resize:** poll
+    `backend.size()` each pass (no `Event::Resize` churn; the D9 `setScreenMode`).
+    **Modality MECHANISM only:** a `ModalFrame` capture handler gates positional
+    events to a modal view; **the blocking `exec_view`/`executeDialog`/`getData` +
+    the frame-pop (which must be conditional on `valid(end_state)` — Program state a
+    `CaptureHandler` can't reach) defer to row 34** (zero pop-path test coverage
+    until then). **Deferred-payload (D4):** timer-id + Alt-N window-number gone;
+    breadcrumbs in `program.rs`. Implementer brief: `docs/briefs/row31-tprogram.md`
+    (a FOUNDATION-brief template). Two-stage reviewed (SPEC-PASS; QUALITY-PASS after
+    fixing a misattached doc comment + the `ModalFrame` gating doc). 238 unit + 3
+    integration tests green; clippy/fmt clean.
   - Coordinates are `i32` (faithful to magiblot's `int`).
   - Deps: `unicode-segmentation`, `unicode-width`, `crossterm`; dev: `insta`.
 - **Key design decisions** (recorded in `docs/PORTING-GUIDE.md` D1/D4): newtype vs
@@ -249,7 +279,8 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
   16(min), 21, 22 committed (`8045847`); **Phase-1 row 23 (`TView`) committed**
   (`a08412d`); **Batch A rows 29+25 (`TBackground`/`TScrollBar`) committed**
   (`91c50a6`); **Phase-1 row 26 (`TGroup`) committed** (`4d12a32`); **Phase-1 row
-  24 (`TFrame`) committed** (`25d10b6`) at the row boundary. Working tree clean.
+  24 (`TFrame`) committed** (`25d10b6`); **Phase-1 row 31 (`TProgram`) committed**
+  (`bff4885`) at the row boundary. Working tree clean.
 
 ## Next step
 **Phase 1 in progress.** Continue subagent-driven (see "How to run the port"
@@ -265,20 +296,24 @@ above). Sequence:
 4. ~~**`TFrame` 24**~~ ✅ DONE (FOUNDATION, see Current state). Border/title/icons +
    `DrawCtx::put_cstr` + frame `Glyphs`; owner-data-down seam designed and waiting
    for `TWindow`; sibling tee-walk + drag loops deferred (rows 33/31).
-5. **NEXT — the live loop (`TProgram` 31), then Phase 2 (`TWindow` 33 / `TDialog`
-   34)**, FOUNDATION, main thread/Opus. `TProgram` (module `app`, `tprogram.cpp`)
-   is the keystone: TV's single event loop (D9) that **makes the capture stack
-   (row 21) and timer queue (row 20) live** and unblocks the pile of Phase-1
-   deferrals — modal/`execView`-via-capture/`endModal` (from `TGroup` 26), the
-   scrollbar auto-repeat + thumb-drag (25), the frame close-confirm + move/grow
-   drags (24), `resetCursor`. Build it against **injected factory closures/stubs**
-   for `TStatusLine`/`TMenuBar`/`TDeskTop` (Phase 4), with a real `TDeskTop` (row
-   30: `TGroup` + `TBackground`, both ready) to loop over. Then `TWindow` 33
-   consumes `TFrame` (pushes title/flags/number/zoomed down — the seam above),
-   adds `standardScrollBar` (25), owns zoom/move/close, and lands the
-   `ofTopSelect`/`makeFirst` Z-reorder + child `sfActive` activation row 26 left
-   for it. See [`docs/HANDOVER.md`](docs/HANDOVER.md).
-6. **Then the widget batches fan out hard** (PORT-ORDER Batches B–E): Phase-3
+5. ~~**The live loop (`TProgram` 31)**~~ ✅ DONE (FOUNDATION, see Current state).
+   The single event loop (D9); capture stack + timer queue now live; modality
+   mechanism (`ModalFrame`) shipped, the blocking `exec_view` + frame-pop deferred
+   to row 34. Implementer brief in `docs/briefs/`.
+6. **NEXT — Phase 2: `TDeskTop` 30 → `TWindow` 33 → `TDialog` 34**, FOUNDATION,
+   main thread/Opus. The path to "a window you can see and drive." **`TDeskTop` 30**
+   (module `desktop`) is a small `TGroup`+owned-`TBackground` warm-up that gives
+   `Program` a named real desktop. **`TWindow` 33** (module `window`) is the D2
+   embed-and-delegate exemplar: builds a `TFrame` and **pushes title/flags/number/
+   zoomed down** (the owner-data-down seam in `src/frame.rs`), adds
+   `standardScrollBar` (25), owns zoom/move/close (frame posts intents; TWindow's
+   **capture handlers** run the drags — now buildable), lands the row-26/24
+   deferrals (`ofTopSelect`/`makeFirst` Z-reorder, child `sfActive` activation,
+   shadow casting, scrollbar auto-repeat/thumb-drag), and **relocates `WindowFlags`**
+   to the `window` module. **`TDialog` 34** designs `exec_view`/`executeDialog` +
+   the `ModalFrame` push→pop lifecycle on `Program` (pop conditional on
+   `valid(end_state)` — the crux). See [`docs/HANDOVER.md`](docs/HANDOVER.md).
+7. **Then the widget batches fan out hard** (PORT-ORDER Batches B–E): Phase-3
    leaves, validators, menus, dialogs, editor — the bulk `MECHANICAL` rows; run as
    parallel worktree implementer+reviewer trios, committing at batch boundaries.
 
