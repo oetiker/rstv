@@ -1,0 +1,17 @@
+---
+source: src/view/group.rs
+expression: screen.snapshot()
+---
+size: 6x3
+cursor: hidden
+text:
+|AAABBB|
+|AAABBB|
+|AAABBB|
+attr:
+|aaaaaa|
+|aaaaaa|
+|aaaaaa|
+legend:
+  . default
+  a fg=BIOS(15) bg=BIOS(1)

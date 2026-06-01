@@ -179,6 +179,38 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
     press-and-hold auto-repeat + thumb-drag (the C++ `mouseEvent` loops);
     `ctrlToArrow` WordStar nav (shared helper, port centrally later). 197 unit + 3
     integration tests green; clippy/fmt clean.
+  - **Row 26 `TGroup` DONE** (FOUNDATION, `src/view/group.rs` + `View` trait
+    growth in `view.rs`): the view container + event router. `Group` owns a
+    group-local `ViewArena` + `children: Vec<Child{id,view}>` in **back-to-front
+    paint order** (`children[0]`=C++ `last`/bottom, `.last()`=`first()`/top;
+    `forEach`/`firstThat`=`iter().rev()`), `current: Option<ViewId>` resolved by
+    `index_of`. Implements: three-phase `handle_event` (D4: focusedEvents→pre/
+    focused/post, positional→topmost-visible-under-cursor, broadcast→all; with the
+    `doHandleEvent` disabled/eventMask/phase gates), `draw` (drawSubViews
+    back-to-front, painter's algorithm — **reversed** from C++ occlusion draw, D8),
+    `change_bounds`/`valid`/`awaken`/`size_limits`, and the focus machinery
+    (`insert`/`remove`/`set_current`/`reset_current`/`focus_child`/`find_next`/
+    `focus_next`). **Carryovers landed:** mouse-down→auto-select (relocated
+    `TView::handleEvent`) + the `sfFocused` focus broadcast — via a new defaulted
+    `View::set_state(StateFlag,enable,ctx)` trait method (base flips bit +
+    broadcasts `RECEIVED_FOCUS`/`RELEASED_FOCUS` on `Focused`; `Group` overrides to
+    propagate `Active`/`Dragging`→all, `Focused`→current) + `StateFlag` enum +
+    `ViewState::set_flag`. **Deviation:** mouse position is **view-local at each
+    level** (the group subtracts child `origin` before delivery — the downward
+    realization of `makeLocal`/`mouseInView`); `eventError`/bubble = leaving the
+    event un-cleared as the `handle_event` stack unwinds (no owner pointer).
+    **Deferred (per design):** `execute`/`execView`/the live blocking loop/modal-
+    via-capture/`endModal` → row 31 (the loop owns the capture stack, so a group
+    can't run a modal itself); `ofTopSelect`/`makeFirst`/`putInFrontOf` Z-reorder →
+    row 33 (so `select` always goes through `set_current(Normal)`); `getData`/
+    `setData`/`dataSize` → D10/row 39; `Context::query` not needed (group resolves
+    `ViewId` internally); shadow casting → row 33 (no infra). **Note for row 31/33:**
+    `insert` does **not** activate children (faithful — C++ `insertBefore`'s
+    `sfActive`-restore is a no-op under D8); a child's `sfActive` must come from the
+    group's `set_state(Active)` propagation / focus logic when that lands.
+    Two-stage reviewed (SPEC-PASS + QUALITY-PASS; fixed an insert-`sfActive`
+    faithfulness bug the spec reviewer caught). 214 unit + 3 integration tests
+    green; clippy/fmt clean.
   - Coordinates are `i32` (faithful to magiblot's `int`).
   - Deps: `unicode-segmentation`, `unicode-width`, `crossterm`; dev: `insta`.
 - **Key design decisions** (recorded in `docs/PORTING-GUIDE.md` D1/D4): newtype vs
@@ -188,37 +220,38 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
 - Git on `main`; Phase 0 rows 1–12 committed (`010584f`); the INFRA substrate
   (rows 5,17,18,19,20 + snapshot format) committed (`7f6edd9`); Phase-0 rows
   16(min), 21, 22 committed (`8045847`); **Phase-1 row 23 (`TView`) committed**
-  (`a08412d`); **Batch A rows 29+25 (`TBackground`/`TScrollBar`) committed** at the
-  batch boundary. Working tree clean.
+  (`a08412d`); **Batch A rows 29+25 (`TBackground`/`TScrollBar`) committed**
+  (`91c50a6`); **Phase-1 row 26 (`TGroup`) committed** at the row boundary.
+  Working tree clean.
 
 ## Next step
-**Phase 1 in progress.** A focused next-session brief — TGroup (26) C++→Rust
-design map, open decisions, the row-23 carryover, and process notes — is in
-**[docs/HANDOVER.md](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md)**; read
-it first. Continue subagent-driven (see "How to run the port" above). Sequence:
+**Phase 1 in progress.** Continue subagent-driven (see "How to run the port"
+above). Sequence:
 
-1. ~~**Row 23 `TView`**~~ ✅ DONE (see Current state). The pattern every widget
-   embeds is set: embed `ViewState`, `impl View`, draw through `DrawCtx`, events
-   through `Context`. **Row-26 carryover:** TGroup must implement the relocated
-   mouse-down→select logic (verbatim breadcrumb, incl. `sfSelected`/`sfDisabled`
-   guard, in `src/view/view.rs` module doc) + the `sfFocused` focus broadcast.
-2. ~~**Batch A — `TScrollBar` 25 ∥ `TBackground` 29**~~ ✅ DONE (parallel
-   worktrees, integrated). `Glyphs` is now a real per-widget struct.
-3. **NEXT — `TGroup` 26** — FOUNDATION, **main thread/Opus**: owns
-   `Vec<Box<dyn View>>` (D3), three-phase event routing (D4), and brings the
-   **live event loop** + the `query`/focus `Context` methods deferred from row 22.
-   Design-heavy. **Carries the row-23 row-26 carryover** (mouse-down→select incl.
-   the `sfSelected`/`sfDisabled` guard, + the `sfFocused` focus broadcast — see the
-   `src/view/view.rs` module doc).
-4. **Then `TFrame` 24** — DEFERRED to here (was nominally Batch A): its C++ reaches
-   into `TWindow` (flags/title/number, row 33), the `TGroup` sibling tree
-   (`frameLine` tee-connectors), and `dragView` (D9). Do it once `TGroup` exists so
-   the owner-data-down + sibling-walk seams design against real types. (C++ map
-   already captured in this session.)
-5. **Then the widget batches fan out hard** (PORT-ORDER Batches B–E): Phase-3
-   leaves, validators, menus, dialogs, editor, etc. — these are the bulk
-   `MECHANICAL` rows; run them as parallel worktree implementer+reviewer trios,
-   committing at batch boundaries.
+1. ~~**Row 23 `TView`**~~ ✅ DONE. The pattern every widget embeds: embed
+   `ViewState`, `impl View`, draw through `DrawCtx`, events through `Context`.
+2. ~~**Batch A — `TScrollBar` 25 ∥ `TBackground` 29**~~ ✅ DONE. `Glyphs` is now a
+   real per-widget struct.
+3. ~~**`TGroup` 26**~~ ✅ DONE (FOUNDATION, see Current state). The view container +
+   three-phase router + focus machinery + both row-23 carryovers landed; modal/
+   live-loop deferred to row 31.
+4. **NEXT — `TFrame` 24** — FOUNDATION-ish, **main thread/Opus**. Deferred to here
+   on purpose: its C++ reaches into `TWindow` (flags/`getTitle`/`number`, row 33),
+   the `TGroup` sibling tree (`frameLine` tee-connectors `├┬┤┴` where nested framed
+   views meet — now that `Group` exists, design the sibling-walk against the real
+   `children` Vec), and `dragView` (D9). The frame glyph tables live in
+   `tvtext1.cpp` (`initFrame[19]` + `frameChars[33]` single/double-line sets;
+   `closeIcon`/`zoomIcon`/`unZoomIcon`/`dragIcon`/`dragLeftIcon`; active/passive/
+   dragging color + `f`-offset logic) and extend the `Glyphs` struct (the row-9
+   convention TScrollBar/TGroup used). Design the owner-data-down seam (TFrame holds
+   title/flags/number, set by its TWindow) when TWindow's shape is designed. A full
+   C++ map was captured in an earlier session (see git history / PORT-ORDER row 24).
+5. **Then Phase 2 (`TWindow` 33 / `TDialog` 34) + the live loop (`TProgram` 31)** —
+   these unlock the deferred modal/`execView`-via-capture, `ofTopSelect`/`makeFirst`
+   Z-reorder, and child `sfActive` activation that row 26 left for them.
+6. **Then the widget batches fan out hard** (PORT-ORDER Batches B–E): Phase-3
+   leaves, validators, menus, dialogs, editor — the bulk `MECHANICAL` rows; run as
+   parallel worktree implementer+reviewer trios, committing at batch boundaries.
 
 The snapshot-test workflow (Appendix B step 4) is fully unlocked: build a view on
 a `HeadlessBackend`, `render`, `assert_snapshot!` against the frozen format.

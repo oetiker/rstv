@@ -55,6 +55,7 @@
 //! | 23 | `TView` (`View` trait + `ViewState`) | [`view`] | ✅ |
 //! | 29 | `TBackground` | [`desktop`] | ✅ |
 //! | 25 | `TScrollBar` | [`widgets`] | ✅ |
+//! | 26 | `TGroup` (`Group`) | [`view`] | ✅ |
 
 pub mod backend;
 pub mod capture;
@@ -86,6 +87,7 @@ pub use screen::{Buffer, Cell, DrawBuffer};
 pub use theme::{Role, Theme};
 pub use timer::{Clock, ManualClock, SystemClock, TimerId, TimerQueue};
 pub use view::{
-    Context, DragMode, DrawCtx, GrowMode, Options, Point, Rect, State, View, ViewId, ViewState,
+    Context, DragMode, DrawCtx, Group, GrowMode, Options, Point, Rect, SelectMode, State,
+    StateFlag, View, ViewId, ViewState,
 };
 pub use widgets::ScrollBar;

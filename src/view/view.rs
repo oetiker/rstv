@@ -209,6 +209,27 @@ impl DragMode {
     }
 }
 
+/// The four state flags a parent (`TGroup`, row 26) flips on a child through
+/// [`View::set_state`] — the named subset of the `sf*` family that the focus /
+/// activation machinery drives. Ports the `aState` argument of
+/// `TView::setState` / `TGroup::setState` for the cases that survive D8.
+///
+/// `sfVisible`/`sfExposed`/`sfShadow`/`sfCursor*` are **not** here: the C++
+/// `setState` cases for them are the dropped D8 occlusion/cursor side effects;
+/// they are flipped directly on [`ViewState`] (`show`/`hide`/`show_cursor`/…),
+/// not through the propagating `set_state` hook.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StateFlag {
+    /// `sfActive` — the view is in the active window/group chain.
+    Active,
+    /// `sfSelected` — the view is the current (selected) one in its owner.
+    Selected,
+    /// `sfFocused` — the view is selected *and* its whole owner chain is active.
+    Focused,
+    /// `sfDragging` — the view is being dragged/resized.
+    Dragging,
+}
+
 // ---------------------------------------------------------------------------
 // ViewState — the composition target (TView's data members, D2/D5)
 // ---------------------------------------------------------------------------
@@ -376,6 +397,19 @@ impl ViewState {
         }
     }
 
+    /// Flip the [`State`] bool named by `flag` — the field-access realization of
+    /// `TView::setState`'s `state |= aState` / `state &= ~aState` for the four
+    /// propagating flags (see [`StateFlag`]). The broadcast / propagation side
+    /// effects live in [`View::set_state`], not here.
+    pub fn set_flag(&mut self, flag: StateFlag, enable: bool) {
+        match flag {
+            StateFlag::Active => self.state.active = enable,
+            StateFlag::Selected => self.state.selected = enable,
+            StateFlag::Focused => self.state.focused = enable,
+            StateFlag::Dragging => self.state.dragging = enable,
+        }
+    }
+
     // -- Resize math (calcBounds / sizeLimits, pure functions; tview.cpp) ----
 
     /// `TView::sizeLimits` — the `(min, max)` size this view may take inside an
@@ -538,6 +572,28 @@ pub trait View {
     /// `TGroup` (row 26) because it calls the up-tree `focus()` (D3). See the
     /// module-level breadcrumb.
     fn handle_event(&mut self, _ev: &mut Event, _ctx: &mut Context) {}
+
+    /// `TView::setState` — flip a propagating state flag and run its side
+    /// effects. The base body (relocated from `tview.cpp`'s `setState`) flips the
+    /// flag and, for [`StateFlag::Focused`], emits the focus broadcast
+    /// (`cmReceivedFocus`/`cmReleasedFocus`) via `ctx` — the **carryover #2**
+    /// focus broadcast that row 23 deferred to here.
+    ///
+    /// The C++ `message(owner, evBroadcast, …, this)` is reduced under D3/D4: the
+    /// `owner` receiver and the `this` `infoPtr` payload are dropped; we broadcast
+    /// the bare [`Command`]. `TGroup` (row 26) overrides this to also propagate to
+    /// its children. The dropped D8 `setState` cases (`sfVisible`/`sfExposed`/
+    /// `sfShadow`/`sfCursor*` redraw/occlusion) have no analogue here.
+    fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
+        self.state_mut().set_flag(flag, enable);
+        if flag == StateFlag::Focused {
+            ctx.broadcast(if enable {
+                Command::RECEIVED_FOCUS
+            } else {
+                Command::RELEASED_FOCUS
+            });
+        }
+    }
 
     /// `TView::valid` — whether the view is in a valid state for `cmd` (e.g. a
     /// modal end / focus release). Base is always `true`.

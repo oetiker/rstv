@@ -7,6 +7,9 @@
 
 mod context;
 mod geometry;
+// `view::group` houses `TGroup` (row 26): the child tree + three-phase routing
+// + focus machinery. Re-exported below alongside the trait it builds on.
+mod group;
 mod id;
 // `view::view` houses the `View` trait + `ViewState` (TView, row 23). The
 // inner name mirrors the C++ class file; the re-exports below flatten it away.
@@ -15,5 +18,6 @@ mod view;
 
 pub use context::{Context, DrawCtx};
 pub use geometry::{Point, Rect};
+pub use group::{Group, SelectMode};
 pub use id::{ViewArena, ViewId};
-pub use view::{DragMode, GrowMode, Options, State, View, ViewState};
+pub use view::{DragMode, GrowMode, Options, State, StateFlag, View, ViewState};
