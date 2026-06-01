@@ -211,6 +211,33 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
     Two-stage reviewed (SPEC-PASS + QUALITY-PASS; fixed an insert-`sfActive`
     faithfulness bug the spec reviewer caught). 214 unit + 3 integration tests
     green; clippy/fmt clean.
+  - **Row 24 `TFrame` DONE** (FOUNDATION, `src/frame.rs` + `Frame`/`WindowFlags`;
+    + `DrawCtx::put_cstr` in `view/context.rs`; + frame glyph set in `theme.rs`):
+    the window border + centered title + number + close/zoom/resize icons, drawn
+    through `DrawCtx`. **Owner-data-down seam (D3):** no owner pointer — `Frame`
+    holds its own `title`/`flags`/`number`/`zoomed`, pushed down via setters by the
+    owning `TWindow` (row 33); reads `sfActive`/`sfDragging` from `self.st.state`
+    (arrive via `Group::set_state` propagation). `handle_event` uses the group's
+    view-local coords (`makeLocal` gone). **D7:** border roles `FrameActive`/
+    `FramePassive`/`FrameDragging` (dragging first→single-line; active→double-line;
+    else passive single-line), icons→`FrameIcon`; title reuses the border role
+    (distinct title palette 2/4 + blue/cyan/gray window schemes → row 33).
+    **New FOUNDATION seam `DrawCtx::put_cstr`** ports `moveCStr`'s `~`-toggle
+    (lo↔hi, `~` not drawn) — reused by buttons/labels/menus. `Glyphs` grew a frame
+    set (single/double box + tee/cross + 5 icon strings; row-9 convention).
+    **handle_event:** posts `cmClose`/`cmZoom` on resolvable row-0 clicks (close
+    x∈2..=4, zoom x∈(w-5)..=(w-3) or double-click; active+y0). **DEFERRED to row
+    33 (`TODO(row 33, D9)`):** close press-and-hold confirm (we post on down),
+    `wfMove` drag, grow drags, middle-button move. **No `set_state` override** (C++
+    only `drawView`, D8). **Sibling tee-walk (`├┬┤┴`) deferred** — under D3 a child
+    sees no siblings; plain corners are byte-identical to C++ for the common case;
+    full `framelin.cpp` `FrameMask`/`frameChars`/`initFrame` machinery + sibling
+    walk lands later (needs `Group` cooperation). **Faithfulness catch:** base
+    `TWindow::getTitle(short)` ignores its arg → the `-6`/`-4` budget never caps
+    the drawn title (capped at `width-10`). **Relocate `WindowFlags` to the
+    `window` module at row 33.** Two-stage reviewed (SPEC-PASS + QUALITY-PASS;
+    fixed title-clone, dead-`l`, edge-glyph naming, empty-title flanking spaces).
+    229 unit + 3 integration tests green; clippy/fmt clean.
   - Coordinates are `i32` (faithful to magiblot's `int`).
   - Deps: `unicode-segmentation`, `unicode-width`, `crossterm`; dev: `insta`.
 - **Key design decisions** (recorded in `docs/PORTING-GUIDE.md` D1/D4): newtype vs
@@ -221,8 +248,8 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
   (rows 5,17,18,19,20 + snapshot format) committed (`7f6edd9`); Phase-0 rows
   16(min), 21, 22 committed (`8045847`); **Phase-1 row 23 (`TView`) committed**
   (`a08412d`); **Batch A rows 29+25 (`TBackground`/`TScrollBar`) committed**
-  (`91c50a6`); **Phase-1 row 26 (`TGroup`) committed** at the row boundary.
-  Working tree clean.
+  (`91c50a6`); **Phase-1 row 26 (`TGroup`) committed** (`4d12a32`); **Phase-1 row
+  24 (`TFrame`) committed** (`25d10b6`) at the row boundary. Working tree clean.
 
 ## Next step
 **Phase 1 in progress.** Continue subagent-driven (see "How to run the port"
@@ -235,20 +262,22 @@ above). Sequence:
 3. ~~**`TGroup` 26**~~ ✅ DONE (FOUNDATION, see Current state). The view container +
    three-phase router + focus machinery + both row-23 carryovers landed; modal/
    live-loop deferred to row 31.
-4. **NEXT — `TFrame` 24** — FOUNDATION-ish, **main thread/Opus**. Deferred to here
-   on purpose: its C++ reaches into `TWindow` (flags/`getTitle`/`number`, row 33),
-   the `TGroup` sibling tree (`frameLine` tee-connectors `├┬┤┴` where nested framed
-   views meet — now that `Group` exists, design the sibling-walk against the real
-   `children` Vec), and `dragView` (D9). The frame glyph tables live in
-   `tvtext1.cpp` (`initFrame[19]` + `frameChars[33]` single/double-line sets;
-   `closeIcon`/`zoomIcon`/`unZoomIcon`/`dragIcon`/`dragLeftIcon`; active/passive/
-   dragging color + `f`-offset logic) and extend the `Glyphs` struct (the row-9
-   convention TScrollBar/TGroup used). Design the owner-data-down seam (TFrame holds
-   title/flags/number, set by its TWindow) when TWindow's shape is designed. A full
-   C++ map was captured in an earlier session (see git history / PORT-ORDER row 24).
-5. **Then Phase 2 (`TWindow` 33 / `TDialog` 34) + the live loop (`TProgram` 31)** —
-   these unlock the deferred modal/`execView`-via-capture, `ofTopSelect`/`makeFirst`
-   Z-reorder, and child `sfActive` activation that row 26 left for them.
+4. ~~**`TFrame` 24**~~ ✅ DONE (FOUNDATION, see Current state). Border/title/icons +
+   `DrawCtx::put_cstr` + frame `Glyphs`; owner-data-down seam designed and waiting
+   for `TWindow`; sibling tee-walk + drag loops deferred (rows 33/31).
+5. **NEXT — the live loop (`TProgram` 31), then Phase 2 (`TWindow` 33 / `TDialog`
+   34)**, FOUNDATION, main thread/Opus. `TProgram` (module `app`, `tprogram.cpp`)
+   is the keystone: TV's single event loop (D9) that **makes the capture stack
+   (row 21) and timer queue (row 20) live** and unblocks the pile of Phase-1
+   deferrals — modal/`execView`-via-capture/`endModal` (from `TGroup` 26), the
+   scrollbar auto-repeat + thumb-drag (25), the frame close-confirm + move/grow
+   drags (24), `resetCursor`. Build it against **injected factory closures/stubs**
+   for `TStatusLine`/`TMenuBar`/`TDeskTop` (Phase 4), with a real `TDeskTop` (row
+   30: `TGroup` + `TBackground`, both ready) to loop over. Then `TWindow` 33
+   consumes `TFrame` (pushes title/flags/number/zoomed down — the seam above),
+   adds `standardScrollBar` (25), owns zoom/move/close, and lands the
+   `ofTopSelect`/`makeFirst` Z-reorder + child `sfActive` activation row 26 left
+   for it. See [`docs/HANDOVER.md`](docs/HANDOVER.md).
 6. **Then the widget batches fan out hard** (PORT-ORDER Batches B–E): Phase-3
    leaves, validators, menus, dialogs, editor — the bulk `MECHANICAL` rows; run as
    parallel worktree implementer+reviewer trios, committing at batch boundaries.
