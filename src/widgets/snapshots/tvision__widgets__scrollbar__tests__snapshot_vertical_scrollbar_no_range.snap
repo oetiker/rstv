@@ -1,0 +1,23 @@
+---
+source: src/widgets/scrollbar.rs
+expression: screen.snapshot()
+---
+size: 1x6
+cursor: hidden
+text:
+|▲|
+|▓|
+|▓|
+|▓|
+|▓|
+|▼|
+attr:
+|a|
+|a|
+|a|
+|a|
+|a|
+|a|
+legend:
+  . default
+  a fg=BIOS(1) bg=BIOS(3)

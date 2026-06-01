@@ -53,11 +53,14 @@
 //! | row | item | module | status |
 //! |-----|------|--------|--------|
 //! | 23 | `TView` (`View` trait + `ViewState`) | [`view`] | ✅ |
+//! | 29 | `TBackground` | [`desktop`] | ✅ |
+//! | 25 | `TScrollBar` | [`widgets`] | ✅ |
 
 pub mod backend;
 pub mod capture;
 pub mod color;
 pub mod command;
+pub mod desktop;
 pub mod event;
 pub mod help;
 pub mod screen;
@@ -65,6 +68,7 @@ pub mod text;
 pub mod theme;
 pub mod timer;
 pub mod view;
+pub mod widgets;
 
 // --- House-style root re-exports (so `tv::Point` etc. resolve without `use`) ---
 
@@ -72,6 +76,7 @@ pub use backend::{Backend, CrosstermBackend, HeadlessBackend, HeadlessHandle, Re
 pub use capture::{CaptureFlow, CaptureHandler, CaptureStack};
 pub use color::{Color, Modifiers, Style};
 pub use command::{Command, CommandSet};
+pub use desktop::Background;
 pub use event::{
     Event, EventMask, Key, KeyEvent, KeyModifiers, MouseButtons, MouseEvent, MouseEventFlags,
     MouseWheel,
@@ -83,3 +88,4 @@ pub use timer::{Clock, ManualClock, SystemClock, TimerId, TimerQueue};
 pub use view::{
     Context, DragMode, DrawCtx, GrowMode, Options, Point, Rect, State, View, ViewId, ViewState,
 };
+pub use widgets::ScrollBar;

@@ -166,6 +166,19 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
     growMode math ported verbatim (incl. `resize_balance` recovery) and unit-tested.
     Two-stage reviewed (spec PASS, quality PASS). 173 unit + 3 integration tests
     green; clippy/fmt clean.
+  - **Batch A DONE — rows 29 `TBackground` + 25 `TScrollBar`** (parallel worktree
+    implementers, orchestrator-integrated). `TBackground` → `src/desktop/`
+    (pattern fill, `Role::Background`, `gfGrowHiX|HiY`). `TScrollBar` →
+    `src/widgets/scrollbar.rs` (value/min/max/steps, draw via the new `Glyphs`
+    scrollbar set, broadcasts `cmScrollBarChanged`). The `Glyphs` stub became a
+    real struct (theme.rs) seeded with the CP437→Unicode scrollbar chars (▲▼◄►/▒
+    trough U+2592/▓ no-range U+2593/■ thumb) — the **row-9 "glyphs fill in
+    per-widget" convention**. Reviewed (spec+quality); fixed a CP437 shade
+    off-by-one and the mouse-down page-click (must thumb-**jump** to cursor, not
+    page-step — page-step is keyboard-only). **DEFERRED to D9/row 31:** scrollbar
+    press-and-hold auto-repeat + thumb-drag (the C++ `mouseEvent` loops);
+    `ctrlToArrow` WordStar nav (shared helper, port centrally later). 197 unit + 3
+    integration tests green; clippy/fmt clean.
   - Coordinates are `i32` (faithful to magiblot's `int`).
   - Deps: `unicode-segmentation`, `unicode-width`, `crossterm`; dev: `insta`.
 - **Key design decisions** (recorded in `docs/PORTING-GUIDE.md` D1/D4): newtype vs
@@ -174,8 +187,9 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
   Constants live with their owner (no central registry).
 - Git on `main`; Phase 0 rows 1–12 committed (`010584f`); the INFRA substrate
   (rows 5,17,18,19,20 + snapshot format) committed (`7f6edd9`); Phase-0 rows
-  16(min), 21, 22 committed (`8045847`); **Phase-1 row 23 (`TView`) committed** as a
-  checkpoint so the Batch-A worktrees can see it. Working tree clean.
+  16(min), 21, 22 committed (`8045847`); **Phase-1 row 23 (`TView`) committed**
+  (`a08412d`); **Batch A rows 29+25 (`TBackground`/`TScrollBar`) committed** at the
+  batch boundary. Working tree clean.
 
 ## Next step
 **Phase 1 in progress — row 23 `TView` is DONE.** Continue subagent-driven (see
@@ -186,15 +200,20 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
    through `Context`. **Row-26 carryover:** TGroup must implement the relocated
    mouse-down→select logic (verbatim breadcrumb, incl. `sfSelected`/`sfDisabled`
    guard, in `src/view/view.rs` module doc) + the `sfFocused` focus broadcast.
-2. **NEXT — `TFrame` 24 ∥ `TScrollBar` 25 ∥ `TBackground` 29** — Batch A, largely
-   independent now that `TView`'s pattern is set; dispatch as parallel worktree
-   implementers, each with spec + code-quality review. **First resolve the commit
-   question** (row 23 must be visible to the worktrees — see the Worktree gotcha in
-   Current state).
-3. **`TGroup` 26** — FOUNDATION again: owns `Vec<Box<dyn View>>` (D3), three-phase
-   event routing (D4), and brings the **live event loop** + the `query`/focus
-   `Context` methods deferred from row 22. Design-heavy; main thread.
-4. **Then the widget batches fan out hard** (PORT-ORDER Batches B–E): Phase-3
+2. ~~**Batch A — `TScrollBar` 25 ∥ `TBackground` 29**~~ ✅ DONE (parallel
+   worktrees, integrated). `Glyphs` is now a real per-widget struct.
+3. **NEXT — `TGroup` 26** — FOUNDATION, **main thread/Opus**: owns
+   `Vec<Box<dyn View>>` (D3), three-phase event routing (D4), and brings the
+   **live event loop** + the `query`/focus `Context` methods deferred from row 22.
+   Design-heavy. **Carries the row-23 row-26 carryover** (mouse-down→select incl.
+   the `sfSelected`/`sfDisabled` guard, + the `sfFocused` focus broadcast — see the
+   `src/view/view.rs` module doc).
+4. **Then `TFrame` 24** — DEFERRED to here (was nominally Batch A): its C++ reaches
+   into `TWindow` (flags/title/number, row 33), the `TGroup` sibling tree
+   (`frameLine` tee-connectors), and `dragView` (D9). Do it once `TGroup` exists so
+   the owner-data-down + sibling-walk seams design against real types. (C++ map
+   already captured in this session.)
+5. **Then the widget batches fan out hard** (PORT-ORDER Batches B–E): Phase-3
    leaves, validators, menus, dialogs, editor, etc. — these are the bulk
    `MECHANICAL` rows; run them as parallel worktree implementer+reviewer trios,
    committing at batch boundaries.

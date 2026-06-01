@@ -556,6 +556,7 @@ blank continuation cell.
 | `evKeyDown` / `evCommand` | `Event::KeyDown(..)` / `Event::Command(..)` | D4 |
 | `message(v, …)` | targeted query (`Option<T>`) / `Event::Broadcast` | D4 |
 | `getPalette` / `getColor` | `ctx.theme.style(Role::…)` | D7 |
+| hardcoded glyph tables (`frameChars`, `TScrollChars`, …) | fields on `theme::Glyphs`, read via `ctx.glyphs()` (grows per-widget; row-9 convention) | D7 |
 | `TColorAttr` / `TColorDesired` | `Style` / `Color` (4-variant enum) | D6 |
 | `execView` | `exec_view` → result via posted `Command` | D9 |
 | `dragView` / press-tracking | capture-stack handlers | D9 |

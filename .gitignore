@@ -4,3 +4,6 @@
 
 # mise local state
 .mise.local.toml
+
+# Claude agent isolation worktrees (transient)
+.claude/worktrees/

@@ -101,11 +101,58 @@ impl Role {
 /// Holder for the framework's drawing glyphs — frame corners/tee-connectors,
 /// scrollbar arrows, check/radio marks, shadows, window decorations.
 ///
-/// Currently an **empty stub**: the glyph tables land at row 9 / per-widget as
-/// each control is ported (D7). It exists now only so [`Theme`] can expose a
-/// stable `glyphs()` accessor that `DrawCtx` and later widgets can reach.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Glyphs;
+/// The glyph tables grow **per-widget** as each control is ported (D7,
+/// row 9 convention). Fields are added here as each widget row is done;
+/// defaults match the classic CP437/BIOS character set that magiblot's
+/// `tvtext1.cpp` seeds.
+///
+/// # Scrollbar glyphs (row 25)
+///
+/// Taken verbatim from `tvtext1.cpp`:
+/// ```text
+/// TScrollChars vChars = { '\x1E', '\x1F', '\xB1', '\xFE', '\xB2' };
+/// TScrollChars hChars = { '\x11', '\x10', '\xB1', '\xFE', '\xB2' };
+/// ```
+/// Indices: `[0]`=back-arrow, `[1]`=fwd-arrow, `[2]`=page/trough, `[3]`=thumb,
+/// `[4]`=page-when-no-range.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Glyphs {
+    // --- Scrollbar glyphs (row 25) ---
+    /// Vertical scrollbar: up-arrow / back-arrow. `vChars[0]` = `'\x1E'` (▲).
+    pub sb_v_arrow_back: char,
+    /// Vertical scrollbar: down-arrow / fwd-arrow. `vChars[1]` = `'\x1F'` (▼).
+    pub sb_v_arrow_fwd: char,
+    /// Horizontal scrollbar: left-arrow / back-arrow. `hChars[0]` = `'\x11'` (◄).
+    pub sb_h_arrow_back: char,
+    /// Horizontal scrollbar: right-arrow / fwd-arrow. `hChars[1]` = `'\x10'` (►).
+    pub sb_h_arrow_fwd: char,
+    /// Page/trough fill character (both orientations). `vChars[2]` = `'\xB1'` (▒).
+    pub sb_page: char,
+    /// Thumb/indicator character (both orientations). `vChars[3]` = `'\xFE'` (■).
+    pub sb_thumb: char,
+    /// Page fill when range is zero (both orientations). `vChars[4]` = `'\xB2'` (▓).
+    pub sb_page_no_range: char,
+}
+
+impl Default for Glyphs {
+    /// Classic CP437/BIOS glyphs, faithful to magiblot's `tvtext1.cpp`.
+    fn default() -> Self {
+        Glyphs {
+            // Vertical scrollbar arrows: ▲ (0x1E) / ▼ (0x1F)
+            sb_v_arrow_back: '\u{25B2}',
+            sb_v_arrow_fwd: '\u{25BC}',
+            // Horizontal scrollbar arrows: ◄ (0x11) / ► (0x10)
+            sb_h_arrow_back: '\u{25C4}',
+            sb_h_arrow_fwd: '\u{25BA}',
+            // Trough / page fill: ▒ (0xB1)
+            sb_page: '\u{2592}',
+            // Thumb / indicator: ■ (0xFE)
+            sb_thumb: '\u{25A0}',
+            // Trough when range is zero: ▓ (0xB2)
+            sb_page_no_range: '\u{2593}',
+        }
+    }
+}
 
 /// A theme: a fixed `Role` → [`Style`] map plus a [`Glyphs`] holder (D7).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -158,7 +205,7 @@ impl Theme {
 
         Theme {
             styles,
-            glyphs: Glyphs,
+            glyphs: Glyphs::default(),
         }
     }
 
@@ -262,8 +309,11 @@ mod tests {
     }
 
     #[test]
-    fn glyphs_accessor_returns_stub() {
+    fn glyphs_accessor_returns_default() {
         let t = Theme::classic_blue();
-        assert_eq!(*t.glyphs(), Glyphs);
+        assert_eq!(*t.glyphs(), Glyphs::default());
+        // Spot-check the scrollbar glyphs (row 25).
+        assert_eq!(t.glyphs().sb_page, '\u{2592}');
+        assert_eq!(t.glyphs().sb_thumb, '\u{25A0}');
     }
 }
