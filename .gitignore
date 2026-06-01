@@ -1,0 +1,6 @@
+# Rust build output
+/target
+**/*.rs.bk
+
+# mise local state
+.mise.local.toml
