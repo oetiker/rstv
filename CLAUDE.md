@@ -192,8 +192,10 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
   batch boundary. Working tree clean.
 
 ## Next step
-**Phase 1 in progress — row 23 `TView` is DONE.** Continue subagent-driven (see
-"How to run the port" above). Sequence:
+**Phase 1 in progress.** A focused next-session brief — TGroup (26) C++→Rust
+design map, open decisions, the row-23 carryover, and process notes — is in
+**[docs/HANDOVER.md](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md)**; read
+it first. Continue subagent-driven (see "How to run the port" above). Sequence:
 
 1. ~~**Row 23 `TView`**~~ ✅ DONE (see Current state). The pattern every widget
    embeds is set: embed `ViewState`, `impl View`, draw through `DrawCtx`, events
