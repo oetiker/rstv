@@ -6,10 +6,12 @@
 //! These tests are the verification backbone: every widget test from Phase 1
 //! onward follows the same pattern.
 
-use tvision::backend::{HeadlessBackend, Renderer};
+use tvision::Theme;
+use tvision::backend::{HeadlessBackend, HeadlessHandle, Renderer};
 use tvision::color::{Color, Style};
 use tvision::event::{Event, Key, KeyModifiers};
 use tvision::screen::Buffer;
+use tvision::view::{DrawCtx, Point, Rect};
 
 /// Full end-to-end pipeline: paint cells, render, snapshot.
 ///
@@ -30,6 +32,60 @@ fn renders_text_to_headless_snapshot() {
         }
     });
     insta::assert_snapshot!(screen.snapshot());
+}
+
+/// The D8 core, end-to-end: the **real widget path** (paint through `DrawCtx`)
+/// across **multiple frames**, proving the diff *clears* cells that revert and
+/// that a reused back buffer is reset between frames.
+///
+/// Frame 1 paints "Hello", frame 2 the shorter "Hi", frame 3 "AB". After frame 2
+/// the headless screen must read "Hi   " (NOT "Hillo" — the trailing l,l,o must be
+/// cleared by the diff). After frame 3 it must read "AB   " (NOT "ABllo" — proving
+/// `Renderer::render` reset the *reused* back buffer, which held frame 1's content).
+#[test]
+fn drawctx_multi_frame_diff_clears_reverted_cells() {
+    let theme = Theme::classic_blue();
+    let (backend, screen) = HeadlessBackend::new(8, 1);
+    let mut r = Renderer::new(Box::new(backend));
+
+    // The current headless screen row, as a String (trailing blanks included).
+    let row_text = |screen: &HeadlessHandle| -> String {
+        let buf = screen.buffer();
+        (0..buf.width())
+            .map(|x| buf.get(x, 0).symbol().to_string())
+            .collect()
+    };
+
+    // Each frame paints through a DrawCtx over the back buffer — exactly the path
+    // a real widget's draw() takes (not direct Buffer writes).
+    r.render(|buf: &mut Buffer| {
+        let mut dc = DrawCtx::new(buf, &theme, Rect::new(0, 0, 8, 1), Point::new(0, 0));
+        dc.put_str(0, 0, "Hello", Style::default());
+    });
+    assert_eq!(row_text(&screen), "Hello   ");
+
+    // Frame 2: shorter string — the diff must CLEAR the trailing "llo".
+    r.render(|buf: &mut Buffer| {
+        let mut dc = DrawCtx::new(buf, &theme, Rect::new(0, 0, 8, 1), Point::new(0, 0));
+        dc.put_str(0, 0, "Hi", Style::default());
+    });
+    assert_eq!(
+        row_text(&screen),
+        "Hi      ",
+        "diff must clear cells that reverted to blank (D8)"
+    );
+
+    // Frame 3: reuses the back buffer that held frame 1's "Hello"; render() must
+    // reset() it, else stale "llo" leaks through.
+    r.render(|buf: &mut Buffer| {
+        let mut dc = DrawCtx::new(buf, &theme, Rect::new(0, 0, 8, 1), Point::new(0, 0));
+        dc.put_str(0, 0, "AB", Style::default());
+    });
+    assert_eq!(
+        row_text(&screen),
+        "AB      ",
+        "reused back buffer must be reset between frames (no stale content)"
+    );
 }
 
 /// Proves the headless event queue: injected events come back from poll_event.

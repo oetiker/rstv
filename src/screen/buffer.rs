@@ -108,6 +108,35 @@ impl Buffer {
         &self.content
     }
 
+    /// A shared slice over row `y` (`width` cells), for width-aware row writes.
+    ///
+    /// Panics in debug builds if `y >= height`.
+    pub fn row(&self, y: u16) -> &[Cell] {
+        debug_assert!(
+            y < self.height,
+            "row({y}) out of bounds for height {}",
+            self.height
+        );
+        let w = self.width as usize;
+        let start = y as usize * w;
+        &self.content[start..start + w]
+    }
+
+    /// A mutable slice over row `y` (`width` cells), for width-aware row writes
+    /// (e.g. feeding `text::draw_str` a clipped sub-slice).
+    ///
+    /// Panics in debug builds if `y >= height`.
+    pub fn row_mut(&mut self, y: u16) -> &mut [Cell] {
+        debug_assert!(
+            y < self.height,
+            "row_mut({y}) out of bounds for height {}",
+            self.height
+        );
+        let w = self.width as usize;
+        let start = y as usize * w;
+        &mut self.content[start..start + w]
+    }
+
     /// Reset every cell to [`Cell::default()`].
     pub fn reset(&mut self) {
         for cell in &mut self.content {

@@ -33,6 +33,43 @@ that is native Rust.
 4. **Snapshot tests are the verification** (D11): port a piece, run it on the
    `HeadlessBackend`, snapshot, compare to C++ behavior. No heavy upfront plans.
 
+## How to run the port (subagent-driven, the default from Phase 1 on)
+
+Phase 0 was FOUNDATION/INFRA — interlocking, design-heavy, mostly serial. Phase 1+
+is **mostly `MECHANICAL` leaf widgets in parallel batches** (PORT-ORDER Batches
+A–E), so the orchestrator runs it as **subagent-driven development**
+(`superpowers:subagent-driven-development`). The main thread does **only**
+coordination: design FOUNDATION seams, write precise prompts, integrate, decide.
+Per row:
+
+1. **Implementer subagent (fresh, isolated context).** Give it a *self-contained*
+   prompt — never "go read the plan." Inline: the PORT-ORDER row, the relevant
+   C++ source (from `magiblot-tvision/`), the D-rules that apply (Appendix B
+   table), the existing types it builds on, and "run `cargo test`/`clippy
+   --all-targets`/`fmt --check` + add a snapshot test (Appendix B step 4)."
+   **Model by tag:** `MECHANICAL` → Sonnet; `FOUNDATION`/`INFRA` → Opus (or the
+   main thread).
+2. **Two-stage review (fresh subagents — do NOT just self-review in the main
+   thread).** First a **spec-compliance** reviewer (does it match the C++
+   behavior + the row's D-rules, nothing extra/missing?), then, once that's ✅, a
+   **code-quality** reviewer. Implementer fixes; re-review until clean.
+   (`feature-dev:code-reviewer` / `gsd-code-reviewer` agent types fit, or a
+   plain agent with the row's spec.)
+3. **Integrate + verify in the shared tree**, then mark the row done.
+
+**Parallelism (the reconciliation):** the skill says "never dispatch parallel
+implementers" because of shared-tree conflicts — but PORT-ORDER's batches are
+*build-disjoint*, so dispatch them **concurrently using `isolation: "worktree"`**
+(each agent self-verifies in its own checkout; the orchestrator integrates). Run
+serially only for shared files (`lib.rs`, a shared `mod.rs`) and FOUNDATION rows
+that gate others. The orchestrator owns the few shared-file edits (module wiring,
+re-exports) to avoid races.
+
+**Worktree gotcha (learned this milestone):** an agent worktree is branched from
+the last **commit**, so uncommitted work is absent from it. **Commit completed
+rows before dispatching worktree subagents that build on them** (or the agent
+wastes effort re-deriving prereqs). Commit at batch boundaries.
+
 ## Locked decisions (details in the guide)
 Crate `tvision`, house style `tv::`; drop `T` prefix; `snake_case` methods;
 constant families → open newtypes with SCREAMING_SNAKE assoc consts
@@ -91,12 +128,29 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
     - row 20 `Clock` + `TimerQueue` → `src/timer.rs` (D9/D11; injected
       `Clock`/`SystemClock`/`ManualClock`; `calc_next_expires_at` verbatim; dropped
       the `collectId` dance — collect-then-dispatch; clock passed in, not stored).
+    - row 16 (minimal) `Theme` → `src/theme.rs` (D7; `Role` first-party closed
+      enum seeded with D7's enumerated needs, grows per-widget; `Glyphs` empty stub
+      [row 9 deferred]; `classic_blue` default with *provisional* BIOS colors).
+    - row 21 capture stack → `src/capture.rs` (D9; `CaptureStack` of
+      `Box<dyn CaptureHandler>`; `CaptureFlow::{Pass,Consumed,ConsumedPop}` — pop
+      is a return value [unambiguous: the handler that just ran], push is deferred
+      via `Context`; live loop deferred to row 31).
+    - row 22 `Context`/`DrawCtx` → `src/view/context.rs` (D3/D4). `DrawCtx` =
+      clipped+themed writer (`put_char`/`put_str`/`fill`/`sub`; clip intersected
+      with buffer bounds at construction → panic-safe; reuses row-7/8 text
+      primitives). `Context` = event-side ctx (`post`/`broadcast`/`set_timer`/
+      `kill_timer`/`push_capture`; distinct `&mut` fields for disjoint borrows);
+      `query`/focus deferred to `TGroup` (row 26). Borrow model: loop owns the
+      capture stack, `Context` only queues deferred pushes — proven by the
+      `compose_full_protocol` hand-played-loop test in `src/capture.rs`.
   - **Snapshot format (FOUNDATION) frozen** in `src/screen/snapshot.rs`
     (`snapshot(&Buffer, cursor) -> String`): `size`/`cursor`/`text`/`attr`/`legend`,
     `|`-framed rows, `.`=default style, per-display-column attr keys, wide glyph
     keyed twice + trail absorbed. First end-to-end snapshot test in
     `tests/render_pipeline.rs`. Every future widget test diffs against this.
-  - 130 unit/integration tests green; `cargo clippy --all-targets` and
+  - **Phase 0 is COMPLETE** (all primitives + INFRA substrate). The only
+    deferred Phase-0 item is row 9 (glyph tables → `Glyphs`), a stub that fills in
+    per-widget. 155 unit/integration tests green; `cargo clippy --all-targets` and
     `cargo fmt --check` clean.
   - Coordinates are `i32` (faithful to magiblot's `int`).
   - Deps: `unicode-segmentation`, `unicode-width`, `crossterm`; dev: `insta`.
@@ -104,26 +158,34 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
   enum by *extensibility* — open/app-extensible families (`Command`, `HelpCtx`) →
   open newtype with namespaced `&'static str` identity; closed sets (`Key`) → enum.
   Constants live with their owner (no central registry).
-- Git on `main`; Phase 0 rows 1–12 are **committed** (last commit `010584f`);
-  rows 5, 17, 18, 19, 20 + the snapshot format are **uncommitted** (commit only
-  when asked).
+- Git on `main`; Phase 0 rows 1–12 committed (`010584f`); the INFRA substrate
+  (rows 5,17,18,19,20 + snapshot format) committed (`7f6edd9`); rows 16(min),
+  21, 22 are **uncommitted** (commit only when asked).
 
 ## Next step
-Finish Phase 0 with the last two INFRA rows, the most interlocking in the phase:
-- **minimal `Theme`** (partial row 16, a DrawCtx dependency): `Role` is a
-  *first-party* enum that grows per-widget (D7 — not a newtype, not third-party
-  extensible), `Glyphs` a near-empty stub (row 9 not needed yet), default = classic
-  blue. Pulled in early only because `DrawCtx` needs `&Theme`.
-- **row 21 capture stack** (D9): LIFO `CaptureHandler`s holding `ViewId`; modal/
-  drag/press become handlers, not nested loops. The handler signature references
-  `Context`, so 21 and 22 co-design.
-- **row 22 `Context`/`DrawCtx`** (D3/D4): `DrawCtx` (buffer + clip + origin + theme;
-  re-expresses `DrawBuffer` ops) is safe to build fully; the event-side `Context`
-  is anchored to Appendix B's decided `ctx.*` calls (`broadcast`/`query`/timer
-  scheduling/`push`/`pop_capture`). The one tricky bit: the loop owns the capture
-  stack and `Context` exposes push/pop so a running handler isn't borrowed from the
-  thing it mutates. Full loop wiring is deferred to `TProgram` (row 31).
-Then Phase 0 is complete and Phase 1 (`TView` row 23) can begin.
+**Phase 0 is done — begin Phase 1, run it subagent-driven** (see "How to run the
+port" above). Sequence:
+
+1. **Row 23 `TView`** (`tview.cpp`, `sview.cpp`, `tvexposd.cpp`, `tvcursor.cpp`) —
+   FOUNDATION, **design on the main thread / Opus**: the `View` trait + `ViewState`
+   (D2/D5 state/options/growMode/dragMode struct-of-bools), drawn through `DrawCtx`,
+   events through `Context`. This sets the pattern every widget embeds, so own the
+   trait shape yourself (likely an advisor consult). It also forces the first
+   decisions deferred to it: the *enabled-by-default command policy* (D1 note on
+   row 12) and how `setState`/`getColor`→`Role` map. NOT a parallel-fan-out row.
+2. **Then `TFrame` 24 ∥ `TScrollBar` 25 ∥ `TBackground` 29** — once `TView`'s
+   pattern is set, these are largely independent; dispatch as parallel worktree
+   implementers, each with spec + code-quality review.
+3. **`TGroup` 26** — FOUNDATION again: owns `Vec<Box<dyn View>>` (D3), three-phase
+   event routing (D4), and brings the **live event loop** + the `query`/focus
+   `Context` methods deferred from row 22. Design-heavy; main thread.
+4. **Then the widget batches fan out hard** (PORT-ORDER Batches B–E): Phase-3
+   leaves, validators, menus, dialogs, editor, etc. — these are the bulk
+   `MECHANICAL` rows; run them as parallel worktree implementer+reviewer trios,
+   committing at batch boundaries.
+
+The snapshot-test workflow (Appendix B step 4) is fully unlocked: build a view on
+a `HeadlessBackend`, `render`, `assert_snapshot!` against the frozen format.
 
 ## Conventions
 - English for all code/comments/identifiers (user-facing strings may be localized).

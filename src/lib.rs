@@ -36,30 +36,33 @@
 //! | 8 | `Text` (width/scroll) | [`text`] | ✅ |
 //! | 7 | `DrawBuffer` | [`screen`] | ✅ |
 //! | 5 | quantization ladder | [`backend`] | ✅ |
-//! | 9 | glyph tables | `theme` | ⏳ |
+//! | 9 | glyph tables | [`theme`] (stub) | ⏳ |
 //! | 10 | `Key` | [`event`] | ✅ |
 //! | 11 | `Event` | [`event`] | ✅ |
 //! | 12 | `Command` / command set | [`command`] | ✅ |
-//! | 16 | `Theme` | `theme` | ⏳ |
+//! | 16 | `Theme` (minimal) | [`theme`] | ✅ |
 //! | 17 | `ViewId` arena | [`view`] | ✅ |
 //! | 18 | back-buffer + diff | [`screen`] | ✅ |
 //! | 19 | `Backend` (+ crossterm/headless) | [`backend`] | ✅ |
 //! | 20 | `Clock` + timer queue | [`timer`] | ✅ |
-//! | 21 | capture stack | `capture` | ⏳ |
-//! | 22 | `Context` / `DrawCtx` | [`view`] | ⏳ |
+//! | 21 | capture stack | [`capture`] | ✅ |
+//! | 22 | `Context` / `DrawCtx` | [`view`] | ✅ |
 
 pub mod backend;
+pub mod capture;
 pub mod color;
 pub mod command;
 pub mod event;
 pub mod screen;
 pub mod text;
+pub mod theme;
 pub mod timer;
 pub mod view;
 
 // --- House-style root re-exports (so `tv::Point` etc. resolve without `use`) ---
 
 pub use backend::{Backend, CrosstermBackend, HeadlessBackend, HeadlessHandle, Renderer};
+pub use capture::{CaptureFlow, CaptureHandler, CaptureStack};
 pub use color::{Color, Modifiers, Style};
 pub use command::{Command, CommandSet};
 pub use event::{
@@ -67,5 +70,6 @@ pub use event::{
     MouseWheel,
 };
 pub use screen::{Buffer, Cell, DrawBuffer};
+pub use theme::{Role, Theme};
 pub use timer::{Clock, ManualClock, SystemClock, TimerId, TimerQueue};
-pub use view::{Point, Rect, ViewId};
+pub use view::{Context, DrawCtx, Point, Rect, ViewId};
