@@ -936,7 +936,8 @@ mod tests {
         let mut out = std::collections::VecDeque::new();
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = Vec::new();
-        let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending);
+        let mut cmd_changes: Vec<(crate::command::Command, bool)> = Vec::new();
+        let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
         v.handle_event(&mut ev, &mut ctx);
         // Event untouched (still non-Nothing), state unchanged.
         assert!(!ev.is_nothing());

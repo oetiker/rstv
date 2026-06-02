@@ -250,6 +250,12 @@ pub struct Context<'a> {
     /// Deferred capture pushes — applied by the loop *after* the current
     /// dispatch, so a pushed handler sees the next event, never the current one.
     pending_captures: &'a mut Vec<Box<dyn CaptureHandler>>,
+    /// Deferred command-enable changes (`(cmd, enable)`; `true` = enable, `false`
+    /// = disable) — applied by the loop *after* the current dispatch, exactly like
+    /// [`pending_captures`](Self::pending_captures). A view (D3) has no handle to
+    /// the program's command set, so `enableCommand`/`disableCommand` are realized
+    /// as a downward request queue the loop drains into `curCommandSet`.
+    command_changes: &'a mut Vec<(Command, bool)>,
 }
 
 impl<'a> Context<'a> {
@@ -259,12 +265,14 @@ impl<'a> Context<'a> {
         timers: &'a mut TimerQueue,
         now_ms: u64,
         pending_captures: &'a mut Vec<Box<dyn CaptureHandler>>,
+        command_changes: &'a mut Vec<(Command, bool)>,
     ) -> Self {
         Context {
             out_events,
             timers,
             now_ms,
             pending_captures,
+            command_changes,
         }
     }
 
@@ -297,6 +305,20 @@ impl<'a> Context<'a> {
     /// returning [`CaptureFlow::ConsumedPop`](crate::capture::CaptureFlow::ConsumedPop).
     pub fn push_capture(&mut self, handler: Box<dyn CaptureHandler>) {
         self.pending_captures.push(handler);
+    }
+
+    /// Request `cmd` be enabled in the program's command set — **deferred**. The
+    /// loop applies queued changes after the current dispatch (mirrors
+    /// [`push_capture`](Self::push_capture)). Realizes `TView::enableCommand` from
+    /// a view that has no up-pointer to the program (D3).
+    pub fn enable_command(&mut self, cmd: Command) {
+        self.command_changes.push((cmd, true));
+    }
+
+    /// Request `cmd` be disabled — **deferred** (see
+    /// [`enable_command`](Self::enable_command)).
+    pub fn disable_command(&mut self, cmd: Command) {
+        self.command_changes.push((cmd, false));
     }
 
     /// The clock value sampled for this dispatch pass.
@@ -565,8 +587,9 @@ mod tests {
         let mut out = VecDeque::new();
         let mut timers = TimerQueue::new();
         let mut pending: Vec<Box<dyn CaptureHandler>> = Vec::new();
+        let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
         {
-            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending);
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
             ctx.post(Command::OK);
             ctx.broadcast(Command::QUIT);
         }
@@ -580,16 +603,33 @@ mod tests {
         let mut out = VecDeque::new();
         let mut timers = TimerQueue::new();
         let mut pending: Vec<Box<dyn CaptureHandler>> = Vec::new();
+        let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
         let id = {
-            let mut ctx = Context::new(&mut out, &mut timers, 100, &mut pending);
+            let mut ctx = Context::new(&mut out, &mut timers, 100, &mut pending, &mut cmd_changes);
             assert_eq!(ctx.now_ms(), 100);
             ctx.set_timer(Duration::from_millis(50), None)
         };
         assert_eq!(timers.len(), 1);
         {
-            let mut ctx = Context::new(&mut out, &mut timers, 100, &mut pending);
+            let mut ctx = Context::new(&mut out, &mut timers, 100, &mut pending, &mut cmd_changes);
             ctx.kill_timer(id);
         }
         assert_eq!(timers.len(), 0);
+    }
+
+    #[test]
+    fn context_command_changes_queue_enable_and_disable() {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut pending: Vec<Box<dyn CaptureHandler>> = Vec::new();
+        let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
+        {
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+            ctx.enable_command(Command::OK);
+            ctx.disable_command(Command::CANCEL);
+        }
+        assert_eq!(cmd_changes.len(), 2);
+        assert_eq!(cmd_changes[0], (Command::OK, true));
+        assert_eq!(cmd_changes[1], (Command::CANCEL, false));
     }
 }

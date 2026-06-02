@@ -205,6 +205,12 @@ pub struct Program {
     /// Deferred capture pushes, applied to `captures` *after* each dispatch.
     /// Distinct field for the same disjoint-borrow reason.
     pending_captures: Vec<Box<dyn CaptureHandler>>,
+    /// Deferred command-enable changes (`(cmd, enable)`), applied to
+    /// `command_set` *after* each dispatch — the D3 downward realization of a
+    /// view's `enableCommand`/`disableCommand` (a view has no up-pointer to the
+    /// program). Distinct field for the same disjoint-borrow reason as
+    /// `pending_captures`.
+    pending_command_changes: Vec<(Command, bool)>,
     /// The enabled-command set (`curCommandSet`); see [`default_command_set`].
     command_set: CommandSet,
     /// The inserted desktop child's id (`canMoveFocus` / Alt-N target).
@@ -276,9 +282,16 @@ impl Program {
         // `Group::insert` (row 26) deliberately never auto-selects, so we drive it
         // here via a throwaway Context; the RECEIVED_FOCUS broadcast it queues
         // sits in `out_events` and is processed on the first pump.
+        let mut pending_command_changes: Vec<(Command, bool)> = Vec::new();
         if let Some(id) = desktop {
             let now = clock.now_ms();
-            let mut ctx = Context::new(&mut out_events, &mut timers, now, &mut pending_captures);
+            let mut ctx = Context::new(
+                &mut out_events,
+                &mut timers,
+                now,
+                &mut pending_captures,
+                &mut pending_command_changes,
+            );
             group.set_current(Some(id), SelectMode::Normal, &mut ctx);
         }
 
@@ -291,6 +304,7 @@ impl Program {
             theme,
             out_events,
             pending_captures,
+            pending_command_changes,
             command_set: default_command_set(),
             desktop,
             end_state: None,
@@ -395,6 +409,7 @@ impl Program {
             theme,
             out_events,
             pending_captures,
+            pending_command_changes,
             command_set,
             desktop: _,
             end_state,
@@ -458,7 +473,13 @@ impl Program {
                     // The Context borrow ends at this block's close, before we
                     // drain pending_captures back into the stack.
                     {
-                        let mut ctx = Context::new(out_events, timers, now, pending_captures);
+                        let mut ctx = Context::new(
+                            out_events,
+                            timers,
+                            now,
+                            pending_captures,
+                            pending_command_changes,
+                        );
                         // Offer to the capture stack first; if consumed, skip view
                         // routing.
                         let consumed = captures.dispatch(&mut ev, &mut ctx);
@@ -471,6 +492,20 @@ impl Program {
                     // invariant, now through the real pump).
                     for h in pending_captures.drain(..) {
                         captures.push(h);
+                    }
+                    // Apply deferred command-enable changes AFTER dispatch (same
+                    // discipline as pending_captures). Inline the
+                    // enable_command/disable_command bodies — the destructure gives
+                    // the fields, not `self`. Flip `command_set_changed` on a real
+                    // change so the next idle broadcasts cmCommandSetChanged.
+                    for (cmd, enable) in pending_command_changes.drain(..) {
+                        if enable && !command_set.has(cmd) {
+                            command_set.enable_cmd(cmd);
+                            *command_set_changed = true;
+                        } else if !enable && command_set.has(cmd) {
+                            command_set.disable_cmd(cmd);
+                            *command_set_changed = true;
+                        }
                     }
                 }
             }
@@ -516,6 +551,7 @@ impl Program {
             &mut self.timers,
             now,
             &mut self.pending_captures,
+            &mut self.pending_command_changes,
         );
         f(&mut self.group, &mut ctx)
     }
@@ -996,5 +1032,52 @@ mod tests {
             .filter(|e| **e == Event::Broadcast(Command::COMMAND_SET_CHANGED))
             .count();
         assert_eq!(count2, 0, "no re-broadcast after the flag is cleared");
+    }
+
+    // -- 9. deferred command-enable channel (Context -> Program) -------------
+
+    #[test]
+    fn ctx_enable_command_applies_after_dispatch_and_unblocks_routing() {
+        let (mut program, _screen, _clock) = program_with_desktop(12, 4);
+        let log = Rc::new(RefCell::new(Vec::new()));
+
+        // cmZoom starts DISABLED (default_command_set omits it).
+        assert!(!program.command_enabled(Command::ZOOM));
+
+        // A probe that enables cmZoom via the downward Context on its first event.
+        let enabled = Rc::new(RefCell::new(false));
+        {
+            let enabled = enabled.clone();
+            let mut probe = Probe::new(Rect::new(0, 0, 4, 2), 'P', log.clone());
+            probe.action = Some(Box::new(move |ctx: &mut Context| {
+                if !*enabled.borrow() {
+                    ctx.enable_command(Command::ZOOM);
+                    *enabled.borrow_mut() = true;
+                }
+            }));
+            let id = program.group_mut().insert(Box::new(probe));
+            program.with_ctx(|g, ctx| g.set_current(Some(id), SelectMode::Normal, ctx));
+        }
+
+        // Send a key the probe reacts to; the enable is deferred and applied AFTER
+        // dispatch (mirrors pending_captures).
+        program.out_events.clear();
+        program.out_events.push_back(key(Key::Char('z')));
+        program.pump_once();
+        assert!(
+            program.command_enabled(Command::ZOOM),
+            "deferred enable_command applied after dispatch"
+        );
+
+        // A previously-filtered cmZoom now reaches routing: send it and confirm the
+        // probe (current child) records it (it is no longer dropped at the program
+        // boundary).
+        log.borrow_mut().clear();
+        program.out_events.push_back(Event::Command(Command::ZOOM));
+        program.pump_once();
+        assert!(
+            log.borrow().contains(&Event::Command(Command::ZOOM)),
+            "now-enabled command reaches routing instead of being filtered"
+        );
     }
 }

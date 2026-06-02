@@ -37,12 +37,14 @@
 //!   **deliberately reversed** from C++ `drawSubViews` (which paints top-first
 //!   and relies on occlusion). Shadow casting has no infra yet (`// TODO(row 33)`).
 //!
+//! * **Z-reorder (row 33a):** `ofTopSelect`/`makeFirst`/`putInFrontOf` are now
+//!   realized in the owner ([`Group::put_in_front_of`]/[`Group::make_first`]); the
+//!   select path ([`Group::focus_child`]) raises an `ofTopSelect` child to the top
+//!   instead of just making it current, faithful to `TView::select`.
 //! * **Deferred:** `execute`/`execView`/the blocking modal loop/`endModal` →
 //!   row 31 (`TProgram`)/34 (the loop owns the capture stack, so a group cannot
-//!   run a modal itself); `ofTopSelect`/`makeFirst`/`putInFrontOf` Z-reorder →
-//!   row 33 (`TWindow`), so `select` always goes through
-//!   [`set_current`](Group::set_current); `getData`/`setData`/`dataSize` →
-//!   D10/row 39; `resetCursor` (hardware cursor) → row 31.
+//!   run a modal itself); `getData`/`setData`/`dataSize` → D10/row 39;
+//!   `resetCursor` (hardware cursor) → row 31.
 
 use crate::command::Command;
 use crate::event::Event;
@@ -241,22 +243,47 @@ impl Group {
     }
 
     /// Make the child `id` the current/focused one. The downward realization of
-    /// `TView::focus()`/`select()` for a child in this (assumed-focused) group.
+    /// `TView::focus()` → `TView::select()` for a child in this (assumed-focused)
+    /// group.
     ///
-    /// Validates the **outgoing** current first (the `ofValidate` /
-    /// `cmReleasedFocus` gate from `TView::focus`): if it refuses focus release,
-    /// the switch is denied and `false` is returned. Otherwise routes through
-    /// [`set_current`](Self::set_current) with [`SelectMode::Normal`] — the
-    /// `ofTopSelect` reorder path is deferred to row 33.
+    /// Faithful to the C++ ordering: `focus()` validates the **outgoing** current
+    /// (the `ofValidate` / `cmReleasedFocus` gate) and, if that passes, calls
+    /// `select()`. `select()` is:
+    /// ```cpp
+    /// if( options & ofTopSelect ) makeFirst();
+    /// else owner->setCurrent( this, normalSelect );
+    /// ```
+    /// so a **selectable + `ofTopSelect`** child is **raised to the top**
+    /// ([`make_first`](Self::make_first), which reorders + `resetCurrent`s); any
+    /// other selectable child is just made current via
+    /// [`set_current`](Self::set_current). Returns `false` if the validate gate
+    /// refused the switch.
+    ///
+    /// **`ofSelectable` gate:** the real C++ `TView::select()` has an outer guard
+    /// `if( (options & ofSelectable) != 0 && owner != 0 )`. That gate is enforced
+    /// at the **call sites** — the mouse-down auto-select path checks
+    /// `selectable && !selected && !disabled` before calling, and `focus_next`
+    /// only iterates `eligible = visible && !disabled && selectable` children —
+    /// so `focus_child` itself does not re-check `ofSelectable`.
     pub fn focus_child(&mut self, id: ViewId, ctx: &mut Context) -> bool {
-        // Validate the outgoing current before letting it lose focus.
+        // focus(): validate the outgoing current before letting it lose focus.
         if let Some(ci) = self.current.and_then(|c| self.index_of(c)) {
             let validate = self.children[ci].view.state().options.validate;
             if validate && !self.children[ci].view.valid(Command::RELEASED_FOCUS) {
                 return false; // focus refused
             }
         }
-        self.set_current(Some(id), SelectMode::Normal, ctx);
+        // select(): ofTopSelect -> makeFirst (raise + resetCurrent); else
+        // setCurrent(normalSelect).
+        let top_select = match self.index_of(id) {
+            Some(i) => self.children[i].view.state().options.top_select,
+            None => return true, // unknown id: nothing to select (C++ owner!=0 guard)
+        };
+        if top_select {
+            self.make_first(id, ctx);
+        } else {
+            self.set_current(Some(id), SelectMode::Normal, ctx);
+        }
         true
     }
 
@@ -335,6 +362,95 @@ impl Group {
             Some(id) => self.focus_child(id, ctx),
             None => true,
         }
+    }
+
+    // -- Z-reorder (putInFrontOf / makeFirst, realized in the owner, D3) ------
+
+    /// `TView::putInFrontOf(target)` realized in the owner (D3 — a child cannot
+    /// reorder itself; the group does it). Move child `id` so it sits immediately
+    /// **in front of** `target` in Z-order. `target == None` moves `id` to the
+    /// very front (top). Unknown ids are ignored.
+    ///
+    /// **NOTE:** `target == None` is a **to-top** sentinel used exclusively by
+    /// [`make_first`](Self::make_first). Do NOT equate it with C++
+    /// `Target == 0` — C++ `putInFrontOf(0)` / `insertView(p, 0)` sets
+    /// `last = p`, sending the view to the **BOTTOM**, which is the opposite of
+    /// this API's `None`-to-top behavior. The C++ send-to-bottom path has no
+    /// consumer here and is intentionally unimplemented.
+    ///
+    /// **Ring → Vec mapping.** C++ `putInFrontOf(Target)` re-splices `this` so that
+    /// `this->next == Target`; in next-walk order (`first()`→`last`) that places
+    /// `this` immediately *ahead of* `Target` (one step closer to the top). Our Vec
+    /// is back-to-front (`children[0]` == `last`/bottom, `children.last()` ==
+    /// `first()`/top) and next-walk == **decreasing** index, so "`this->next ==
+    /// Target`" means `id` lands at index `index_of(target) + 1` (one slot above
+    /// `target`). `makeFirst` (`Target == first()`) therefore lands `id` at
+    /// `children.last()` (the top).
+    ///
+    /// **C++ guards (faithful):** no-op if `id == target`, or if `id` is already
+    /// immediately in front of `target` (C++ `Target == nextView()`), or — for
+    /// `target == None` — if `id` is already the top. The `sfVisible` hide/show +
+    /// `drawHide`/`drawShow` dance is **dropped (D8)**: whole-tree redraw makes it
+    /// unnecessary. The trailing `if (options & ofSelectable) owner->resetCurrent()`
+    /// is kept.
+    pub fn put_in_front_of(&mut self, id: ViewId, target: Option<ViewId>, ctx: &mut Context) {
+        let Some(from) = self.index_of(id) else {
+            return;
+        };
+        // Resolve the target's index (None = to-top sentinel for make_first).
+        // An unknown target id is ignored (C++ requires Target->owner == owner;
+        // the Target==0 / send-to-bottom path is unimplemented — no consumer).
+        let target_idx = match target {
+            None => None,
+            Some(t) => {
+                if t == id {
+                    return; // Target == this -> no-op.
+                }
+                match self.index_of(t) {
+                    Some(ti) => Some(ti),
+                    None => return, // foreign/stale target -> ignore.
+                }
+            }
+        };
+
+        // No-op guard (C++ `Target == nextView()` / already-top): `id` is already
+        // immediately in front of `target`. With `target == None` that means `id`
+        // is already the top (`from == len - 1`); with a target it means `id` sits
+        // one slot above `target` (`from == target_idx + 1`).
+        let n = self.children.len();
+        let already_in_place = match target_idx {
+            None => from == n - 1,
+            Some(ti) => from == ti + 1,
+        };
+        if already_in_place {
+            return;
+        }
+
+        // Reorder: pull `id` out, then re-insert. The insertion index is computed
+        // against the POST-removal Vec.
+        //  - target == None  -> push to the very end (top): index == new len.
+        //  - target == Some  -> immediately above `target`: `target`'s post-removal
+        //    index + 1. Removing `from` shifts indices above `from` down by one.
+        let child = self.children.remove(from);
+        let insert_at = match target_idx {
+            None => self.children.len(),
+            Some(ti) => {
+                let ti = if ti > from { ti - 1 } else { ti };
+                ti + 1
+            }
+        };
+        self.children.insert(insert_at, child);
+
+        // Faithful tail: if the moved view is selectable, resetCurrent().
+        if self.children[insert_at].view.state().options.selectable {
+            self.reset_current(ctx);
+        }
+    }
+
+    /// `TView::makeFirst` == `putInFrontOf(first())` — move child `id` to the top
+    /// (frontmost) of the Z-order. Realized in the owner (D3).
+    pub fn make_first(&mut self, id: ViewId, ctx: &mut Context) {
+        self.put_in_front_of(id, None, ctx);
     }
 
     // -- event routing helpers ----------------------------------------------
@@ -625,7 +741,8 @@ mod tests {
         f: impl FnOnce(&mut Context) -> R,
     ) -> R {
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = Vec::new();
-        let mut ctx = Context::new(out, timers, 0, &mut pending);
+        let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
+        let mut ctx = Context::new(out, timers, 0, &mut pending, &mut cmd_changes);
         f(&mut ctx)
     }
 
@@ -1348,5 +1465,223 @@ mod tests {
         // No current child -> None.
         let empty = Group::new(Rect::new(0, 0, 20, 10));
         assert_eq!(empty.cursor_request(), None);
+    }
+
+    // -- 12. Z-reorder: put_in_front_of (the primitive) ----------------------
+
+    #[test]
+    fn put_in_front_of_moves_child_in_z_order() {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+
+        // children = [A, B, C]; A == bottom (children[0]), C == top (last).
+        // None of them selectable here, so reset_current's tail is a no-op and we
+        // observe the raw reorder.
+        let mut group = Group::new(Rect::new(0, 0, 30, 10));
+        let (ida, idb, idc) = with_ctx(&mut out, &mut timers, |_ctx| {
+            let ida = group.insert(Probe::boxed(Rect::new(0, 0, 5, 5), 'A', log.clone()));
+            let idb = group.insert(Probe::boxed(Rect::new(6, 0, 11, 5), 'B', log.clone()));
+            let idc = group.insert(Probe::boxed(Rect::new(12, 0, 17, 5), 'C', log.clone()));
+            (ida, idb, idc)
+        });
+        assert_eq!(group.index_of(ida), Some(0));
+        assert_eq!(group.index_of(idc), Some(2));
+
+        // Move A (bottom) to the very top: A -> children.last().
+        with_ctx(&mut out, &mut timers, |ctx| group.make_first(ida, ctx));
+        assert_eq!(group.index_of(ida), Some(2), "A is now the top (last slot)");
+        assert_eq!(group.index_of(idb), Some(0), "B drops to the bottom");
+        assert_eq!(group.index_of(idc), Some(1));
+
+        // Move B in front of C: B lands immediately above C (one slot up).
+        // Order is now [B, C, A]; put B in front of C -> [C, B, A].
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.put_in_front_of(idb, Some(idc), ctx)
+        });
+        let order: Vec<_> = (0..group.len()).map(|i| group.children[i].id).collect();
+        assert_eq!(order, vec![idc, idb, ida], "B sits just in front of C");
+    }
+
+    #[test]
+    fn put_in_front_of_is_a_noop_when_already_in_place() {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+
+        // children = [A, B, C]; A == bottom, C == top.
+        let mut group = Group::new(Rect::new(0, 0, 30, 10));
+        let (ida, idb, idc) = with_ctx(&mut out, &mut timers, |_ctx| {
+            let ida = group.insert(Probe::boxed(Rect::new(0, 0, 5, 5), 'A', log.clone()));
+            let idb = group.insert(Probe::boxed(Rect::new(6, 0, 11, 5), 'B', log.clone()));
+            let idc = group.insert(Probe::boxed(Rect::new(12, 0, 17, 5), 'C', log.clone()));
+            (ida, idb, idc)
+        });
+
+        // make_first on the already-top child (C) is a no-op (C++ Target == this/
+        // already-top guard).
+        with_ctx(&mut out, &mut timers, |ctx| group.make_first(idc, ctx));
+        let order: Vec<_> = (0..group.len()).map(|i| group.children[i].id).collect();
+        assert_eq!(
+            order,
+            vec![ida, idb, idc],
+            "already-top make_first changes nothing"
+        );
+
+        // put_in_front_of where the child is ALREADY immediately in front of the
+        // target is a no-op (C++ Target == nextView()). B is immediately in front
+        // of A (B at index 1 == A's index 0 + 1).
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.put_in_front_of(idb, Some(ida), ctx)
+        });
+        let order2: Vec<_> = (0..group.len()).map(|i| group.children[i].id).collect();
+        assert_eq!(
+            order2,
+            vec![ida, idb, idc],
+            "already-in-front put_in_front_of is a no-op"
+        );
+
+        // put_in_front_of(self) is a no-op.
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.put_in_front_of(idb, Some(idb), ctx)
+        });
+        let order3: Vec<_> = (0..group.len()).map(|i| group.children[i].id).collect();
+        assert_eq!(order3, vec![ida, idb, idc]);
+    }
+
+    // -- 13. unknown/stale target id in put_in_front_of ----------------------
+
+    #[test]
+    fn put_in_front_of_unknown_id_is_noop() {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+
+        // children = [A, B, C].
+        let mut group = Group::new(Rect::new(0, 0, 30, 10));
+        let (ida, idb, idc) = with_ctx(&mut out, &mut timers, |_ctx| {
+            let ida = group.insert(Probe::boxed(Rect::new(0, 0, 5, 5), 'A', log.clone()));
+            let idb = group.insert(Probe::boxed(Rect::new(6, 0, 11, 5), 'B', log.clone()));
+            let idc = group.insert(Probe::boxed(Rect::new(12, 0, 17, 5), 'C', log.clone()));
+            (ida, idb, idc)
+        });
+        let order_before: Vec<_> = (0..group.len()).map(|i| group.children[i].id).collect();
+
+        // Obtain a guaranteed-stale id by removing C, then passing its id as the
+        // target to put_in_front_of — the group no longer contains it.
+        with_ctx(&mut out, &mut timers, |ctx| group.remove(idc, ctx));
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.put_in_front_of(ida, Some(idc), ctx)
+        });
+
+        let order_after: Vec<_> = (0..group.len()).map(|i| group.children[i].id).collect();
+        assert_eq!(
+            order_after,
+            vec![ida, idb],
+            "stale target id: order of remaining children is unchanged"
+        );
+        // Also verify: passing the child's own id as the target is a no-op (the
+        // t == id early-return guard), even without prior remove.
+        let mut group2 = Group::new(Rect::new(0, 0, 30, 10));
+        let (id2a, id2b) = with_ctx(&mut out, &mut timers, |_ctx| {
+            let id2a = group2.insert(Probe::boxed(Rect::new(0, 0, 5, 5), 'A', log.clone()));
+            let id2b = group2.insert(Probe::boxed(Rect::new(6, 0, 11, 5), 'B', log.clone()));
+            (id2a, id2b)
+        });
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group2.put_in_front_of(id2a, Some(id2a), ctx)
+        });
+        let order2: Vec<_> = (0..group2.len()).map(|i| group2.children[i].id).collect();
+        assert_eq!(order2, vec![id2a, id2b], "put_in_front_of(self) is a no-op");
+        let _ = order_before; // captured before the remove; no assertion needed
+    }
+
+    // -- 14. raise-on-click (ofTopSelect select-path rewire) -----------------
+
+    #[test]
+    fn click_raises_top_select_child_to_top_and_makes_it_current() {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+
+        // Mirror a real desktop: a non-selectable background at the very bottom
+        // (children[0] == C++ `last`), then two overlapping selectable+top_select
+        // windows A (bottom of the two) and B (top). The non-selectable bottom is
+        // what makes firstMatch (which checks `last` first, then `first()`→down)
+        // return the *raised* (top) window — faithful to C++ resetCurrent on a
+        // desktop. Without it, firstMatch returns the bottom-most SELECTABLE view.
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        group.st.state.focused = true; // a focused group, so focus propagates
+        let (ida, idb) = with_ctx(&mut out, &mut timers, |_ctx| {
+            // background (non-selectable), full extent
+            group.insert(Probe::boxed(Rect::new(0, 0, 20, 10), '.', log.clone()));
+            // window A, overlapping window B
+            let mut a = Probe::new(Rect::new(0, 0, 12, 8), 'A', log.clone());
+            a.st.options.selectable = true;
+            a.st.options.top_select = true;
+            let ida = group.insert(Box::new(a));
+            let mut b = Probe::new(Rect::new(6, 2, 18, 10), 'B', log.clone());
+            b.st.options.selectable = true;
+            b.st.options.top_select = true;
+            let idb = group.insert(Box::new(b));
+            (ida, idb)
+        });
+        // B is on top initially.
+        assert!(group.index_of(idb).unwrap() > group.index_of(ida).unwrap());
+
+        // Click a point inside A but NOT inside B (A is at x 0..12, B at x 6..18;
+        // pick (2, 1): inside A, outside B). Even though B is topmost, the hit-test
+        // falls to A.
+        let mut ev = mouse_down_at(2, 1);
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.handle_event(&mut ev, ctx)
+        });
+
+        // A is now the topmost child (raised via make_first).
+        assert_eq!(
+            group.index_of(ida),
+            Some(group.len() - 1),
+            "clicked top_select child raised to the top of Z-order"
+        );
+        // A is current (firstMatch returns the top window since the bottom is the
+        // non-selectable background).
+        assert_eq!(group.current(), Some(ida), "raised window becomes current");
+    }
+
+    #[test]
+    fn non_top_select_click_does_not_reorder() {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+
+        // Two selectable children WITHOUT top_select. Clicking the bottom one must
+        // make it current but must NOT change Z-order (regression guard so the
+        // rewire does not over-fire).
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        group.st.state.focused = true;
+        let (ida, idb) = with_ctx(&mut out, &mut timers, |_ctx| {
+            let mut a = Probe::new(Rect::new(0, 0, 5, 5), 'A', log.clone());
+            a.st.options.selectable = true; // no top_select
+            let ida = group.insert(Box::new(a));
+            let mut b = Probe::new(Rect::new(6, 0, 11, 5), 'B', log.clone());
+            b.st.options.selectable = true;
+            let idb = group.insert(Box::new(b));
+            (ida, idb)
+        });
+        let order_before: Vec<_> = (0..group.len()).map(|i| group.children[i].id).collect();
+
+        // Click A (the bottom child).
+        let mut ev = mouse_down_at(1, 1);
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.handle_event(&mut ev, ctx)
+        });
+
+        let order_after: Vec<_> = (0..group.len()).map(|i| group.children[i].id).collect();
+        assert_eq!(
+            order_after, order_before,
+            "non-top_select select must not reorder"
+        );
+        assert_eq!(order_after, vec![ida, idb]);
+        assert_eq!(group.current(), Some(ida), "A is current via set_current");
     }
 }

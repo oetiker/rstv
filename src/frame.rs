@@ -414,8 +414,9 @@ mod tests {
         out: &'a mut VecDeque<Event>,
         timers: &'a mut crate::timer::TimerQueue,
         pending: &'a mut Vec<Box<dyn crate::capture::CaptureHandler>>,
+        cmd_changes: &'a mut Vec<(crate::command::Command, bool)>,
     ) -> Context<'a> {
-        Context::new(out, timers, 0, pending)
+        Context::new(out, timers, 0, pending, cmd_changes)
     }
 
     fn mouse_down_at(x: i32, y: i32) -> Event {
@@ -625,9 +626,10 @@ mod tests {
         let mut out = VecDeque::new();
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = vec![];
+        let mut cmd_changes: Vec<(crate::command::Command, bool)> = vec![];
         let mut ev = mouse_down_at(3, 0); // close hot-zone is x in 2..=4
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending);
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
             f.handle_event(&mut ev, &mut ctx);
         }
         assert!(ev.is_nothing(), "close click consumed");
@@ -648,10 +650,11 @@ mod tests {
         let mut out = VecDeque::new();
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = vec![];
+        let mut cmd_changes: Vec<(crate::command::Command, bool)> = vec![];
         // w=20 → zoom hot-zone is x in 15..=17. Click at w-4 = 16.
         let mut ev = mouse_down_at(16, 0);
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending);
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
             f.handle_event(&mut ev, &mut ctx);
         }
         assert!(ev.is_nothing(), "zoom click consumed");
@@ -671,10 +674,11 @@ mod tests {
         let mut out = VecDeque::new();
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = vec![];
+        let mut cmd_changes: Vec<(crate::command::Command, bool)> = vec![];
         // Double-click outside the close hot-zone (e.g. x=10) → zoom.
         let mut ev = double_click_at(10, 0);
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending);
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
             f.handle_event(&mut ev, &mut ctx);
         }
         assert!(ev.is_nothing());
@@ -695,9 +699,10 @@ mod tests {
         let mut out = VecDeque::new();
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = vec![];
+        let mut cmd_changes: Vec<(crate::command::Command, bool)> = vec![];
         let mut ev = mouse_down_at(3, 0);
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending);
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
             f.handle_event(&mut ev, &mut ctx);
         }
         assert!(!ev.is_nothing(), "passive frame does not consume the click");
@@ -721,9 +726,10 @@ mod tests {
         let mut out = VecDeque::new();
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = vec![];
+        let mut cmd_changes: Vec<(crate::command::Command, bool)> = vec![];
         let mut ev = mouse_down_at(3, 0);
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending);
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
             f.handle_event(&mut ev, &mut ctx);
         }
         assert_eq!(out[0], Event::Command(Command::CLOSE));
