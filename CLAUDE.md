@@ -362,6 +362,37 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
     apply-families touch disjoint state, and no dispatch co-queues order-dependent
     different kinds). Design note: `docs/design/deferred-effects.md`. Reviewed PASS
     (no findings). 282 tests green; clippy/fmt clean. Working tree clean.
+  - **Row 33d-2 — window selection DONE (`15c601d`)** — the *selection* half of
+    `TWindow`; **row 33 (`TWindow`) is now COMPLETE**. **`View::number() ->
+    Option<i16>`** (trait, default `None`; `Window` overrides `Some(n)` iff `n>0`
+    — drops Window's inherent getter, no name clash) + **`View::select_window_num`**
+    (trait tree-op, default no-op; `Desktop` overrides → `group.focus_by_number` —
+    via the **trait method, NOT an `as_any_mut` downcast**, keeping `Program`
+    decoupled) + **`Group::focus_by_number`** (selects the `ofSelectable` child whose
+    `number()` matches, via `focus_child`). **Select-vs-focus crux:** C++ uses
+    `select()` (cmNext via `selectNext`, Alt-N via the window's `select()`); we have
+    only `focus_child` (== `select()` + an outgoing `valid(cmReleasedFocus)` guard).
+    That guard is **redundant-but-harmless** — both call sites are gated upstream
+    (cmNext via the desktop's `valid`; Alt-N via `canMoveFocus`) and windows carry
+    `ofTopSelect` so `focus_child`→`make_first` raises them exactly as `select()`
+    does (reasoning in code comments at each site). **TDeskTop `cmNext`/`cmPrev`**
+    (`tdesktop.cpp` port): `ev.clear()` **outside** the `valid()` guard (C++ `break`
+    falls through); other commands → no clear (`default: return`); cmNext=
+    `focus_next(false)`, cmPrev=`put_in_front_of(current, Some(background))`.
+    **Alt-N (`cmSelectWindowNum`)** in `program_handle_event` **before**
+    `group.handle_event` (faithful order) as a **direct walk** (the number is an
+    integer, not a `ViewId` — `Broadcast{source}` doesn't serve it), with the
+    three-way clear matrix (`can&&matched`→clear, `can&&!matched`→**event stays
+    live**, `!can`→clear); `canMoveFocus` checks the **desktop's**
+    `valid(RELEASED_FOCUS)`; added `desktop: Option<ViewId>` param. **`setState`**:
+    `{cmNext, cmPrev}` enabled **UNCONDITIONALLY** (C++ has no flag guard, unlike
+    cmClose/cmZoom); `cmResize` stays **dropped** (keyboard-resize sub-mode
+    deviation). Two-stage reviewed (SPEC-PASS; QUALITY-PASS after making two
+    round-trip tests discriminating — the no-match Alt-N test asserts the event
+    stayed **live** via a recording probe [verified it bites], the cmNext-cycle test
+    drives the enable through a **real `pump_once` drain**, deleting the
+    `clear_deferred` scaffold). Brief: `docs/briefs/row33d-2-selection.md`. 287 lib +
+    3 integration + 1 doctest green; clippy/fmt clean. Working tree clean.
 
 ## Next step
 **Phase 2 in progress.** Continue subagent-driven (see "How to run the port"
@@ -385,22 +416,20 @@ above). Sequence:
    thread/Opus. The path to "a window you can see and drive."
    - ~~**`TDeskTop` 30**~~ ✅ DONE (`c80a20d`). `Group`+owned-`TBackground`; gives
      `Program` a real named desktop.
-   - **`TWindow` 33** (module `window`) — the D2 embed-and-delegate exemplar,
-     **staged**: ~~33a Group/Context primitives~~ ✅, ~~33b core~~ ✅, ~~33c zoom~~ ✅,
-     ~~SUBSTRATE realign (global `ViewId`)~~ ✅ (`7b15782`),
-     ~~Phase A `Broadcast{source}`~~ ✅ (`7efecb3`),
-     ~~33d-1 drag/close/setState~~ ✅ (`2887e95`, see Current state).
-     **NEXT → 33d-2** — the *selection* half: `View::number()` (drop Window's
-     inherent getter), `Group::focus_by_number` + `View::select_window_num` (trait
-     method, Desktop overrides — **not** an `as_any_mut` downcast), TDeskTop
-     `cmNext`/`cmPrev` (now buildable: `focus_next` + `put_in_front_of` exist),
-     Alt-N (`cmSelectWindowNum`) as a **direct walk** in `program_handle_event`
-     (before `group.handle_event`; gated on desktop `valid(RELEASED_FOCUS)`), and
-     adding `{cmNext, cmPrev}` to the window's setState enable set. See
-     [`docs/HANDOVER.md`](docs/HANDOVER.md) (the 33d-2 design of record).
-   - **`TDialog` 34** designs `exec_view`/`executeDialog` + the `ModalFrame`
+   - ~~**`TWindow` 33**~~ ✅ **COMPLETE** (module `window`) — the D2
+     embed-and-delegate exemplar, staged: ~~33a Group/Context primitives~~ ✅,
+     ~~33b core~~ ✅, ~~33c zoom~~ ✅, ~~SUBSTRATE realign (global `ViewId`)~~ ✅
+     (`7b15782`), ~~Phase A `Broadcast{source}`~~ ✅ (`7efecb3`),
+     ~~33d-1 drag/close/setState~~ ✅ (`2887e95`),
+     ~~33d-2 selection (cmNext/cmPrev + Alt-N + numbered windows)~~ ✅ (`15c601d`,
+     see Current state).
+   - **`TDialog` 34 — NEXT** designs `exec_view`/`executeDialog` + the `ModalFrame`
      push→pop lifecycle on `Program` (pop conditional on `valid(end_state)` — the
-     crux). Gray window scheme drives the deferred multi-scheme theming.
+     crux: a view can't reach the loop, so `exec_view` owns the modal run) +
+     `cmOK`/`cmCancel` + the return-consuming `message()`/`query` primitive (first
+     consumer: the `cmCanCloseForm` veto) + `getData`/`setData` (D10). Gray window
+     scheme drives the deferred multi-scheme theming. See
+     [`docs/HANDOVER.md`](docs/HANDOVER.md) (the row-34 design of record).
 7. **Then the widget batches fan out hard** (PORT-ORDER Batches B–E): Phase-3
    leaves, validators, menus, dialogs, editor — the bulk `MECHANICAL` rows; run as
    parallel worktree implementer+reviewer trios, committing at batch boundaries.

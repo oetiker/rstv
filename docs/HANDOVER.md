@@ -1,9 +1,9 @@
-# Session handover — resume at row 33d-2 (selection: cmNext/cmPrev + Alt-N)
+# Session handover — row 33 (`TWindow`) COMPLETE; resume at row 34 (`TDialog`)
 
 > Living handover for the **next** rstv session. Read this, then
 > [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md) (orientation /
-> Current state / Next step), then start. When 33d-2 lands, update or replace this
-> file for the session after.
+> Current state / Next step), then start. When row 34 lands, update or replace
+> this file for the session after.
 
 ## Where things stand (git `main`)
 
@@ -11,180 +11,130 @@
 |--------|------|
 | `7efecb3` | Phase A — `Event::Broadcast { command, source }` (D4 amendment) |
 | `2887e95` | Row 33d-1 — TWindow drag + close + setState command set |
-| **`69897fe`** | **Refactor — unify the 3 deferred channels into one `Deferred` queue** |
+| `69897fe` | Refactor — unify the 3 deferred channels into one `Deferred` queue |
+| **`15c601d`** | **Row 33d-2 — window selection (cmNext/cmPrev + Alt-N + numbered windows)** |
 
-**Build state:** 278 unit + 3 integration + 1 doctest green; `cargo clippy
+**Build state:** 287 lib + 3 integration + 1 doctest green; `cargo clippy
 --all-targets -- -D warnings` and `cargo fmt --check` clean. Working tree clean.
 
-## Substrate change since 33d-1: the unified `Deferred` channel (`69897fe`)
+**Row 33 (`TWindow`) is now COMPLETE** (33a core/primitives → 33b core → 33c zoom
+→ substrate realign → Phase A → 33d-1 drag/close → 33d-2 selection). The next
+FOUNDATION stage is **row 34 (`TDialog`)** — the modality payoff.
 
-**Read this before touching `Context` in 33d-2.** The three post-dispatch deferred
-channels (`pending_captures` / `command_changes` / `pending_tree_ops`) were
-**unified into one** `Deferred` enum + a single `deferred: Vec<Deferred>` queue
-(pure refactor, no behavior change; see
-[`docs/design/deferred-effects.md`](design/deferred-effects.md)). Concretely:
+## What 33d-2 did (just landed — `15c601d`)
 
-- `Deferred {PushCapture, EnableCommand, DisableCommand, ChangeBounds, SetState,
-  Close}` lives in `context.rs` (`TreeOp` is **gone** — subsumed).
-- **`Context::new` is now 4 params** — `(out_events, timers, now_ms, deferred)`.
-  The request methods (`push_capture`/`enable_command`/`disable_command`/
-  `request_bounds`/`request_set_state`/`request_close`) each push a variant.
-- The pump drains it in **one** `mem::take` + match loop (same drain-to-local
-  borrow discipline).
-- **For 33d-2 this means:** test harnesses build **one** `let mut deferred:
-  Vec<Deferred> = Vec::new();` and pass `&mut deferred` (not three locals). If you
-  add a new deferred capability, **add a `Deferred` variant — do NOT add a
-  `Context::new` parameter.** (Boundary: `post`/`broadcast` still go to
-  `out_events`, a separate input-stream channel — not `Deferred`.)
-- 33d-2's selection work mostly needs **no** deferred channel at all (it uses
-  `focus_next`/`put_in_front_of` and the synchronous `select_window_num` trait
-  call), so this mostly just changes how your test `Context`s are built.
+The *selection* half of `TWindow`. Brief:
+[`docs/briefs/row33d-2-selection.md`](briefs/row33d-2-selection.md). Built:
 
-## What the last session did (33d-1 — read this; it shaped 33d-2's scope)
+- **`View::number() -> Option<i16>`** (trait, default `None`; `Window` overrides
+  `Some(n)` iff `n>0`). Dropped Window's inherent `number()` getter — no
+  same-name inherent+trait clash. Field still named `number`.
+- **`View::select_window_num(num, ctx) -> bool`** (trait tree-op, default no-op;
+  `Desktop` overrides → `group.focus_by_number`). Reached via the **trait method,
+  NOT an `as_any_mut` downcast** — keeps `Program` decoupled from concrete
+  `Desktop`. Lives in the `find_mut`/`remove_descendant` tree-op family.
+- **`Group::focus_by_number`** — selects the **`ofSelectable`** child whose
+  `number()` matches, via `focus_child`. **The select-vs-focus crux:** C++ uses
+  `select()` (cmNext via `selectNext`, Alt-N via the window's `select()`); we have
+  no standalone `select_child`, only `focus_child` (== `select()` + an outgoing
+  `valid(cmReleasedFocus)` guard). That guard is **redundant-but-harmless** because
+  both call sites are gated upstream (cmNext via the desktop's `valid`; Alt-N via
+  `canMoveFocus`), and windows carry **`ofTopSelect`** so `focus_child`→`make_first`
+  raises them exactly as `select()`→`makeFirst` does. Reasoning is in code
+  comments at each call site (a spec reviewer will ask "why not `select`?").
+- **TDeskTop `cmNext`/`cmPrev`** (`desktop.rs` `handle_event`, the old
+  `TODO(row 33, D9)` breadcrumb): faithful `tdesktop.cpp` port. `ev.clear()` sits
+  **outside** the `valid()` guard (C++ `break` falls through to `clearEvent`);
+  other commands → **no** clear (C++ `default: return`). cmNext = `focus_next(false)`
+  (== `selectNext(False)`); cmPrev = `put_in_front_of(current, Some(background))`
+  (sends current to the back). NB `put_in_front_of`'s `target: None` means *to-top*
+  — cmPrev passes the resolved `Some(background)`.
+- **Alt-N (`cmSelectWindowNum`)** in `program_handle_event` — **BEFORE**
+  `group.handle_event` (faithful `TProgram::handleEvent` order). A **direct walk**
+  (the window number is an integer, not a `ViewId`, so the `Broadcast{source}`
+  substrate does not serve it). The three-way clear matrix: `can&&matched`→clear,
+  `can&&!matched`→**event stays live** (falls through to the group), `!can`→clear.
+  `canMoveFocus` checks the **desktop's** `valid(RELEASED_FOCUS)` (via
+  `find_mut(desktop_id)`), not the root group's. Added `desktop: Option<ViewId>`
+  param to `program_handle_event`.
+- **`setState`** — `{cmNext, cmPrev}` enabled **UNCONDITIONALLY** (C++ has no flag
+  guard — unlike cmClose/cmZoom). `cmResize` stays **dropped** (no handler yet —
+  the keyboard-resize sub-mode deviation).
 
-**33d was split** at its natural seam (advisor call). 33d-1 (the *interactive*
-half — drag, close, setState) is **done + committed**; 33d-2 (the *selection*
-half) is **NEXT**. The split kept 33c's "enable only commands whose handlers
-exist" principle clean: 33d-1 enabled only `{cmClose, cmZoom}`; 33d-2 adds
-`{cmNext, cmPrev}` **together with** the TDeskTop handler.
+Two-stage reviewed (SPEC-PASS; QUALITY-PASS after closing two test-discrimination
+gaps: the no-match Alt-N test now asserts the event stayed **live** via a recording
+probe — verified it bites by temporarily flipping the arm to clear; and the
+cmNext-cycle test drives the enable through a **real `pump_once` drain** of a live
+Alt+1 selection rather than force-enabling, which let us **delete the
+`clear_deferred` test scaffold**).
 
-What 33d-1 built (brief:
-[`docs/briefs/row33d-1-drag-close.md`](briefs/row33d-1-drag-close.md)):
+## NEXT — row 34 (`TDialog`): the modality payoff
 
-- **Deferred tree-op channel on `Context`** (`request_bounds`/`request_set_state`/
-  `request_close`) for the drag/close mutations a capture handler can't do inline.
-  **NOTE: this shipped as a `TreeOp` enum + 3rd parallel channel, then `69897fe`
-  unified all three deferred channels into one `Deferred` queue** — see the
-  "Substrate change" section above. The pump drains it after dispatch and applies
-  each against the root `group` via `find_mut`/`change_bounds`, `find_mut`/
-  `set_state`, `remove_descendant` — drain-to-local-then-rebuild-ctx (the row-31
-  destructure discipline).
-- **Drag = a `DragCapture` capture handler** (D9, replaces `dragView`'s nested
-  `mouseEvent` loop). The **window** (not the frame — D3: a frame can't name the
-  window it would move) starts the drag from a still-live `MouseDown` after group
-  delegation, replicating `TFrame::handleEvent`'s geometry. `move_grow` ports
-  `TView::moveGrow` verbatim. sfDragging on directly / off via the deferred
-  channel. **(0,0)-desktop absolute-coords assumption documented** on
-  `DragCapture` (matches `ModalFrame`'s caveat) — revisit when a menu/status bar
-  shifts the desktop (Phase 4).
-- **`cmClose`** → if `sfModal` post `cmCancel` (row 34 owns teardown) else
-  `request_close` if `valid(cmClose)`. **No target guard** (Phase A vacuous).
-- **`setState`** enable set = `{cmClose if wfClose, cmZoom if wfZoom}`.
+Consumes the row-31 `ModalFrame` seam. Design on the main thread; **advisor
+consult before writing**; Opus implementer against a written
+`docs/briefs/row34-*.md`; fresh-agent two-stage review (spec → quality);
+integrate; commit at the boundary. FOUNDATION → main thread, **no worktree**.
 
-Two-stage reviewed (SPEC-PASS after strengthening a vacuous `dmLimitLoY` clamp
-test; QUALITY-PASS).
+The crux (row-31 breadcrumb in `src/app/program.rs`): a view can't reach the loop,
+so **`exec_view`/`executeDialog` owns the modal run** — push the `ModalFrame`
+capture handler, run the loop until `valid(end_state)`, then **pop the frame
+conditional on `valid(end_state)`** (Program state a `CaptureHandler` can't reach;
+this is why the pop lives in `exec_view`, not the handler). Also:
 
-## NEXT — row 33d-2 (selection: cmNext/cmPrev + Alt-N + numbered windows)
+- **`cmOK`/`cmCancel`** + the modal `end_modal` path (33d-1 already wired the
+  window's `cmClose`→`sfModal`→post `cmCancel` branch; row 34 owns the teardown
+  that consumes it).
+- **The return-consuming `message()`/`query` tree-owner primitive** — first
+  consumer is the dialog `cmCanCloseForm` veto. Design of record: guide
+  **D4 "message() — corrected"** (a `message(id, ev) -> Option<ViewId>` over
+  `find_mut`; the audit shows every return-consuming `message()` is
+  owner-initiated, so the aliasing rule bars only a pattern that never occurs).
+- **`getData`/`setData`** typed gather/scatter (D10).
+- **Gray window scheme** drives the deferred multi-scheme theming.
+- **Any new deferred capability row 34 needs** (e.g. the modal-pop, if it routes
+  through the queue) **ADDS A `Deferred` VARIANT**, not a `Context::new` param
+  (the `69897fe` unification — `Deferred {PushCapture, EnableCommand,
+  DisableCommand, ChangeBounds, SetState, Close}` + one `deferred: Vec<Deferred>`;
+  `Context::new` is 4 params `(out_events, timers, now_ms, deferred)`).
 
-Design on the main thread; **advisor consult before writing**; Opus implementer
-against a written `docs/briefs/row33d-2-*.md`; fresh-agent two-stage review (spec
-→ quality); integrate; commit at the boundary. Single main-thread FOUNDATION stage
-→ **no worktree**. This stage touches `src/view/view.rs` (trait), `src/view/group.rs`,
-`src/desktop/desktop.rs`, `src/window/window.rs`, `src/app/program.rs`.
+C++ source (read it): `tdialog.cpp` `TDialog::handleEvent` (cmOK/cmCancel + the
+`cmCanCloseForm`/`valid` veto); `tprogram.cpp` `TProgram::execView`/`execModal`;
+`tgroup.cpp` `TGroup::execView`/`execute`/`endModal`/`valid`.
 
-Design of record (validated with the advisor in the 33d design session — these are
-the decided mechanisms, not open questions):
-
-1. **`View::number(&self) -> Option<i16>`** (default `None`). `Window` overrides:
-   `Some(self.number)` if `self.number > 0` else `None`. **Resolve the name clash:
-   make this the ONLY `number()` — drop `Window`'s inherent `number()->i16`
-   getter** (a same-name/different-return inherent+trait pair will be flagged), and
-   update the one test asserting `w.number()==3` → `View::number(&w)==Some(3)`. The
-   field stays named `number`.
-
-2. **`Group::focus_by_number(num, ctx) -> bool`** — iterate children, find the
-   selectable one whose `view.number() == Some(num)`, `focus_child` it, return
-   whether matched.
-
-3. **`View::select_window_num(&mut self, num, ctx) -> bool`** (default `false`) —
-   a trait-level tree op (consistent with `find_mut`/`remove_descendant`).
-   `Desktop` overrides → `self.group.focus_by_number(num, ctx)`. **Use the trait
-   method, NOT an `as_any_mut` downcast** (keeps the call site clean, avoids
-   coupling Program to concrete Desktop).
-
-4. **TDeskTop `cmNext`/`cmPrev`** (`src/desktop/desktop.rs`, the `TODO(row 33, D9)`
-   breadcrumb — now buildable). After `group.handle_event`, on a command:
-   `cmNext` → `if self.group.valid(RELEASED_FOCUS) { self.group.focus_next(false, ctx) }`;
-   `cmPrev` → `if valid { if let Some(cur)=self.group.current() { self.group.put_in_front_of(cur, self.background, ctx) } }`;
-   then `clearEvent` **for cmNext/cmPrev only** (C++: `default: return` without
-   clearing; the `clearEvent` after the switch is reached only for the two cases).
-   `put_in_front_of`/`focus_next`/`background` all exist.
-
-5. **Alt-N (`cmSelectWindowNum`)** in `program_handle_event` — **BEFORE**
-   `group.handle_event` (faithful C++ order). An Alt+digit keydown (`Key::Char('1'
-   ..='9')` + `modifiers.alt`; the `getAltChar` equivalent) → `canMoveFocus` =
-   `group.find_mut(desktop_id).map_or(false, |dt| dt.valid(RELEASED_FOCUS))`
-   (desktop-specific, NOT root `.valid()`); if `can`,
-   `group.find_mut(desktop_id).map_or(false, |dt| dt.select_window_num(num, ctx))`
-   → `clearEvent` if it matched; **also `clearEvent` when `!can`** (faithful to
-   `tprogram.cpp`). Add `desktop: Option<ViewId>` to `program_handle_event`'s
-   params (it currently takes `group, ev, ctx, end_state`). **NOT** a number-
-   carrying broadcast — the number is an integer, not a `ViewId`, so the
-   `Broadcast` `source` substrate does not serve it.
-
-6. **`setState`** — add `{cmNext, cmPrev}` to the window's enable set (alongside
-   the 33d-1 `{cmClose, cmZoom}`), now that the desktop handler exists. (`cmResize`
-   stays **un**enabled — keyboard resize sub-mode still deferred.)
-
-C++ source (read it): `tdesktop.cpp` `TDeskTop::handleEvent`; `tprogram.cpp`
-`TProgram::handleEvent` (the Alt-N block) + `canMoveFocus`; `twindow.cpp`
-`TWindow::handleEvent` (the `cmSelectWindowNum` broadcast arm — we realize it as
-the direct walk above, not a broadcast) + `setState`; `tgroup.cpp` `selectNext`.
-
-Tests: integration through `pump_once` — inject Alt+digit, assert the numbered
-window became `current`; cmNext/cmPrev cycle the desktop's windows (assert
-`current` / Z-order changed). Plus unit tests for `focus_by_number` and
-`View::number`.
-
-## Still deferred after 33d-2
-- **`cmResize` keyboard resize sub-mode** (`dragView`'s `else` arrows-until-Enter/
-  Esc branch) — no menu can trigger `cmResize` yet; revisit when menus land (and
-  enable `cmResize` in `setState` only then). `TODO(33d-2/later, D9)` breadcrumb in
-  `window.rs`.
-- **Scrollbar auto-repeat + thumb-drag** (`scrollbar.rs` `TODO(row 31, D9)`) —
-  capture handlers, independent of the window → **Batch B widget pass**.
+## Still deferred after row 33 (unchanged by 33d-2)
+- **`cmResize` keyboard resize sub-mode** (`dragView`'s arrows-until-Enter/Esc
+  branch) — no menu can trigger `cmResize` yet; enable it in `setState` only when
+  menus land. `TODO(33d-2/later, D9)` breadcrumb in `window.rs`.
+- **Scrollbar auto-repeat + thumb-drag** (`scrollbar.rs` `TODO(row 31, D9)`) →
+  Batch B widget pass.
 - **Close press-and-hold release-confirm loop** (`frame.rs` `TODO(row 33, D9)`) —
   we post `cmClose` on mouse-down.
-- **Modal teardown** (`exec_view`/`executeDialog` + the `ModalFrame` pop, the
-  `message()`/`query` return-consuming primitive) → **row 34 (`TDialog`)**.
 - Sibling tee-walk, multi-scheme theming, shadow casting, row-9 glyphs — as before.
 
-## Row 34 — `TDialog` (the modality payoff)
-
-Consumes the row-31 `ModalFrame` seam. Design `exec_view`/`executeDialog` + the
-push→run-until-`valid(end_state)`→**pop (conditional on `valid(end_state)`)**
-lifecycle on `Program` (the crux: a view can't reach the loop, so `exec_view` owns
-it). `cmOK`/`cmCancel`; gather/scatter typed values (D10). Gray window scheme drives
-the deferred multi-scheme theming. **Also build the return-consuming
-`message()`/`query` tree-owner primitive here** — first consumer is the dialog
-`cmCanCloseForm` veto (design of record: guide D4 "message() — corrected"). Any new
-deferred capability row 34 needs (e.g. the modal-pop) **adds a `Deferred` variant**,
-not a new `Context::new` parameter (the `69897fe` unification — see above).
-
 ## Process reminders
-- Subagent-driven worked well (main-thread design + **advisor consult before
-  writing** + Opus implementer against a written `docs/briefs/` brief + fresh-agent
-  two-stage review — keep reviewers adversarial against the **C++ + corrected
-  guide**, not just the brief).
+- Main-thread design + **advisor consult before writing** + Opus implementer
+  against a written `docs/briefs/` brief + fresh-agent two-stage review (keep
+  reviewers adversarial against the **C++ + corrected guide**, not just the brief).
 - Single main-thread FOUNDATION stages → **no worktree**. Commit at clean reviewed
   stage boundaries.
-- **Split a too-large stage at its natural seam** (memory `fix-foundations-not-
-  bandaids` is the cousin): 33d → 33d-1/33d-2 made the review tractable AND made
-  the command-enable staging fall out cleanly. The advisor flagged the split.
-- **The verification that matters here is the `pump_once` round-trip**, not a
-  capture/handler unit test in isolation — a unit test of the handler proves
-  nothing about the deferred-channel drain or the borrow discipline.
+- **The verification that matters is the `pump_once` round-trip**, not a
+  handler/capture unit test in isolation. For row 34 specifically: a modal
+  `exec_view` test must drive the full push→run→pop through real pumps and assert
+  the frame popped only on `valid(end_state)`.
+- **Make round-trip tests discriminating** (33d-2 lesson): a test that passes
+  under both the correct and the buggy branch proves nothing — assert the
+  *distinguishing* observation (event stayed live / enable came from a real drain),
+  and confirm the test bites by temporarily breaking the code.
+- **Split a too-large stage at its natural seam** (33d → 33d-1/33d-2 worked). If
+  row 34 is large, split modal-loop-mechanism from typed-data gather/scatter.
 
 ## Outstanding TODOs seeded in code (grep)
 - `TODO(33d-2/later, D9)` in `src/window/window.rs` — cmResize keyboard sub-mode.
-- `TODO(row 33, D9)` in `src/desktop/desktop.rs` — cmNext/cmPrev (33d-2, now
-  buildable: `focus_next` + `put_in_front_of` exist).
-- Alt-N breadcrumb in `src/app/program.rs` `program_handle_event` (33d-2).
 - `row 34` in `src/app/program.rs` — `exec_view`/`executeDialog` + the `ModalFrame`
-  pop lifecycle + the `message()` primitive.
-- `TODO(row 33, D9)` in `src/frame.rs` — close press-and-hold confirm, plus the
-  frame's own drag cases (now handled window-side via DragCapture; the frame still
-  just leaves them unconsumed — that breadcrumb can be trimmed/clarified in 33d-2).
+  pop lifecycle + the `message()` primitive (**row 34 — NEXT**).
+- `TODO(row 33, D9)` in `src/frame.rs` — close press-and-hold confirm (the frame's
+  own drag cases are now handled window-side via `DragCapture`; that part of the
+  breadcrumb can be trimmed).
 - `TODO(row 31, D9)` in `src/widgets/scrollbar.rs` — auto-repeat + thumb-drag.
 - `TODO(row 33)` in `src/view/group.rs` — shadow casting in `Group::draw`.
 - Sibling tee-walk + full `framelin.cpp` machinery — deferred (`src/frame.rs`).
