@@ -435,6 +435,25 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
     drives the enable through a **real `pump_once` drain**, deleting the
     `clear_deferred` scaffold). Brief: `docs/briefs/row33d-2-selection.md`. 287 lib +
     3 integration + 1 doctest green; clippy/fmt clean. Working tree clean.
+  - **Demo + `ModalFrame` follow-the-drag fix** — first runnable app
+    (`examples/hello.rs`): a TV-shaped `HelloApp`/`AboutDialog` (modal `exec_view`
+    on a patterned desktop, draggable + closable) — proves the Phase-2 stack end to
+    end in a real terminal. Building it surfaced a **freeze**: `ModalFrame` cached
+    the modal's bounds at push time, so after a drag moved the dialog, positional
+    events on the moved dialog fell outside the **stale** gate and were swallowed
+    (with a lost `MouseUp`, the keyboard too → total freeze). Fix (FOUNDATION):
+    `CaptureHandler::set_gate_bounds` (default **no-op**; only `ModalFrame`
+    overrides — `DragCapture`'s snapshot anchor is left intact) + `CaptureStack::
+    sync_gate_bounds`, which the pump calls to resync every bounds-gating handler
+    from the live tree **before each dispatch** (covers drag + the resize check's
+    direct `change_bounds`). The general rule — *a capture handler that gates by
+    live view state must resync each dispatch; C++'s nested loops get this for free,
+    we pay for it explicitly* — is recorded in **PORTING-GUIDE D9**. Regression test
+    `modal_frame_follows_dragged_dialog`; verified live (drag-twice, close-box on the
+    moved dialog, SIGTERM→terminal restored). The example also installs a
+    SIGINT/SIGTERM/SIGHUP handler (dev-dep `signal-hook`) to restore the terminal on
+    kill (`CrosstermBackend` still owns no terminal setup). 300 lib + 3 integration +
+    1 doctest green; clippy/fmt clean.
 
 ## Next step
 **Phase 2 in progress.** Continue subagent-driven (see "How to run the port"

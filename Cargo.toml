@@ -18,4 +18,5 @@ unicode-segmentation = "1.13.2" # text module: grapheme clustering (D13, row 8)
 unicode-width = "0.2.2"         # text module: display column widths (D13, row 8)
 
 [dev-dependencies]
-insta = "1.47.2" # snapshot tests: golden-file verification (D11, row 19)
+insta = "1.47.2"      # snapshot tests: golden-file verification (D11, row 19)
+signal-hook = "0.4.4" # examples only: restore the terminal on SIGINT/SIGTERM/SIGHUP

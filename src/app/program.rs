@@ -173,6 +173,15 @@ impl CaptureHandler for ModalFrame {
     fn view(&self) -> Option<ViewId> {
         Some(self.id)
     }
+
+    /// Follow the modal view when it is moved/resized (a dragged dialog). Without
+    /// this the gate keeps the bounds captured at push time, so after a drag any
+    /// positional event on the *moved* dialog that falls outside the stale bounds
+    /// is swallowed — the dialog goes mouse-dead. The loop calls this from
+    /// [`CaptureStack::sync_gate_bounds`] before every dispatch.
+    fn set_gate_bounds(&mut self, bounds: Rect) {
+        self.bounds = bounds;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -669,6 +678,12 @@ impl Program {
                 }
 
                 if !ev.is_nothing() {
+                    // Refresh bounds-gating capture handlers (the modal frame) from
+                    // the live tree before dispatch, so a modal that has been
+                    // dragged/resized is gated at its CURRENT position, not the one
+                    // cached at push time (else the moved dialog goes mouse-dead).
+                    captures
+                        .sync_gate_bounds(|id| group.find_mut(id).map(|v| v.state().get_bounds()));
                     // The Context borrow ends at this block's close, before we
                     // drain the deferred queue back into loop/tree state.
                     {
@@ -1936,6 +1951,71 @@ mod tests {
                 .iter()
                 .any(|e| *e == Event::Command(Command::CANCEL)),
             "modal cmClose posts cmCancel"
+        );
+    }
+
+    /// Regression: a modal frame must follow its dialog when it is dragged, so a
+    /// SECOND mouse interaction on the moved dialog is not swallowed by a stale
+    /// gate. Replicates the `exec_view` modal setup, drags the dialog far to the
+    /// right, then attempts a second drag whose grab point is on the MOVED title
+    /// but OUTSIDE the original (push-time) bounds — which the unfixed
+    /// `ModalFrame` swallowed (`capture_len` stuck at 1).
+    #[test]
+    fn modal_frame_follows_dragged_dialog() {
+        let (mut program, _screen, _clock) = program_with_desktop(100, 30);
+        // Original bounds (27,8)-(73,22).
+        let id = {
+            let w = Dialog::new(Rect::new(27, 8, 73, 22), Some("About".into()));
+            program.group_mut().insert(Box::new(w))
+        };
+        // Replicate exec_view modal setup (steps 3-6).
+        if let Some(v) = program.group_mut().find_mut(id) {
+            let st = v.state_mut();
+            st.options.selectable = false;
+            st.state.modal = true;
+        }
+        program.with_ctx(|g, ctx| g.set_current(Some(id), SelectMode::Enter, ctx));
+        let bounds = program
+            .group_mut()
+            .find_mut(id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        program.captures.push(Box::new(ModalFrame::new(id, bounds)));
+        program.out_events.clear();
+
+        // First drag: grab the title at abs (44,8), move right to (54,8), release.
+        program.out_events.push_back(mouse_down_at(44, 8));
+        program.pump_once();
+        assert_eq!(program.capture_len(), 2, "first drag started");
+        for x in [46, 48, 50, 52, 54] {
+            program.out_events.push_back(mouse_move_at(x, 8));
+            program.pump_once();
+        }
+        program.out_events.push_back(mouse_up_at(54, 8));
+        program.pump_once();
+        assert_eq!(
+            program.capture_len(),
+            1,
+            "first drag ended (only ModalFrame)"
+        );
+        // Dialog moved +10 right: new bounds (37,8)-(83,22).
+        assert_eq!(win_state(&mut program, id).origin, Point::new(37, 8));
+
+        // Second drag: grab the MOVED title at abs (80,8) — inside the new bounds
+        // (37..83) but OUTSIDE the original (27..73). The fixed gate must let this
+        // through so a second DragCapture is pushed (capture_len 2). Pre-fix this
+        // was swallowed (capture_len stayed 1).
+        program.out_events.push_back(mouse_down_at(80, 8));
+        program.pump_once();
+        assert_eq!(
+            program.capture_len(),
+            2,
+            "second drag on the moved dialog must start (modal frame followed the move)"
+        );
+        assert!(
+            win_state(&mut program, id).state.dragging,
+            "second drag set sfDragging"
         );
     }
 }

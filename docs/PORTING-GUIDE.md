@@ -521,6 +521,27 @@ never `sleep` (this is also what makes timing deterministic under test, D11).
 > conditional pop — only the owner-side `exec_view` can. `CaptureStack` gains a
 > `pop()` for this (the one place a frame is removed other than `ConsumedPop`).
 
+> **Capture-handler state must re-sync from the live tree (the cost of flattening
+> the loops; found fixing a modal-dialog freeze).** Flattening C++'s *nested* loops
+> into *sibling* capture handlers converts a structural fact into cached state — and
+> cached state can desync. In C++, modality and drag are nested loops: `execView`
+> dispatches through the **dialog's** `handleEvent` (`tgroup.cpp:205`), so the
+> dialog *is* the modal dispatch root regardless of where it sits, and `dragView` is
+> a further nested loop inside it. Position is never cached anywhere, so a dragged
+> dialog cannot desync anything. Our `ModalFrame` instead gates positional events by
+> the modal view's **bounds** — and it cached them at push time, so after a drag
+> moved the dialog every click outside the *stale* rect was swallowed (with a lost
+> `MouseUp` the keyboard goes too → total freeze). **Fix:** the loop calls
+> `CaptureStack::sync_gate_bounds` (resolve each handler's `view()` id → live
+> `get_bounds()` → `CaptureHandler::set_gate_bounds`, a **default no-op**) *before
+> every dispatch*, so a bounds-gating handler follows its view through any
+> move/resize path (incl. the resize check's direct `change_bounds`). The setter is
+> a no-op by default so `DragCapture` — which *intentionally* snapshots its grab
+> anchor for the drag's duration, exactly as C++ `dragView` does — is untouched.
+> **General rule:** any capture handler that gates by live view-derived state must
+> resync it from the tree each dispatch; C++'s nested loops get this for free, we
+> pay for it explicitly. (Code: `src/capture.rs`, `src/app/program.rs`.)
+
 > **`Clock` + `TimerQueue` shape (ratified during the row 20 port).** The
 > injected clock is a `trait Clock { fn now_ms(&self) -> u64 }` (faithful to TV's
 > `TTimePoint` = `uint64_t` ms tick), with a production `SystemClock` (the **only**

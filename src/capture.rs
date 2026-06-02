@@ -16,7 +16,7 @@
 //! gate).
 
 use crate::event::Event;
-use crate::view::{Context, ViewId};
+use crate::view::{Context, Rect, ViewId};
 
 /// What a capture handler did with an event it was offered.
 ///
@@ -53,6 +53,17 @@ pub trait CaptureHandler {
     fn view(&self) -> Option<ViewId> {
         None
     }
+
+    /// Update the handler's cached gating bounds for its associated view, called
+    /// by [`CaptureStack::sync_gate_bounds`] before each dispatch so a handler
+    /// that gates events by the view's *position* (e.g. a modal frame) follows
+    /// the view when it is moved/resized (a dragged dialog).
+    ///
+    /// **Default is a no-op** — only a handler that gates by bounds overrides it.
+    /// In particular a drag handler must NOT override it: its grab anchor /
+    /// initial bounds are fixed for the duration of the drag and resyncing them
+    /// from the (live, moving) tree would corrupt the drag math.
+    fn set_gate_bounds(&mut self, _bounds: Rect) {}
 }
 
 /// A LIFO stack of [`CaptureHandler`]s (D9).
@@ -78,6 +89,24 @@ impl CaptureStack {
     /// Push a handler onto the top of the stack (it will see events first).
     pub fn push(&mut self, handler: Box<dyn CaptureHandler>) {
         self.handlers.push(handler);
+    }
+
+    /// Refresh every handler's gating bounds from the live tree before a dispatch.
+    ///
+    /// For each handler associated with a view ([`CaptureHandler::view`]), resolve
+    /// that view's current bounds via `resolve` and push them down through
+    /// [`CaptureHandler::set_gate_bounds`]. A bounds-gating handler (a modal frame)
+    /// thus follows its view when it is dragged/resized; a handler that does not
+    /// override `set_gate_bounds` (a drag handler) is unaffected. The loop owns the
+    /// stack, so this is the loop's responsibility, not a handler's.
+    pub fn sync_gate_bounds(&mut self, mut resolve: impl FnMut(ViewId) -> Option<Rect>) {
+        for h in &mut self.handlers {
+            if let Some(id) = h.view()
+                && let Some(bounds) = resolve(id)
+            {
+                h.set_gate_bounds(bounds);
+            }
+        }
     }
 
     /// Remove and return the top handler, if any. Used by
