@@ -63,10 +63,22 @@ pub enum Role {
     Info,
     /// Success feedback.
     Success,
+    /// Static (label/caption) text — `TStaticText` palette index 6 (row 36).
+    StaticText,
+    /// A cluster item's normal (unselected) text — `TCluster` palette idx 1.
+    ClusterNormal,
+    /// A cluster item's selected text (cursor item, cluster focused) — idx 2.
+    ClusterSelected,
+    /// A cluster item's shortcut highlight in the normal state — idx 3.
+    ClusterNormalShortcut,
+    /// A cluster item's shortcut highlight in the selected state — idx 4.
+    ClusterSelectedShortcut,
+    /// A disabled cluster item's text — idx 5.
+    ClusterDisabled,
 }
 
 /// Number of [`Role`] variants — the fixed length of [`Theme`]'s style array.
-const ROLE_COUNT: usize = 19;
+const ROLE_COUNT: usize = 25;
 
 impl Role {
     /// Total mapping of each variant to its index into the style array.
@@ -94,6 +106,12 @@ impl Role {
             Role::Warning => 16,
             Role::Info => 17,
             Role::Success => 18,
+            Role::StaticText => 19,
+            Role::ClusterNormal => 20,
+            Role::ClusterSelected => 21,
+            Role::ClusterNormalShortcut => 22,
+            Role::ClusterSelectedShortcut => 23,
+            Role::ClusterDisabled => 24,
         }
     }
 }
@@ -310,6 +328,18 @@ impl Theme {
         set(&mut styles, Role::Info, 0xF, 0x1); // white on blue
         set(&mut styles, Role::Success, 0xF, 0x2); // white on green
 
+        // Static text + cluster family (rows 36/38). Provisional values modelled
+        // on the classic gray-dialog look (`cpStaticText`/`cpCluster` resolved for
+        // a gray dialog): black on lightgray, red shortcut accents, green for the
+        // selected/cursor item. Not authoritative — they realign with the deferred
+        // gray/cyan dialog theming (`TODO(row 34 gray theming)`).
+        set(&mut styles, Role::StaticText, 0x0, 0x7); // black on lightgray
+        set(&mut styles, Role::ClusterNormal, 0x0, 0x7); // black on lightgray
+        set(&mut styles, Role::ClusterSelected, 0xF, 0x2); // white on green
+        set(&mut styles, Role::ClusterNormalShortcut, 0x4, 0x7); // red on lightgray
+        set(&mut styles, Role::ClusterSelectedShortcut, 0xE, 0x2); // yellow on green
+        set(&mut styles, Role::ClusterDisabled, 0x8, 0x7); // darkgray on lightgray
+
         Theme {
             styles,
             glyphs: Glyphs::default(),
@@ -358,6 +388,12 @@ mod tests {
         Role::Warning,
         Role::Info,
         Role::Success,
+        Role::StaticText,
+        Role::ClusterNormal,
+        Role::ClusterSelected,
+        Role::ClusterNormalShortcut,
+        Role::ClusterSelectedShortcut,
+        Role::ClusterDisabled,
     ];
 
     #[test]
