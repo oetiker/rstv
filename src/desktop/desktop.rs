@@ -196,7 +196,15 @@ mod tests {
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = Vec::new();
         let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
-        let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
+        let mut ctx = Context::new(
+            &mut out,
+            &mut timers,
+            0,
+            &mut pending,
+            &mut cmd_changes,
+            &mut tree_ops,
+        );
         f(&mut ctx)
     }
 

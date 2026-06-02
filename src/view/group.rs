@@ -810,7 +810,15 @@ mod tests {
     ) -> R {
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = Vec::new();
         let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
-        let mut ctx = Context::new(out, timers, 0, &mut pending, &mut cmd_changes);
+        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
+        let mut ctx = Context::new(
+            out,
+            timers,
+            0,
+            &mut pending,
+            &mut cmd_changes,
+            &mut tree_ops,
+        );
         f(&mut ctx)
     }
 

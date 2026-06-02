@@ -642,8 +642,9 @@ mod tests {
         timers: &'a mut crate::timer::TimerQueue,
         pending: &'a mut Vec<Box<dyn crate::capture::CaptureHandler>>,
         cmd_changes: &'a mut Vec<(crate::command::Command, bool)>,
+        tree_ops: &'a mut Vec<crate::view::TreeOp>,
     ) -> Context<'a> {
-        Context::new(out, timers, 0, pending, cmd_changes)
+        Context::new(out, timers, 0, pending, cmd_changes, tree_ops)
     }
 
     // -- Helpers for building key events -------------------------------------
@@ -686,8 +687,15 @@ mod tests {
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = vec![];
         let mut cmd_changes: Vec<(crate::command::Command, bool)> = vec![];
+        let mut tree_ops: Vec<crate::view::TreeOp> = vec![];
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.set_params(5, 0, 20, 1, 1, &mut ctx);
         }
         assert_eq!(sb.value, 5);
@@ -696,14 +704,26 @@ mod tests {
 
         // Clamp above max.
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.set_value(100, &mut ctx);
         }
         assert_eq!(sb.value, 20);
 
         // Clamp below min.
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.set_value(-5, &mut ctx);
         }
         assert_eq!(sb.value, 0);
@@ -716,15 +736,28 @@ mod tests {
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = vec![];
         let mut cmd_changes: Vec<(crate::command::Command, bool)> = vec![];
+        let mut tree_ops: Vec<crate::view::TreeOp> = vec![];
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.set_params(0, 0, 20, 1, 1, &mut ctx);
         }
         // No broadcast yet — value didn't change (was 0, still 0).
         assert_eq!(out.len(), 0);
 
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.set_value(5, &mut ctx);
         }
         assert_eq!(out.len(), 1);
@@ -745,12 +778,19 @@ mod tests {
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = vec![];
         let mut cmd_changes: Vec<(crate::command::Command, bool)> = vec![];
+        let mut tree_ops: Vec<crate::view::TreeOp> = vec![];
 
         // Build a scrollbar with a real range, then insert it into a group so it
         // is assigned a process-global id.
         let mut sb = ScrollBar::new(Rect::new(0, 0, 1, 10));
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.set_params(5, 0, 20, 1, 1, &mut ctx);
         }
         let mut group = Group::new(Rect::new(0, 0, 20, 10));
@@ -762,7 +802,13 @@ mod tests {
         // resolved child via the `View` trait — we only care that the *emitter*
         // threads its own stamped id, not about group focus routing.
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             let child = group.find_mut(id).expect("scrollbar resolves by id");
             let mut ev = key_ev(Key::Down);
             child.handle_event(&mut ev, &mut ctx);
@@ -786,14 +832,27 @@ mod tests {
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = vec![];
         let mut cmd_changes: Vec<(crate::command::Command, bool)> = vec![];
+        let mut tree_ops: Vec<crate::view::TreeOp> = vec![];
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.set_params(5, 0, 20, 1, 1, &mut ctx);
         }
         out.clear();
         // Setting same value should not broadcast.
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.set_value(5, &mut ctx);
         }
         assert_eq!(out.len(), 0);
@@ -810,14 +869,27 @@ mod tests {
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = vec![];
         let mut cmd_changes: Vec<(crate::command::Command, bool)> = vec![];
+        let mut tree_ops: Vec<crate::view::TreeOp> = vec![];
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.set_params(15, 0, 20, 1, 1, &mut ctx);
         }
         assert_eq!(sb.value, 15);
         out.clear();
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.set_range(0, 10, &mut ctx);
         }
         assert_eq!(sb.value, 10, "value clamped to new max");
@@ -835,8 +907,15 @@ mod tests {
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = vec![];
         let mut cmd_changes: Vec<(crate::command::Command, bool)> = vec![];
+        let mut tree_ops: Vec<crate::view::TreeOp> = vec![];
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.set_step(5, 2, &mut ctx);
         }
         assert_eq!(sb.page_step, 5);
@@ -870,8 +949,15 @@ mod tests {
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = vec![];
         let mut cmd_changes: Vec<(crate::command::Command, bool)> = vec![];
+        let mut tree_ops: Vec<crate::view::TreeOp> = vec![];
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.set_params(100, 0, 100, 1, 1, &mut ctx);
         }
         // getPos: ((100-0)*(10-3) + 50) / 100 + 1 = (700+50)/100+1 = 7+1 = 8
@@ -886,8 +972,15 @@ mod tests {
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = vec![];
         let mut cmd_changes: Vec<(crate::command::Command, bool)> = vec![];
+        let mut tree_ops: Vec<crate::view::TreeOp> = vec![];
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.set_params(50, 0, 100, 1, 1, &mut ctx);
         }
         // getPos: (50*(10-3) + 50) / 100 + 1 = (350+50)/100 + 1 = 4+1 = 5
@@ -905,15 +998,28 @@ mod tests {
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = vec![];
         let mut cmd_changes: Vec<(crate::command::Command, bool)> = vec![];
+        let mut tree_ops: Vec<crate::view::TreeOp> = vec![];
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.set_params(10, 0, 100, 5, 1, &mut ctx);
         }
         out.clear();
 
         let mut ev = key_ev(Key::Up);
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.handle_event(&mut ev, &mut ctx);
         }
         assert!(ev.is_nothing(), "event consumed");
@@ -936,15 +1042,28 @@ mod tests {
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = vec![];
         let mut cmd_changes: Vec<(crate::command::Command, bool)> = vec![];
+        let mut tree_ops: Vec<crate::view::TreeOp> = vec![];
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.set_params(10, 0, 100, 5, 1, &mut ctx);
         }
         out.clear();
 
         let mut ev = key_ev(Key::PageDown);
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.handle_event(&mut ev, &mut ctx);
         }
         assert!(ev.is_nothing());
@@ -958,8 +1077,15 @@ mod tests {
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = vec![];
         let mut cmd_changes: Vec<(crate::command::Command, bool)> = vec![];
+        let mut tree_ops: Vec<crate::view::TreeOp> = vec![];
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.set_params(50, 5, 100, 5, 1, &mut ctx);
         }
         out.clear();
@@ -971,7 +1097,13 @@ mod tests {
         // Our implementation is faithful to this. Verify Ctrl+PageUp → minVal for vertical.
         let mut ev = ctrl_key_ev(Key::PageUp);
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.handle_event(&mut ev, &mut ctx);
         }
         assert!(ev.is_nothing());
@@ -986,15 +1118,28 @@ mod tests {
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = vec![];
         let mut cmd_changes: Vec<(crate::command::Command, bool)> = vec![];
+        let mut tree_ops: Vec<crate::view::TreeOp> = vec![];
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.set_params(10, 0, 100, 5, 2, &mut ctx);
         }
         out.clear();
 
         let mut ev = key_ev(Key::Right);
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.handle_event(&mut ev, &mut ctx);
         }
         assert!(ev.is_nothing());
@@ -1013,8 +1158,15 @@ mod tests {
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = vec![];
         let mut cmd_changes: Vec<(crate::command::Command, bool)> = vec![];
+        let mut tree_ops: Vec<crate::view::TreeOp> = vec![];
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.set_params(10, 0, 100, 5, 1, &mut ctx);
         }
         out.clear();
@@ -1022,7 +1174,13 @@ mod tests {
         // Click at (0, 0) = the up-arrow cell.
         let mut ev = mouse_down_at(0, 0);
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.handle_event(&mut ev, &mut ctx);
         }
         assert!(ev.is_nothing());
@@ -1040,8 +1198,15 @@ mod tests {
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = vec![];
         let mut cmd_changes: Vec<(crate::command::Command, bool)> = vec![];
+        let mut tree_ops: Vec<crate::view::TreeOp> = vec![];
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.set_params(10, 0, 100, 5, 1, &mut ctx);
         }
         out.clear();
@@ -1049,7 +1214,13 @@ mod tests {
         // Click at (0, 9) = the down-arrow cell (s = getSize()-1 = 9).
         let mut ev = mouse_down_at(0, 9);
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.handle_event(&mut ev, &mut ctx);
         }
         assert!(ev.is_nothing());
@@ -1072,8 +1243,15 @@ mod tests {
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = vec![];
         let mut cmd_changes: Vec<(crate::command::Command, bool)> = vec![];
+        let mut tree_ops: Vec<crate::view::TreeOp> = vec![];
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             // value=50, min=0, max=100, page_step=5, arrow_step=1
             sb.set_params(50, 0, 100, 5, 1, &mut ctx);
         }
@@ -1084,7 +1262,13 @@ mod tests {
         // Click y=2: this is in the PageUp region (1 <= 2 < 5 = pos).
         let mut ev = mouse_down_at(0, 2);
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.handle_event(&mut ev, &mut ctx);
         }
         assert!(ev.is_nothing(), "event consumed");
@@ -1118,8 +1302,15 @@ mod tests {
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = vec![];
         let mut cmd_changes: Vec<(crate::command::Command, bool)> = vec![];
+        let mut tree_ops: Vec<crate::view::TreeOp> = vec![];
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.set_params(50, 0, 100, 5, 1, &mut ctx);
         }
 
@@ -1143,8 +1334,15 @@ mod tests {
         let mut timers = crate::timer::TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = vec![];
         let mut cmd_changes: Vec<(crate::command::Command, bool)> = vec![];
+        let mut tree_ops: Vec<crate::view::TreeOp> = vec![];
         {
-            let mut ctx = make_ctx(&mut out, &mut timers, &mut pending, &mut cmd_changes);
+            let mut ctx = make_ctx(
+                &mut out,
+                &mut timers,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             sb.set_params(0, 0, 100, 5, 1, &mut ctx);
         }
 

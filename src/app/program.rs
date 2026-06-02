@@ -58,7 +58,7 @@ use crate::event::Event;
 use crate::theme::Theme;
 use crate::timer::Clock;
 use crate::timer::TimerQueue;
-use crate::view::{Context, DrawCtx, Group, Rect, SelectMode, View, ViewId};
+use crate::view::{Context, DrawCtx, Group, Rect, SelectMode, TreeOp, View, ViewId};
 
 /// The frame-tick timeout: ports `TProgram::eventTimeoutMs` (20 ms → 50 wakeups
 /// per second). Headless ignores it (D11).
@@ -215,6 +215,15 @@ pub struct Program {
     /// program). Distinct field for the same disjoint-borrow reason as
     /// `pending_captures`.
     pending_command_changes: Vec<(Command, bool)>,
+    /// Deferred tree mutations ([`TreeOp`]), applied to the root `group` *after*
+    /// each dispatch — the third member of the deferred-channel family alongside
+    /// `pending_captures` and `pending_command_changes`. A capture handler / view
+    /// holds only a [`ViewId`] (D3), so drag move/grow (`request_bounds`), drag-end
+    /// `sfDragging` clear (`request_set_state`), and `cmClose` removal
+    /// (`request_close`) all queue here and the loop resolves them via
+    /// `find_mut` / `remove_descendant`. Distinct field for the same
+    /// disjoint-borrow reason as `pending_captures`.
+    pending_tree_ops: Vec<TreeOp>,
     /// The enabled-command set (`curCommandSet`); see [`default_command_set`].
     command_set: CommandSet,
     /// The inserted desktop child's id (`canMoveFocus` / Alt-N target).
@@ -287,6 +296,7 @@ impl Program {
         // here via a throwaway Context; the RECEIVED_FOCUS broadcast it queues
         // sits in `out_events` and is processed on the first pump.
         let mut pending_command_changes: Vec<(Command, bool)> = Vec::new();
+        let mut pending_tree_ops: Vec<TreeOp> = Vec::new();
         if let Some(id) = desktop {
             let now = clock.now_ms();
             let mut ctx = Context::new(
@@ -295,6 +305,7 @@ impl Program {
                 now,
                 &mut pending_captures,
                 &mut pending_command_changes,
+                &mut pending_tree_ops,
             );
             group.set_current(Some(id), SelectMode::Normal, &mut ctx);
         }
@@ -309,6 +320,7 @@ impl Program {
             out_events,
             pending_captures,
             pending_command_changes,
+            pending_tree_ops,
             command_set: default_command_set(),
             desktop,
             end_state: None,
@@ -414,6 +426,7 @@ impl Program {
             out_events,
             pending_captures,
             pending_command_changes,
+            pending_tree_ops,
             command_set,
             desktop: _,
             end_state,
@@ -489,6 +502,7 @@ impl Program {
                             now,
                             pending_captures,
                             pending_command_changes,
+                            pending_tree_ops,
                         );
                         // Offer to the capture stack first; if consumed, skip view
                         // routing.
@@ -515,6 +529,42 @@ impl Program {
                         } else if !enable && command_set.has(cmd) {
                             command_set.disable_cmd(cmd);
                             *command_set_changed = true;
+                        }
+                    }
+                    // Apply deferred tree ops AFTER dispatch (the third member of
+                    // the deferred-channel family: pending_captures /
+                    // pending_command_changes / pending_tree_ops). Drain to a local
+                    // first: the apply-Context borrows `pending_tree_ops` (so a
+                    // SetState/Close that re-queues lands for the NEXT pump), which
+                    // would alias the iteration otherwise. ONE pass only — anything
+                    // an applied op re-queues (none do, in 33d-1) waits for the next
+                    // pump; do not loop until empty (a bug would spin).
+                    let ops: Vec<TreeOp> = std::mem::take(pending_tree_ops);
+                    if !ops.is_empty() {
+                        let mut ctx = Context::new(
+                            out_events,
+                            timers,
+                            now,
+                            pending_captures,
+                            pending_command_changes,
+                            pending_tree_ops,
+                        );
+                        for op in ops {
+                            match op {
+                                TreeOp::ChangeBounds(id, r) => {
+                                    if let Some(v) = group.find_mut(id) {
+                                        v.change_bounds(r);
+                                    }
+                                }
+                                TreeOp::SetState(id, f, e) => {
+                                    if let Some(v) = group.find_mut(id) {
+                                        v.set_state(f, e, &mut ctx);
+                                    }
+                                }
+                                TreeOp::Close(id) => {
+                                    group.remove_descendant(id, &mut ctx);
+                                }
+                            }
                         }
                     }
                 }
@@ -562,6 +612,7 @@ impl Program {
             now,
             &mut self.pending_captures,
             &mut self.pending_command_changes,
+            &mut self.pending_tree_ops,
         );
         f(&mut self.group, &mut ctx)
     }
@@ -702,6 +753,24 @@ mod tests {
                 left: true,
                 ..Default::default()
             },
+            ..Default::default()
+        })
+    }
+
+    fn mouse_move_at(x: i32, y: i32) -> Event {
+        Event::MouseMove(MouseEvent {
+            position: Point::new(x, y),
+            buttons: MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+
+    fn mouse_up_at(x: i32, y: i32) -> Event {
+        Event::MouseUp(MouseEvent {
+            position: Point::new(x, y),
             ..Default::default()
         })
     }
@@ -1105,6 +1174,182 @@ mod tests {
         assert!(
             log.borrow().contains(&Event::Command(Command::ZOOM)),
             "now-enabled command reaches routing instead of being filtered"
+        );
+    }
+
+    // -- 10. drag move round-trip (33d-1, mandatory) -------------------------
+
+    use crate::view::StateFlag;
+    use crate::window::Window;
+
+    /// Read a window's `ViewState` by resolving its id through the root group.
+    fn win_state(program: &mut Program, id: ViewId) -> ViewState {
+        program.group_mut().find_mut(id).unwrap().state().clone()
+    }
+
+    /// End-to-end drag: MouseDown(title) → MouseMove×2 → MouseUp, driven through
+    /// `pump_once`. Proves the deferred round-trip: capture consumes the
+    /// `MouseMove`, `request_bounds` queues a `TreeOp`, the loop drains it and
+    /// applies `change_bounds`, and `MouseUp` clears `sfDragging` + pops the
+    /// capture (the deferred SetState applied).
+    #[test]
+    fn drag_move_round_trip() {
+        let (mut program, _screen, _clock) = program_with_desktop(80, 25);
+        // Insert a wfMove window into the ROOT group at (2,1,22,9) and select it.
+        let id = {
+            let w = Window::new(Rect::new(2, 1, 22, 9), Some("Edit".into()), 1);
+            program.group_mut().insert(Box::new(w))
+        };
+        program.with_ctx(|g, ctx| {
+            g.set_current(Some(id), SelectMode::Normal, ctx);
+            g.find_mut(id)
+                .unwrap()
+                .set_state(StateFlag::Selected, true, ctx);
+        });
+        program.out_events.clear();
+
+        // MouseDown on the title bar: absolute (8,1) → window-local (6,0).
+        program.out_events.push_back(mouse_down_at(8, 1));
+        program.pump_once();
+        let st = win_state(&mut program, id);
+        assert!(st.state.dragging, "drag started: sfDragging set");
+        assert_eq!(program.capture_len(), 1, "DragCapture pushed (deferred)");
+
+        // The Move anchor: new_origin = mouse_abs - mouse_local_down. mouse_local
+        // down = (6,0), so origin = mouse_abs - (6,0).
+        // MouseMove to absolute (12,4) → expected origin (6,4).
+        program.out_events.push_back(mouse_move_at(12, 4));
+        program.pump_once();
+        let st = win_state(&mut program, id);
+        assert_eq!(st.origin, Point::new(6, 4), "window tracked the first move");
+
+        // Second MouseMove to absolute (20,8) → expected origin (14,8).
+        program.out_events.push_back(mouse_move_at(20, 8));
+        program.pump_once();
+        let st = win_state(&mut program, id);
+        assert_eq!(
+            st.origin,
+            Point::new(14, 8),
+            "window tracked the second move"
+        );
+
+        // MouseUp ends the drag: sfDragging cleared, capture popped.
+        program.out_events.push_back(mouse_up_at(20, 8));
+        program.pump_once();
+        let st = win_state(&mut program, id);
+        assert!(!st.state.dragging, "drag ended: sfDragging cleared");
+        assert_eq!(program.capture_len(), 0, "DragCapture popped on MouseUp");
+    }
+
+    // -- 11. drag clamps to limits -------------------------------------------
+
+    /// Dragging the title to a position whose raw `origin.y` would be negative is
+    /// pinned to 0 by `dmLimitLoY`.
+    ///
+    /// Window: origin=(2,1), size=(20,8).  Grab title at window-local (6,0) →
+    /// absolute (8,1).  Anchor for a Move drag = origin − mouse_abs = (2,1)−(8,1)
+    /// = (−6, 0).  MouseMove to absolute (0,−5): raw new_origin.y = −5 + 0 = −5.
+    /// General band: (−5).max(0 − 8 + 1) = (−5).max(−7) = −5 (survives the band).
+    /// Without `dmLimitLoY` origin.y would be −5; WITH it the clamp pins it to 0.
+    #[test]
+    fn drag_move_clamps_to_limits() {
+        let (mut program, _screen, _clock) = program_with_desktop(80, 25);
+        let id = {
+            let w = Window::new(Rect::new(2, 1, 22, 9), Some("Edit".into()), 1);
+            program.group_mut().insert(Box::new(w))
+        };
+        program.with_ctx(|g, ctx| g.set_current(Some(id), SelectMode::Normal, ctx));
+        program.out_events.clear();
+
+        // Grab the title at window-local (6,0): absolute (8,1).
+        // anchor.y = origin.y − mouse_abs.y = 1 − 1 = 0.
+        program.out_events.push_back(mouse_down_at(8, 1));
+        program.pump_once();
+        assert!(win_state(&mut program, id).state.dragging);
+
+        // Move to absolute (0,−5): raw new_origin.y = −5 + 0 = −5, which survives
+        // the general band (−7 ≤ −5) but is negative.  `dmLimitLoY` must pin it
+        // to 0; without that clamp origin.y would be −5 and the test would fail.
+        program.out_events.push_back(mouse_move_at(0, -5));
+        program.pump_once();
+        let st = win_state(&mut program, id);
+        assert_eq!(
+            st.origin.y, 0,
+            "dmLimitLoY must pin origin.y to 0, got {}",
+            st.origin.y
+        );
+        // General band keeps origin.x within [a−s+1, b−1] = [−19, 79].
+        let size_x = st.size.x;
+        assert!(
+            st.origin.x > -size_x && st.origin.x < 80,
+            "origin.x within [a-s+1, b-1], got {}",
+            st.origin.x
+        );
+    }
+
+    // -- 12. close round-trip ------------------------------------------------
+
+    /// `cmClose` on a `wfClose` window removes it from the tree (the deferred
+    /// `request_close` → `remove_descendant` round-trip). A `sfModal` window
+    /// instead posts `cmCancel` and is NOT removed.
+    #[test]
+    fn close_round_trip_removes_window() {
+        let (mut program, _screen, _clock) = program_with_desktop(80, 25);
+        let id = {
+            let w = Window::new(Rect::new(2, 1, 22, 9), Some("Edit".into()), 1);
+            program.group_mut().insert(Box::new(w))
+        };
+        // Select it (enables cmClose via the command-change channel) + make current
+        // so the focused cmClose routes to it.
+        program.with_ctx(|g, ctx| {
+            g.set_current(Some(id), SelectMode::Normal, ctx);
+            g.find_mut(id)
+                .unwrap()
+                .set_state(StateFlag::Selected, true, ctx);
+        });
+        // Apply the deferred enable (it sits in pending_command_changes until a
+        // dispatch drains it); just enable directly to be unambiguous.
+        program.enable_command(Command::CLOSE);
+        program.out_events.clear();
+
+        assert!(
+            program.group_mut().find_mut(id).is_some(),
+            "window present before close"
+        );
+        program.out_events.push_back(Event::Command(Command::CLOSE));
+        program.pump_once();
+        assert!(
+            program.group_mut().find_mut(id).is_none(),
+            "window removed via remove_descendant after cmClose"
+        );
+    }
+
+    /// A `sfModal` window posts `cmCancel` on `cmClose` and is NOT removed (row 34
+    /// owns the actual modal teardown; only this branch is wired in 33d-1).
+    #[test]
+    fn close_modal_window_posts_cancel_not_removed() {
+        let (mut program, _screen, _clock) = program_with_desktop(80, 25);
+        let id = {
+            let mut w = Window::new(Rect::new(2, 1, 22, 9), Some("Edit".into()), 1);
+            w.state_mut().state.modal = true;
+            program.group_mut().insert(Box::new(w))
+        };
+        program.with_ctx(|g, ctx| g.set_current(Some(id), SelectMode::Normal, ctx));
+        program.enable_command(Command::CLOSE);
+        program.out_events.clear();
+
+        program.out_events.push_back(Event::Command(Command::CLOSE));
+        program.pump_once();
+        assert!(
+            program.group_mut().find_mut(id).is_some(),
+            "modal window NOT removed on cmClose"
+        );
+        assert!(
+            program
+                .out_events
+                .iter()
+                .any(|e| *e == Event::Command(Command::CANCEL)),
+            "modal cmClose posts cmCancel"
         );
     }
 }

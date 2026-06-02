@@ -23,9 +23,31 @@ use crate::theme::{Glyphs, Role, Theme};
 use crate::timer::{TimerId, TimerQueue};
 use crate::view::geometry::{Point, Rect};
 use crate::view::id::ViewId;
+use crate::view::view::StateFlag;
 use std::collections::VecDeque;
 use std::time::Duration;
 use unicode_width::UnicodeWidthChar;
+
+// ---------------------------------------------------------------------------
+// TreeOp — a deferred tree mutation requested through Context (D3 / D9)
+// ---------------------------------------------------------------------------
+
+/// A deferred tree mutation a capture handler / view requests through [`Context`];
+/// the loop applies it against the root view after dispatch (D3/D9). A view/
+/// handler holds only a [`ViewId`], so it cannot mutate the tree inline — it queues
+/// the op and the loop resolves the id via `find_mut` / `remove_descendant`.
+///
+/// The third member of the deferred-channel family alongside `pending_captures`
+/// and `command_changes`: queued during dispatch, applied by the loop afterwards.
+pub enum TreeOp {
+    /// Apply new bounds to the view named by `ViewId` (drag move/grow). No ctx
+    /// needed at apply time (`change_bounds` takes none).
+    ChangeBounds(ViewId, Rect),
+    /// Flip a propagating state flag on the view (drag end → `sfDragging` off).
+    SetState(ViewId, StateFlag, bool),
+    /// Remove the view from whichever group owns it (`cmClose`).
+    Close(ViewId),
+}
 
 // ---------------------------------------------------------------------------
 // DrawCtx — the downward draw context (D3 / D8)
@@ -259,6 +281,12 @@ pub struct Context<'a> {
     /// the program's command set, so `enableCommand`/`disableCommand` are realized
     /// as a downward request queue the loop drains into `curCommandSet`.
     command_changes: &'a mut Vec<(Command, bool)>,
+    /// Deferred tree mutations ([`TreeOp`]) — applied by the loop *after* the
+    /// current dispatch, exactly like [`pending_captures`](Self::pending_captures)
+    /// and [`command_changes`](Self::command_changes). A view/capture handler holds
+    /// only a [`ViewId`] (D3), so it cannot touch the tree inline; it queues the op
+    /// and the loop resolves the id via `find_mut` / `remove_descendant`.
+    pending_tree_ops: &'a mut Vec<TreeOp>,
     /// The size of the view's owner (the group currently routing to it), so a child
     /// can reach `owner->size` / `owner->getExtent()` without an up-pointer (D3).
     /// Used by `TWindow::zoom`/`sizeLimits` (33c) and the drag limits (33d).
@@ -281,6 +309,7 @@ impl<'a> Context<'a> {
         now_ms: u64,
         pending_captures: &'a mut Vec<Box<dyn CaptureHandler>>,
         command_changes: &'a mut Vec<(Command, bool)>,
+        pending_tree_ops: &'a mut Vec<TreeOp>,
     ) -> Self {
         Context {
             out_events,
@@ -288,6 +317,7 @@ impl<'a> Context<'a> {
             now_ms,
             pending_captures,
             command_changes,
+            pending_tree_ops,
             owner_size: Point::default(),
         }
     }
@@ -338,6 +368,30 @@ impl<'a> Context<'a> {
     /// [`enable_command`](Self::enable_command)).
     pub fn disable_command(&mut self, cmd: Command) {
         self.command_changes.push((cmd, false));
+    }
+
+    /// Request the view named by `id` be moved/resized to `bounds` — **deferred**.
+    /// The loop applies it after the current dispatch (mirrors
+    /// [`push_capture`](Self::push_capture) / [`enable_command`](Self::enable_command)),
+    /// resolving `id` via `find_mut` and calling `change_bounds`. A capture handler
+    /// (the drag) holds only a [`ViewId`] (D3), so it cannot mutate the tree inline.
+    pub fn request_bounds(&mut self, id: ViewId, bounds: Rect) {
+        self.pending_tree_ops.push(TreeOp::ChangeBounds(id, bounds));
+    }
+
+    /// Request a propagating state flag be flipped on the view named by `id` —
+    /// **deferred** (see [`request_bounds`](Self::request_bounds)). The loop resolves
+    /// `id` via `find_mut` and calls `set_state` (drag end → `sfDragging` off).
+    pub fn request_set_state(&mut self, id: ViewId, flag: StateFlag, enable: bool) {
+        self.pending_tree_ops
+            .push(TreeOp::SetState(id, flag, enable));
+    }
+
+    /// Request the view named by `id` be removed from whichever group owns it —
+    /// **deferred** (see [`request_bounds`](Self::request_bounds)). The loop resolves
+    /// it via `remove_descendant` (`cmClose`).
+    pub fn request_close(&mut self, id: ViewId) {
+        self.pending_tree_ops.push(TreeOp::Close(id));
     }
 
     /// The clock value sampled for this dispatch pass.
@@ -624,8 +678,16 @@ mod tests {
         let mut timers = TimerQueue::new();
         let mut pending: Vec<Box<dyn CaptureHandler>> = Vec::new();
         let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
+        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
         {
-            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+            let mut ctx = Context::new(
+                &mut out,
+                &mut timers,
+                0,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             ctx.post(Command::OK);
             ctx.broadcast(Command::QUIT, None);
         }
@@ -646,14 +708,29 @@ mod tests {
         let mut timers = TimerQueue::new();
         let mut pending: Vec<Box<dyn CaptureHandler>> = Vec::new();
         let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
+        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
         let id = {
-            let mut ctx = Context::new(&mut out, &mut timers, 100, &mut pending, &mut cmd_changes);
+            let mut ctx = Context::new(
+                &mut out,
+                &mut timers,
+                100,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             assert_eq!(ctx.now_ms(), 100);
             ctx.set_timer(Duration::from_millis(50), None)
         };
         assert_eq!(timers.len(), 1);
         {
-            let mut ctx = Context::new(&mut out, &mut timers, 100, &mut pending, &mut cmd_changes);
+            let mut ctx = Context::new(
+                &mut out,
+                &mut timers,
+                100,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             ctx.kill_timer(id);
         }
         assert_eq!(timers.len(), 0);
@@ -665,8 +742,16 @@ mod tests {
         let mut timers = TimerQueue::new();
         let mut pending: Vec<Box<dyn CaptureHandler>> = Vec::new();
         let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
+        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
         {
-            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+            let mut ctx = Context::new(
+                &mut out,
+                &mut timers,
+                0,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             ctx.enable_command(Command::OK);
             ctx.disable_command(Command::CANCEL);
         }
@@ -681,7 +766,15 @@ mod tests {
         let mut timers = TimerQueue::new();
         let mut pending: Vec<Box<dyn CaptureHandler>> = Vec::new();
         let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
-        let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
+        let mut ctx = Context::new(
+            &mut out,
+            &mut timers,
+            0,
+            &mut pending,
+            &mut cmd_changes,
+            &mut tree_ops,
+        );
         // Context::new defaults owner_size to (0, 0).
         assert_eq!(ctx.owner_size(), Point::new(0, 0));
         // The setter round-trips.

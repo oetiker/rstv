@@ -1,10 +1,11 @@
 //! `TWindow` core — see the [module docs](super) for the deviation summary.
 
+use crate::capture::{CaptureFlow, CaptureHandler};
 use crate::command::Command;
 use crate::event::{Event, Key};
 use crate::frame::Frame;
 use crate::view::{
-    Context, DrawCtx, Group, GrowMode, Point, Rect, StateFlag, View, ViewId, ViewState,
+    Context, DragMode, DrawCtx, Group, GrowMode, Point, Rect, StateFlag, View, ViewId, ViewState,
 };
 use crate::widgets::ScrollBar;
 
@@ -300,6 +301,61 @@ impl Window {
             self.group.change_bounds(bounds);
         }
     }
+
+    // -- drag (33d-1) --------------------------------------------------------
+
+    /// Start a drag — the D9 replacement for `dragView`'s nested mouse loop
+    /// (`tview.cpp`), reached from [`handle_event`](Self::handle_event) on a
+    /// surviving title-bar / corner / middle-button `MouseDown`.
+    ///
+    /// Sets `sfDragging` **on** directly (it has `&mut self` + `ctx`, so
+    /// `Group::set_state` propagates `Dragging` to children incl. the frame,
+    /// flipping it to the single-line dragging border), then pushes a deferred
+    /// [`DragCapture`]. The capture is pushed deferred, so it sees the *next* event
+    /// (the first `MouseMove`), never this `MouseDown` (the `pending_captures`
+    /// contract).
+    ///
+    /// `mouse_local` is the `MouseDown` position in **window-local** coords; adding
+    /// the window's own `origin` gives the absolute mouse-down used to compute the
+    /// constant grab anchor (the 3a coordinate-frame assumption on [`DragCapture`]).
+    /// `owner->getExtent()` / `sizeLimits()` are read **here** (group-routed
+    /// dispatch, so `ctx.owner_size()` is valid), never at drag time.
+    fn start_drag(&mut self, id: ViewId, kind: DragKind, mouse_local: Point, ctx: &mut Context) {
+        // dragView: setState(sfDragging, True). Set it directly (Group::set_state
+        // propagates Dragging to children incl. the frame).
+        View::set_state(self, StateFlag::Dragging, true, ctx);
+
+        let origin = self.group.state().origin;
+        let size = self.group.state().size;
+        let mouse_abs = mouse_local + origin; // window-local -> absolute (3a assumption)
+        // owner->getExtent() and sizeLimits(), via the owner-extent-down channel +
+        // the window's size_limits override. owner_size is valid HERE (group-routed
+        // dispatch); the capture must NOT read it at drag time (DragCapture 3a).
+        let owner_size = ctx.owner_size();
+        let limits = Rect::new(0, 0, owner_size.x, owner_size.y); // owner->getExtent()
+        let (min, max) = View::size_limits(self, owner_size);
+        // dragMode | (flags & (wfMove|wfGrow)) — only the dmLimit* bits feed
+        // move_grow (the wfMove/wfGrow bits select dmDragMove/Grow, already encoded
+        // in `kind`), so we carry just the window's dragMode (ctor default
+        // dmLimitLoY).
+        let mode = self.group.state().drag_mode;
+        let anchor = match kind {
+            DragKind::Move => origin - mouse_abs,
+            DragKind::Grow => size - mouse_abs,
+            DragKind::GrowLeft => Point::new(origin.x, origin.y + size.y) - mouse_abs,
+        };
+        let init_bounds = self.group.state().get_bounds();
+        ctx.push_capture(Box::new(DragCapture {
+            window_id: id,
+            kind,
+            init_bounds,
+            anchor,
+            limits,
+            min,
+            max,
+            mode,
+        }));
+    }
 }
 
 /// `range(val, min, max)` (tview.cpp) — clamp `val` into `[min, max]`, pinning
@@ -323,6 +379,161 @@ fn number_to_option(number: i16) -> Option<u8> {
     } else {
         Some(u8::try_from(number).unwrap_or(u8::MAX))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Drag — the D9 capture-handler replacement for dragView's mouse loop
+// ---------------------------------------------------------------------------
+
+/// Which `dragView` form is running (mouse branch only; the keyboard `cmResize`
+/// sub-mode is deferred — see [`Window::handle_event`]'s `TODO(33d-2/later, D9)`).
+/// Selects how each `MouseMove` maps to new bounds (see
+/// [`DragCapture::compute_bounds`]).
+enum DragKind {
+    /// `dmDragMove` — translate the whole window (title-bar / middle-button move).
+    Move,
+    /// `dmDragGrow` — drag the bottom-right corner (origin fixed, size follows).
+    Grow,
+    /// `dmDragGrowLeft` — drag the bottom-left corner (top-right fixed).
+    GrowLeft,
+}
+
+/// The D9 replacement for `TView::dragView`'s nested `while(mouseEvent(...))`
+/// loop (`tview.cpp`), realized as a [`CaptureHandler`] (D9). Under D3 the *frame*
+/// cannot start the drag (it has no pointer to the window it would move); the
+/// [`Window`] starts it (it knows its own id and its owner's size) via
+/// [`Window::start_drag`], which pushes this handler.
+///
+/// **Coordinate-frame assumption (mirrors [`ModalFrame`](crate::app::ModalFrame)).**
+/// The capture runs at the capture-stack level, *before* any group routing, so it
+/// sees mouse events in **absolute screen coordinates**. For row 31 the root
+/// `Group` covers the whole screen at `(0,0)` and the desktop is its child at
+/// `(0,0)`, so **absolute == root-local == desktop-local**, and a window's
+/// `origin` (relative to its owner) is in that same frame — the drag math assumes
+/// this. When a menu / status bar (Phase 4) shifts the desktop off `(0,0)`, this
+/// capture must translate absolute → desktop coords; revisit then. (The window
+/// cannot know the desktop's offset under D3, so we do not attempt it now — the
+/// same caveat `ModalFrame` carries.)
+struct DragCapture {
+    window_id: ViewId,
+    kind: DragKind,
+    /// Window bounds at drag start (the fixed corner for Grow/GrowLeft).
+    init_bounds: Rect,
+    /// The constant grab offset (see [`compute_bounds`](Self::compute_bounds));
+    /// per-kind meaning documented in [`Window::start_drag`].
+    anchor: Point,
+    /// `owner->getExtent()` — captured at push time from `ctx.owner_size()`.
+    limits: Rect,
+    /// Minimum size (`sizeLimits().min`), captured at push time.
+    min: Point,
+    /// Maximum size (`sizeLimits().max`), captured at push time.
+    max: Point,
+    /// `owner->dragMode | (flags & ...)` — only the `dmLimit*` bits matter to
+    /// [`move_grow`] (the window's default is `dmLimitLoY`).
+    mode: DragMode,
+}
+
+impl DragCapture {
+    /// Map the current `MouseMove`'s absolute position to the window's new bounds,
+    /// replicating `dragView`'s three mouse forms (`tview.cpp`). The anchor is the
+    /// **constant** grab offset captured at push time (see [`Window::start_drag`]).
+    fn compute_bounds(&self, mouse_abs: Point) -> Rect {
+        match self.kind {
+            // p = origin - mouseDown; origin' = mouse + p.
+            DragKind::Move => {
+                let sz = self.init_bounds.b - self.init_bounds.a;
+                let new_origin = mouse_abs + self.anchor;
+                move_grow(new_origin, sz, self.limits, self.min, self.max, self.mode)
+            }
+            // p = size - mouseDown; size' = mouse + p.
+            DragKind::Grow => {
+                let o = self.init_bounds.a;
+                let new_size = mouse_abs + self.anchor;
+                move_grow(o, new_size, self.limits, self.min, self.max, self.mode)
+            }
+            // dmDragGrowLeft: bespoke pre-clamp of the moving bottom-left corner,
+            // then move_grow. The top-right (`b`) is the fixed anchor.
+            DragKind::GrowLeft => {
+                let corner = mouse_abs + self.anchor; // = mouse + (botLeft - mouseDown)
+                let b = self.init_bounds.b; // fixed top-right anchor
+                let ax = corner.x.max(b.x - self.max.x).min(b.x - self.min.x);
+                let a = Point::new(ax, self.init_bounds.a.y); // a.y stays initial
+                let by = corner.y; // bottom edge follows mouse
+                move_grow(
+                    a,
+                    Point::new(b.x - a.x, by - a.y),
+                    self.limits,
+                    self.min,
+                    self.max,
+                    self.mode,
+                )
+            }
+        }
+    }
+}
+
+impl CaptureHandler for DragCapture {
+    fn handle(&mut self, ev: &mut Event, ctx: &mut Context) -> CaptureFlow {
+        match ev {
+            Event::MouseMove(m) => {
+                // `m.position` is ABSOLUTE here (capture runs before group routing).
+                let r = self.compute_bounds(m.position);
+                ctx.request_bounds(self.window_id, r);
+                CaptureFlow::Consumed
+            }
+            Event::MouseUp(_) => {
+                // dragView's loop ends on mouse-up; clear sfDragging (deferred — a
+                // capture holds no &mut view) and pop ourselves.
+                ctx.request_set_state(self.window_id, StateFlag::Dragging, false);
+                CaptureFlow::ConsumedPop
+            }
+            // C++ `mouseEvent(event, evMouseMove)` discards everything that is not a
+            // mouse-move/up while the drag runs — the drag is modal. Swallow the
+            // rest (MouseAuto, keys, commands, broadcasts) without moving the window.
+            _ => CaptureFlow::Consumed,
+        }
+    }
+
+    fn view(&self) -> Option<ViewId> {
+        Some(self.window_id)
+    }
+}
+
+/// `TView::moveGrow` (`tview.cpp`) — clamp size to `[min, max]` and origin to the
+/// limits, honoring the `dmLimit*` mode bits, and return the resulting bounds.
+///
+/// We return the rect instead of calling `locate` (the capture has no `&mut`
+/// view; the loop applies it via `change_bounds` — equivalent, since `move_grow`
+/// already clamps to the same sizeLimits `locate` would).
+///
+/// C++ uses `min(max(..))` **not** `clamp()`: when `lo > hi` (window larger than
+/// the limit), `min(max(v, lo), hi)` yields `hi`. [`i32::clamp`] PANICS on
+/// `lo > hi`, so we do **not** use it — replicate min/max exactly.
+fn move_grow(
+    mut p: Point,
+    mut s: Point,
+    limits: Rect,
+    min: Point,
+    max: Point,
+    mode: DragMode,
+) -> Rect {
+    s.x = s.x.max(min.x).min(max.x);
+    s.y = s.y.max(min.y).min(max.y);
+    p.x = p.x.max(limits.a.x - s.x + 1).min(limits.b.x - 1);
+    p.y = p.y.max(limits.a.y - s.y + 1).min(limits.b.y - 1);
+    if mode.limit_lo_x {
+        p.x = p.x.max(limits.a.x);
+    }
+    if mode.limit_lo_y {
+        p.y = p.y.max(limits.a.y);
+    }
+    if mode.limit_hi_x {
+        p.x = p.x.min(limits.b.x - s.x);
+    }
+    if mode.limit_hi_y {
+        p.y = p.y.min(limits.b.y - s.y);
+    }
+    Rect::from_points(p, p + s)
 }
 
 impl View for Window {
@@ -358,18 +569,26 @@ impl View for Window {
     ///   therefore always reaches exactly the window it targets, so
     ///   `infoPtr == 0 || == this` can never reject anything. **Trip-wire:** revisit
     ///   only if a future emitter targets a *non-active* window via a command.
+    /// * `cmClose` (if `wfClose`) → `request_close` (the loop drains it into
+    ///   `remove_descendant`), or post `cmCancel` if `sfModal` (33d-1). Same vacuous
+    ///   target-guard reasoning as `cmZoom` (Phase A). Modal teardown machinery is
+    ///   row 34's; only the one `sfModal → cmCancel` branch is wired here.
     /// * `kbTab` → `focusNext(False)` (forwards) + `clearEvent`.
     /// * `kbShiftTab` → `focusNext(True)` (backwards) + `clearEvent`. Shift+Tab
     ///   is `Key::Tab` + the `shift` modifier (there is no `Key::BackTab`).
+    /// * A surviving title-bar / bottom-corner / middle-button `MouseDown` →
+    ///   [`start_drag`](Self::start_drag) (the D9 [`DragCapture`] replacement for
+    ///   `TFrame::dragWindow` → `dragView`'s mouse loop, 33d-1).
     ///
     /// Deferred C++ command/broadcast cases, each needing infrastructure not yet
     /// built:
     /// * `cmResize` → `dragView(dragMode | (flags & (wfMove|wfGrow)), limits, …)`
-    ///   — **TODO(33d):** needs a transient drag capture handler (limits captured
-    ///   at push time from `ctx.owner_size()`).
-    /// * `cmClose` → `close()` (or post `cmCancel` if `sfModal`) — **TODO(33d):**
-    ///   needs a close-removal channel; the modal path is **row 34**.
-    /// * `cmSelectWindowNum` matching `number` → `select()` — **deferred to 33d.**
+    ///   — **TODO(33d-2/later, D9):** the keyboard resize sub-mode (arrows until
+    ///   Enter/Esc, `dragView`'s `else` branch). No menu can trigger `cmResize` yet,
+    ///   so a handler would be unreachable; per 33c's principle we must not *enable*
+    ///   a command we do not handle, so `cmResize` is omitted from the `set_state`
+    ///   enable set.
+    /// * `cmSelectWindowNum` matching `number` → `select()` — **deferred to 33d-2.**
     ///   The blocker is the missing select machinery (`select()`/`canMoveFocus`),
     ///   not a payload story: the window number is an *integer* argument (not a
     ///   `ViewId`), so the `Broadcast` `source` substrate does not serve it. Alt-N
@@ -386,12 +605,79 @@ impl View for Window {
             self.zoom(ctx);
             ev.clear();
         }
+        // `cmClose` — faithful to `TWindow::handleEvent`'s cmClose case +
+        // `TWindow::close`. **No target guard** (`infoPtr == 0 || == this`): Phase A
+        // proved it vacuous — the frame posts `cmClose` only while `sfActive`, and
+        // `Event::Command` is focused-routed to the desktop's `current` (= active)
+        // window, so a `cmClose` always reaches exactly its target (the same
+        // trip-wire `cmZoom` documents above; revisit only if a future emitter
+        // targets a non-active window via a command). Modal teardown (the
+        // `sfModal → cmCancel` branch) is wired here but row 34 owns the machinery.
+        if let Event::Command(c) = *ev
+            && c == Command::CLOSE
+            && self.flags.close
+        {
+            ev.clear(); // C++ clears first.
+            if self.group.state().state.modal {
+                // sfModal: re-issue as cmCancel (row 34 owns modal teardown).
+                ctx.post(Command::CANCEL);
+            } else if self.valid(Command::CLOSE) {
+                // close(): if valid(cmClose). The loop drains the request and runs
+                // `remove_descendant` (the close-removal channel, replacing the old
+                // "needs a close-removal channel" breadcrumb).
+                if let Some(id) = self.group.state().id() {
+                    ctx.request_close(id);
+                }
+            }
+        }
         if let Event::KeyDown(k) = *ev
             && k.key == Key::Tab
         {
             // C++ kbTab → focusNext(False); kbShiftTab → focusNext(True).
             self.group.focus_next(k.modifiers.shift, ctx);
             ev.clear();
+        }
+        // Drag detection — the D9 replacement for `TFrame::dragWindow` →
+        // `dragView`'s mouse loop. Runs AFTER group delegation: the desktop
+        // delivered this `MouseDown` to the window in window-local coords; the
+        // group routed it positionally to the frame, which leaves a title-bar /
+        // bottom-corner click UNCONSUMED (a close/zoom-icon click → Nothing, an
+        // interior-child click consumed there). So a still-live `MouseDown` here is
+        // a drag spot, its position window-local. An inactive window never reaches
+        // here on its first click (the desktop's positional auto-select consumes
+        // the selecting click), so the drag only ever starts on the active window —
+        // no `sfActive` re-check needed (faithful). The geometry replicates
+        // `TFrame::handleEvent`.
+        if let Event::MouseDown(m) = *ev {
+            let w = self.group.state().size.x;
+            let h = self.group.state().size.y;
+            let pos = m.position;
+            let kind = if m.buttons.middle
+                && self.flags.r#move
+                && pos.x > 0
+                && pos.x < w - 1
+                && pos.y > 0
+                && pos.y < h - 1
+            {
+                // Middle-button interior move (mutually exclusive by geometry with
+                // the title/corner cases; C++ orders it last, the branches do not
+                // overlap so any order is equivalent).
+                Some(DragKind::Move)
+            } else if pos.y == 0 && self.flags.r#move {
+                Some(DragKind::Move) // title-bar move
+            } else if pos.y >= h - 1 && self.flags.grow && pos.x >= w - 2 {
+                Some(DragKind::Grow) // bottom-right grow
+            } else if pos.y >= h - 1 && self.flags.grow && pos.x <= 1 {
+                Some(DragKind::GrowLeft) // bottom-left grow
+            } else {
+                None
+            };
+            if let Some(kind) = kind
+                && let Some(id) = self.group.state().id()
+            {
+                self.start_drag(id, kind, m.position, ctx);
+                ev.clear();
+            }
         }
     }
 
@@ -415,25 +701,31 @@ impl View for Window {
     /// **DIVERGENCE from C++ (the spec reviewer will check this):** C++
     /// `TWindow::setState` enables the **full set** `{cmNext, cmPrev, cmResize if
     /// (grow|move), cmClose if close, cmZoom if zoom}` atomically on `sfSelected`.
-    /// 33c enables **only `cmZoom`** — the one command whose handler now exists.
-    /// Enabling a command whose handler is absent would be an *inert* command (the
-    /// pump would route it to a window that ignores it, or filter it) — a worse
-    /// state than leaving it disabled. This is the documented "enable only commands
-    /// whose handlers exist" staging; the rest land in 33d / row 34 with their
-    /// handlers.
-    ///   33c: cmZoom (handler in [`handle_event`](Self::handle_event)).
-    ///   TODO(33d): cmResize (if grow|move), cmClose (if close), cmNext, cmPrev.
+    /// We enable only the **subset whose handlers exist** ("enable only commands
+    /// whose handlers exist" staging; enabling an inert command — routed to a window
+    /// that ignores it, or filtered — is a worse state than leaving it disabled):
+    ///   33c: cmZoom (if `wfZoom`; handler in [`handle_event`](Self::handle_event)).
+    ///   33d-1: cmClose (if `wfClose`; handler in `handle_event`).
+    ///   DEFERRED to 33d-2: cmNext, cmPrev (need the TDeskTop handler).
+    ///   DEFERRED (no handler): cmResize (the keyboard resize sub-mode).
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
         self.group.set_state(flag, enable, ctx);
         if flag == StateFlag::Selected {
             self.group.set_state(StateFlag::Active, enable, ctx);
-            if self.flags.zoom {
-                if enable {
-                    ctx.enable_command(Command::ZOOM);
-                } else {
-                    ctx.disable_command(Command::ZOOM);
+            // Window commands enabled/disabled together while selected (C++
+            // enableCommands). 33d-1 subset: cmClose (if wfClose), cmZoom (if
+            // wfZoom) — both handled in handle_event.
+            let mut toggle = |cmd: Command, cond: bool| {
+                if cond {
+                    if enable {
+                        ctx.enable_command(cmd);
+                    } else {
+                        ctx.disable_command(cmd);
+                    }
                 }
-            }
+            };
+            toggle(Command::CLOSE, self.flags.close);
+            toggle(Command::ZOOM, self.flags.zoom);
         }
     }
 
@@ -504,7 +796,15 @@ mod tests {
     ) -> R {
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = Vec::new();
         let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
-        let mut ctx = Context::new(out, timers, 0, &mut pending, &mut cmd_changes);
+        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
+        let mut ctx = Context::new(
+            out,
+            timers,
+            0,
+            &mut pending,
+            &mut cmd_changes,
+            &mut tree_ops,
+        );
         f(&mut ctx)
     }
 
@@ -804,35 +1104,59 @@ mod tests {
         insta::assert_snapshot!(screen.snapshot());
     }
 
-    // -- 8. setState enables/disables cmZoom (33a channel) --------------------
+    // -- 8. setState enables/disables cmZoom + cmClose (33a channel) ----------
 
-    /// Selecting a `wfZoom` window queues `(Command::ZOOM, true)` on the
-    /// command-change channel; deselecting queues `(Command::ZOOM, false)`.
+    /// Selecting a `wfZoom`/`wfClose` window queues `(Command::ZOOM, true)` and
+    /// `(Command::CLOSE, true)` on the command-change channel; deselecting queues
+    /// the matching `false` pairs (33d-1 added cmClose alongside cmZoom).
     #[test]
-    fn set_state_select_enables_and_disables_cm_zoom() {
-        let mut w = window_with_frame(); // flags.zoom = true
+    fn set_state_select_enables_and_disables_cm_zoom_and_close() {
+        let mut w = window_with_frame(); // flags.zoom = true, flags.close = true
         let mut out = VecDeque::new();
         let mut timers = TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = Vec::new();
         let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
+        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
 
         {
-            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+            let mut ctx = Context::new(
+                &mut out,
+                &mut timers,
+                0,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             View::set_state(&mut w, StateFlag::Selected, true, &mut ctx);
         }
         assert!(
             cmd_changes.contains(&(Command::ZOOM, true)),
             "select enables cmZoom"
         );
+        assert!(
+            cmd_changes.contains(&(Command::CLOSE, true)),
+            "select enables cmClose"
+        );
 
         cmd_changes.clear();
         {
-            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+            let mut ctx = Context::new(
+                &mut out,
+                &mut timers,
+                0,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             View::set_state(&mut w, StateFlag::Selected, false, &mut ctx);
         }
         assert!(
             cmd_changes.contains(&(Command::ZOOM, false)),
             "deselect disables cmZoom"
+        );
+        assert!(
+            cmd_changes.contains(&(Command::CLOSE, false)),
+            "deselect disables cmClose"
         );
     }
 
@@ -859,19 +1183,34 @@ mod tests {
         let mut timers = TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = Vec::new();
         let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
+        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
 
         // Select the window (realism: the desktop would have it selected) and feed
         // a cmZoom directly. owner_size is set on the ctx (the desktop's job): the
         // group.handle_event inside Window restores owner_size to this value, so by
         // the time the cmZoom arm runs zoom(), owner_size == desktop_size.
         {
-            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+            let mut ctx = Context::new(
+                &mut out,
+                &mut timers,
+                0,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             View::set_state(&mut w, StateFlag::Selected, true, &mut ctx);
         }
 
         // First zoom: fill the owner.
         {
-            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+            let mut ctx = Context::new(
+                &mut out,
+                &mut timers,
+                0,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             ctx.set_owner_size(desktop_size);
             let mut ev = Event::Command(Command::ZOOM);
             w.handle_event(&mut ev, &mut ctx);
@@ -891,7 +1230,14 @@ mod tests {
 
         // Second zoom (toggle): restore.
         {
-            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+            let mut ctx = Context::new(
+                &mut out,
+                &mut timers,
+                0,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             ctx.set_owner_size(desktop_size);
             let mut ev = Event::Command(Command::ZOOM);
             w.handle_event(&mut ev, &mut ctx);
@@ -933,8 +1279,16 @@ mod tests {
         let mut timers = TimerQueue::new();
         let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = Vec::new();
         let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
+        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
         {
-            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+            let mut ctx = Context::new(
+                &mut out,
+                &mut timers,
+                0,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             View::set_state(&mut w, StateFlag::Selected, true, &mut ctx);
         }
 
@@ -943,7 +1297,14 @@ mod tests {
 
         // Zoom to fill the screen.
         {
-            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+            let mut ctx = Context::new(
+                &mut out,
+                &mut timers,
+                0,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             ctx.set_owner_size(screen);
             let mut ev = Event::Command(Command::ZOOM);
             w.handle_event(&mut ev, &mut ctx);
@@ -980,5 +1341,178 @@ mod tests {
             theme.style(Role::FrameActive),
             "active border style"
         );
+    }
+
+    // -- 11. drag-start detection (33d-1, unit; no pump) ----------------------
+
+    use crate::event::{MouseButtons, MouseEvent};
+
+    /// A left-button `MouseDown` at window-local `(x, y)`.
+    fn mouse_down_local(x: i32, y: i32) -> Event {
+        Event::MouseDown(MouseEvent {
+            position: Point::new(x, y),
+            buttons: MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+
+    /// A middle-button `MouseDown` at window-local `(x, y)`.
+    fn mouse_down_middle(x: i32, y: i32) -> Event {
+        Event::MouseDown(MouseEvent {
+            position: Point::new(x, y),
+            buttons: MouseButtons {
+                middle: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+
+    /// Insert a fresh `Window` into a throwaway parent `Group` so it gets its
+    /// `ViewId` stamped (the substrate stamps the id at `Group::insert`, NOT at
+    /// `Window::new`; `start_drag`'s `self.group.state().id()` is `None` otherwise).
+    /// Returns the parent group (owning the window) + the window's id.
+    fn window_in_group(bounds: Rect) -> (Group, ViewId) {
+        let mut parent = Group::new(Rect::new(0, 0, 80, 25));
+        let w = Window::new(bounds, Some("Edit".into()), 1);
+        let id = parent.insert(Box::new(w));
+        (parent, id)
+    }
+
+    /// Helper: build a `Context`, call `handle_event` on the window resolved by
+    /// `id` inside `parent`, and report (event-consumed, pending-capture-count).
+    fn drive_window(
+        parent: &mut Group,
+        id: ViewId,
+        ev: &mut Event,
+        owner_size: Point,
+    ) -> (bool, usize) {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = Vec::new();
+        let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
+        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
+        {
+            let mut ctx = Context::new(
+                &mut out,
+                &mut timers,
+                0,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
+            ctx.set_owner_size(owner_size);
+            let win = parent.find_mut(id).expect("window resolves");
+            win.handle_event(ev, &mut ctx);
+        }
+        (ev.is_nothing(), pending.len())
+    }
+
+    /// A title-bar `MouseDown` (window-local `y == 0`) starts a Move drag: the
+    /// window's `dragging` goes true, the event is consumed, and one capture is
+    /// queued in the local `pending` Vec.
+    #[test]
+    fn title_bar_mouse_down_starts_move_drag() {
+        let (mut parent, id) = window_in_group(Rect::new(2, 1, 22, 9)); // 20x8
+        let mut ev = mouse_down_local(6, 0); // title bar, away from icons
+        let (consumed, pending_len) = drive_window(&mut parent, id, &mut ev, Point::new(80, 25));
+        assert!(consumed, "drag-start consumes the MouseDown");
+        assert_eq!(pending_len, 1, "one DragCapture queued");
+        assert!(
+            parent.find_mut(id).unwrap().state().state.dragging,
+            "sfDragging set on the window"
+        );
+    }
+
+    /// A bottom-right corner `MouseDown` (`wfGrow`) starts a Grow; a bottom-left
+    /// corner starts a GrowLeft; both consume + queue one capture.
+    #[test]
+    fn bottom_corner_mouse_down_starts_grow() {
+        // Bottom-right: window-local (w-1, h-1).
+        let (mut parent, id) = window_in_group(Rect::new(2, 1, 22, 9)); // 20x8
+        let mut ev = mouse_down_local(19, 7);
+        let (consumed, n) = drive_window(&mut parent, id, &mut ev, Point::new(80, 25));
+        assert!(consumed && n == 1, "bottom-right starts a grow drag");
+        assert!(parent.find_mut(id).unwrap().state().state.dragging);
+
+        // Bottom-left: window-local (0, h-1).
+        let (mut parent2, id2) = window_in_group(Rect::new(2, 1, 22, 9));
+        let mut ev2 = mouse_down_local(0, 7);
+        let (consumed2, n2) = drive_window(&mut parent2, id2, &mut ev2, Point::new(80, 25));
+        assert!(consumed2 && n2 == 1, "bottom-left starts a grow-left drag");
+        assert!(parent2.find_mut(id2).unwrap().state().state.dragging);
+    }
+
+    /// An interior non-edge left click starts no drag (and reaches no drag spot):
+    /// nothing is queued and `dragging` stays false.
+    #[test]
+    fn interior_mouse_down_starts_no_drag() {
+        let (mut parent, id) = window_in_group(Rect::new(2, 1, 22, 9)); // 20x8
+        let mut ev = mouse_down_local(8, 4); // interior, not title/corner
+        let (_consumed, n) = drive_window(&mut parent, id, &mut ev, Point::new(80, 25));
+        assert_eq!(n, 0, "no DragCapture queued for an interior click");
+        assert!(
+            !parent.find_mut(id).unwrap().state().state.dragging,
+            "interior click does not start a drag"
+        );
+    }
+
+    /// A middle-button interior `MouseDown` (`wfMove`) starts a Move drag.
+    #[test]
+    fn middle_button_interior_starts_move_drag() {
+        let (mut parent, id) = window_in_group(Rect::new(2, 1, 22, 9)); // 20x8
+        let mut ev = mouse_down_middle(8, 4);
+        let (consumed, n) = drive_window(&mut parent, id, &mut ev, Point::new(80, 25));
+        assert!(
+            consumed && n == 1,
+            "middle-button interior starts a move drag"
+        );
+        assert!(parent.find_mut(id).unwrap().state().state.dragging);
+    }
+
+    // -- 12. move_grow unit tests (pure fn) -----------------------------------
+
+    /// `move_grow` must use `min(max())`, NOT `clamp()`. The classic TV inversion
+    /// is the owner SMALLER than the window's minimum size (`min > max`): then the
+    /// size clamp is `s.x.max(16).min(10)` = `clamp(16, 10)`, which **panics** with
+    /// `i32::clamp` (lo > hi) but yields `hi` (= max) with `min(max())`. This test
+    /// would fail (panic) if someone "simplified" the correct min/max into clamp().
+    #[test]
+    fn move_grow_oversized_min_uses_min_max_not_clamp() {
+        let limits = Rect::new(0, 0, 20, 10);
+        let min = Point::new(16, 6); // window minimum
+        let max = Point::new(10, 4); // owner SMALLER than the window minimum (inverted)
+        let mode = DragMode {
+            limit_lo_y: true,
+            ..Default::default()
+        };
+        // Reaching the assert at all proves no panic; the size clamps to `hi` (=max)
+        // per "min(max()) yields hi when lo>hi".
+        let r = move_grow(Point::new(0, 0), Point::new(20, 20), limits, min, max, mode);
+        let sz = r.b - r.a;
+        assert_eq!(
+            sz,
+            Point::new(10, 4),
+            "size clamps to max (hi) when min>max, via min(max()) not clamp()"
+        );
+    }
+
+    /// An ordinary in-range move: a small window inside a roomy limit, no
+    /// dmLimitHi bits, lands where requested (after the general [a-s+1, b-1] band,
+    /// which a centrally-placed window is well inside).
+    #[test]
+    fn move_grow_in_range_move() {
+        let limits = Rect::new(0, 0, 80, 25);
+        let min = Point::new(16, 6);
+        let max = Point::new(80, 25);
+        let mode = DragMode {
+            limit_lo_y: true,
+            ..Default::default()
+        };
+        let r = move_grow(Point::new(10, 5), Point::new(20, 8), limits, min, max, mode);
+        assert_eq!(r, Rect::new(10, 5, 30, 13), "in-range move passes through");
     }
 }

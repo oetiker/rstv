@@ -202,10 +202,18 @@ mod tests {
         let mut timers = TimerQueue::new();
         let mut pending: Vec<Box<dyn CaptureHandler>> = Vec::new();
         let mut cmd_changes: Vec<(crate::command::Command, bool)> = Vec::new();
+        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
         let mut ev = key_event(Key::Enter);
 
         let consumed = {
-            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+            let mut ctx = Context::new(
+                &mut out,
+                &mut timers,
+                0,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             stack.dispatch(&mut ev, &mut ctx)
         };
         for h in pending.drain(..) {
@@ -241,10 +249,18 @@ mod tests {
         let mut timers = TimerQueue::new();
         let mut pending: Vec<Box<dyn CaptureHandler>> = Vec::new();
         let mut cmd_changes: Vec<(crate::command::Command, bool)> = Vec::new();
+        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
         let mut ev = key_event(Key::Esc);
 
         let consumed = {
-            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+            let mut ctx = Context::new(
+                &mut out,
+                &mut timers,
+                0,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             stack.dispatch(&mut ev, &mut ctx)
         };
         for h in pending.drain(..) {
@@ -275,11 +291,19 @@ mod tests {
         let mut timers = TimerQueue::new();
         let mut pending: Vec<Box<dyn CaptureHandler>> = Vec::new();
         let mut cmd_changes: Vec<(crate::command::Command, bool)> = Vec::new();
+        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
 
         // First event: consumed-and-popped.
         let mut ev1 = key_event(Key::Enter);
         let consumed1 = {
-            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+            let mut ctx = Context::new(
+                &mut out,
+                &mut timers,
+                0,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             stack.dispatch(&mut ev1, &mut ctx)
         };
         for h in pending.drain(..) {
@@ -292,7 +316,14 @@ mod tests {
         // Second event: the popped handler must not see it (stack empty -> false).
         let mut ev2 = key_event(Key::Esc);
         let consumed2 = {
-            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+            let mut ctx = Context::new(
+                &mut out,
+                &mut timers,
+                0,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             stack.dispatch(&mut ev2, &mut ctx)
         };
         for h in pending.drain(..) {
@@ -315,6 +346,7 @@ mod tests {
         let mut timers = TimerQueue::new();
         let mut pending: Vec<Box<dyn CaptureHandler>> = Vec::new();
         let mut cmd_changes: Vec<(crate::command::Command, bool)> = Vec::new();
+        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
 
         let pushed_log = Rc::new(RefCell::new(Vec::new()));
 
@@ -331,8 +363,14 @@ mod tests {
         // those side effects landed in the loop-owned state afterward.
         let mut ev1 = key_event(Key::Char('a'));
         let consumed1 = {
-            let mut ctx =
-                Context::new(&mut out, &mut timers, 1_000, &mut pending, &mut cmd_changes);
+            let mut ctx = Context::new(
+                &mut out,
+                &mut timers,
+                1_000,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             assert_eq!(ctx.now_ms(), 1_000);
             stack.dispatch(&mut ev1, &mut ctx)
         };
@@ -367,8 +405,14 @@ mod tests {
         // -- Event 2: the nested handler (top of stack) now sees it. --------
         let mut ev2 = key_event(Key::Char('b'));
         let consumed2 = {
-            let mut ctx =
-                Context::new(&mut out, &mut timers, 1_050, &mut pending, &mut cmd_changes);
+            let mut ctx = Context::new(
+                &mut out,
+                &mut timers,
+                1_050,
+                &mut pending,
+                &mut cmd_changes,
+                &mut tree_ops,
+            );
             stack.dispatch(&mut ev2, &mut ctx)
         };
         for h in pending.drain(..) {
