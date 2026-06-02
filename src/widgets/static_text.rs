@@ -28,9 +28,11 @@
 //!   ETX (0x03) are single-byte ASCII — only `text::next` is used to advance
 //!   through non-ASCII runs.
 
+use crate::command::Command;
+use crate::event::Event;
 use crate::text;
 use crate::theme::Role;
-use crate::view::{DrawCtx, GrowMode, Rect, View, ViewState};
+use crate::view::{Context, DrawCtx, GrowMode, Point, Rect, StateFlag, View, ViewId, ViewState};
 
 // ---------------------------------------------------------------------------
 // StaticText
@@ -220,6 +222,146 @@ impl View for StaticText {
             }
             // Rows beyond text are already filled with spaces (done above).
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ParamText
+// ---------------------------------------------------------------------------
+
+/// `TParamText` — a dynamic-text variant of [`StaticText`] whose content is
+/// replaced at run time (D2 embed-and-delegate).
+///
+/// ## C++ lineage
+///
+/// `TParamText` subclasses `TStaticText`, overriding only `getText` /
+/// `getTextLen` / `setText` to supply a 256-byte mutable `char*` buffer filled
+/// by `vsnprintf`. Everything else — `draw`, event routing, grow mode — is
+/// unchanged from `TStaticText`.
+///
+/// ## D-rules applied
+///
+/// - **D2**: embed `StaticText` as `inner`; delegate ALL `View` trait methods.
+///   A single `ViewState` lives inside `inner`; no second `ViewState` on
+///   `ParamText` (that would silently break id-stamping at `Group::insert` and
+///   the focus-broadcast `source` lookup).
+/// - **D12**: no `TStreamable` (`read`/`write`/`build` dropped).
+///
+/// ## `printf` → `format!` deviation
+///
+/// C++ `setText(const char* fmt, ...)` formats via `vsnprintf` into a 256-byte
+/// stack buffer. Rust has no C varargs. The idiomatic translation moves
+/// formatting to the call site (`format!("{}", x)` / `format!("...")`) and lets
+/// `set_text` accept the already-formatted `String`. The 256-byte cap does
+/// **not** carry over — `ParamText` holds a `String` with no length limit.
+/// Document call sites with `format!` where the C++ would have used `setText`
+/// with format arguments.
+///
+/// ## `text_len` byte semantics
+///
+/// `getTextLen` returns `strlen(str)`, which is a **byte count**. `text_len`
+/// mirrors this with `.len()` on the inner `String`. For all-ASCII content (the
+/// common case in dialog labels) this is identical; for multi-byte UTF-8
+/// graphemes the byte count diverges from the display-column count — but that
+/// matches the C++ `strlen` behaviour.
+pub struct ParamText {
+    /// The delegated `StaticText` — its `state: ViewState` is the one true home
+    /// for all view metadata. All `View` methods forward here.
+    inner: StaticText,
+}
+
+impl ParamText {
+    /// `TParamText::TParamText(bounds)` — construct with empty text.
+    ///
+    /// Faithful to the C++ ctor: `TStaticText(bounds, 0)` with `str[0] = EOS`.
+    /// The fixed grow mode and non-selectable options come from `StaticText::new`.
+    pub fn new(bounds: Rect) -> Self {
+        ParamText {
+            inner: StaticText::new(bounds, ""),
+        }
+    }
+
+    /// Set (or replace) the displayed text — the Rust equivalent of C++
+    /// `setText(const char* fmt, ...)`.
+    ///
+    /// The C++ uses `vsnprintf` into a 256-byte buffer; here, formatting is the
+    /// caller's responsibility via `format!(…)`. The view will pick up the new
+    /// text on the next render pass (D8 whole-tree repaint).
+    pub fn set_text(&mut self, text: impl Into<String>) {
+        self.inner.set_text(text);
+    }
+
+    /// `TParamText::getTextLen` — byte length of the current text (`strlen`
+    /// equivalent). See the struct-level note on byte vs. display-column
+    /// semantics.
+    pub fn text_len(&self) -> usize {
+        self.inner.text().len()
+    }
+}
+
+// NOTE(delegation): this hand-written full-`View` forward duplicates the body
+// `cluster_wrapper!` generates (field `inner` vs `cluster`). If a third embed
+// wrapper appears, promote that macro to a shared `delegate_view!(Ty, field)` so
+// a new trait method need only be added once.
+impl View for ParamText {
+    fn state(&self) -> &ViewState {
+        self.inner.state()
+    }
+
+    fn state_mut(&mut self) -> &mut ViewState {
+        self.inner.state_mut()
+    }
+
+    fn draw(&mut self, ctx: &mut DrawCtx) {
+        self.inner.draw(ctx)
+    }
+
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
+        self.inner.handle_event(ev, ctx)
+    }
+
+    fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
+        self.inner.set_state(flag, enable, ctx)
+    }
+
+    fn valid(&self, cmd: Command) -> bool {
+        self.inner.valid(cmd)
+    }
+
+    fn awaken(&mut self) {
+        self.inner.awaken()
+    }
+
+    fn size_limits(&self, owner_size: Point) -> (Point, Point) {
+        self.inner.size_limits(owner_size)
+    }
+
+    fn calc_bounds(&mut self, owner_size: Point, delta: Point) -> Rect {
+        self.inner.calc_bounds(owner_size, delta)
+    }
+
+    fn change_bounds(&mut self, bounds: Rect) {
+        self.inner.change_bounds(bounds)
+    }
+
+    fn cursor_request(&self) -> Option<Point> {
+        self.inner.cursor_request()
+    }
+
+    fn find_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
+        self.inner.find_mut(id)
+    }
+
+    fn remove_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
+        self.inner.remove_descendant(id, ctx)
+    }
+
+    fn number(&self) -> Option<i16> {
+        self.inner.number()
+    }
+
+    fn select_window_num(&mut self, num: i16, ctx: &mut Context) -> bool {
+        self.inner.select_window_num(num, ctx)
     }
 }
 
@@ -421,6 +563,91 @@ mod tests {
             let b = st.state.get_bounds();
             let mut dc = DrawCtx::new(buf, &theme, b, b.a);
             st.draw(&mut dc);
+        });
+        insta::assert_snapshot!(screen.snapshot());
+    }
+
+    // -- ParamText unit tests -------------------------------------------------
+
+    /// Helper: render a `ParamText` into a headless backend and return the
+    /// snapshot string. Mirrors `render_static_text` for the inherited draw.
+    fn render_param_text(bounds: Rect, text: &str, buf_w: u16, buf_h: u16) -> String {
+        let theme = Theme::classic_blue();
+        let mut pt = ParamText::new(bounds);
+        pt.set_text(text);
+        let (backend, screen) = HeadlessBackend::new(buf_w, buf_h);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let b = pt.state().get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, b, b.a);
+            pt.draw(&mut dc);
+        });
+        screen.snapshot()
+    }
+
+    /// `new` starts with empty text — `text_len` is 0 and the rendered view
+    /// shows only fill spaces.
+    #[test]
+    fn param_text_new_starts_empty() {
+        let pt = ParamText::new(Rect::new(0, 0, 6, 1));
+        assert_eq!(pt.text_len(), 0, "new ParamText must be empty");
+    }
+
+    /// `set_text("Hello")` replaces the content; the rendered output shows it.
+    #[test]
+    fn param_text_set_text_shows_in_render() {
+        let snap = render_param_text(Rect::new(0, 0, 10, 1), "Hello", 10, 1);
+        let rows = text_rows(&snap);
+        assert_eq!(rows.len(), 1);
+        assert!(
+            rows[0].starts_with("Hello"),
+            "rendered text must start with 'Hello', got: {:?}",
+            rows[0]
+        );
+    }
+
+    /// `set_text` called twice: the second call replaces the first.
+    #[test]
+    fn param_text_set_text_replaces_previous() {
+        let mut pt = ParamText::new(Rect::new(0, 0, 10, 1));
+        pt.set_text("First");
+        assert_eq!(pt.text_len(), 5);
+        pt.set_text("Second");
+        // "Second" has 6 bytes; "First" must be gone.
+        assert_eq!(pt.text_len(), 6, "second set_text must replace first");
+        assert_eq!(pt.inner.text(), "Second");
+    }
+
+    /// `text_len` reflects byte length of the current text (faithful to C++
+    /// `strlen`). ASCII strings: byte count == char count.
+    #[test]
+    fn param_text_text_len_reflects_current_text() {
+        let mut pt = ParamText::new(Rect::new(0, 0, 20, 1));
+        assert_eq!(pt.text_len(), 0, "empty after new");
+        pt.set_text("Hello");
+        assert_eq!(pt.text_len(), 5, "5 bytes for 'Hello'");
+        pt.set_text("");
+        assert_eq!(pt.text_len(), 0, "0 bytes after clearing");
+        // Verify format!-at-call-site pattern (the printf→format! deviation).
+        let n = 42;
+        pt.set_text(format!("Item {n}"));
+        assert_eq!(pt.text_len(), 7, "7 bytes for 'Item 42'");
+    }
+
+    /// Snapshot: inherited word-wrap on a set string. Demonstrates that
+    /// `ParamText` reuses `StaticText::draw` (the text wraps exactly as if it
+    /// were constructed with `StaticText::new`).
+    #[test]
+    fn snapshot_param_text_word_wrap() {
+        let theme = Theme::classic_blue();
+        let mut pt = ParamText::new(Rect::new(0, 0, 12, 3));
+        pt.set_text("hello world foo");
+        let (backend, screen) = HeadlessBackend::new(12, 3);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let b = pt.state().get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, b, b.a);
+            pt.draw(&mut dc);
         });
         insta::assert_snapshot!(screen.snapshot());
     }

@@ -9,9 +9,11 @@
 //! [`Context`]: crate::view::Context
 
 mod cluster;
+mod indicator;
 mod scrollbar;
 mod static_text;
 
 pub use cluster::{CheckBoxes, Cluster, ClusterKind, MultiCheckBoxes, RadioButtons};
+pub use indicator::Indicator;
 pub use scrollbar::ScrollBar;
-pub use static_text::StaticText;
+pub use static_text::{ParamText, StaticText};

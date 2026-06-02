@@ -1,0 +1,13 @@
+---
+source: src/widgets/indicator.rs
+expression: screen.snapshot()
+---
+size: 16x1
+cursor: hidden
+text:
+|══════ 3:5 ═════|
+attr:
+|aaaaaaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(0) bg=BIOS(3)

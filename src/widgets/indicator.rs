@@ -1,0 +1,340 @@
+//! `TIndicator` — faithful Rust port of `tindictr.cpp` (row 45, MECHANICAL).
+//!
+//! `TIndicator` displays the current cursor position (row:col) of an editor
+//! in a fixed 1-row strip. It is owned by the editor (`TEditor`, Batch B)
+//! and updated by that owner through [`Indicator::set_value`].
+//!
+//! ## Palette (cpIndicator `"\x02\x03"`)
+//!
+//! - Index 1 (not dragging): `Role::IndicatorNormal`
+//! - Index 2 (dragging):     `Role::IndicatorDragging`
+//!
+//! ## Glyph convention (D7, row 9)
+//!
+//! Glyphs come from `ctx.glyphs()`:
+//! - `indicator_frame_normal`  (`═` U+2550) — fill char when **not** dragging
+//!   (faithful to C++ `dragFrame = '\xCD'`; the field name is inverted in C++).
+//! - `indicator_frame_dragging` (`─` U+2500) — fill char **while** dragging
+//!   (C++ `normalFrame = '\xC4'`).
+//! - `indicator_modified` (`☼` U+263C, char 15) — the "buffer modified" marker.
+//!
+//! ## Colon alignment
+//!
+//! C++ places the position string so that the `:` character lands at column 8:
+//! ```text
+//! b.moveStr(8 - int(strchr(s, ':') - s), s, color);
+//! ```
+//! We build `s = format!(" {}:{} ", location.y+1, location.x+1)` (y before x,
+//! faithful to the C++ stream order), find the byte index of `':'` in `s`
+//! (always the ASCII colon, so byte index == column index since everything
+//! before it is ASCII), and start drawing at `start_col = 8 - colon_col`.
+//!
+//! The string is `" {row}:{col} "`, so the colon sits at byte index
+//! `1 + digits(row)` and `start_col = 8 - colon_col = 7 - digits(row)`. It only
+//! goes negative once the displayed row number has **8 or more digits** (row ≥
+//! 10,000,000) — unreachable in a real editor, but handled: [`DrawCtx::put_str`]
+//! skips the off-screen prefix via its `text_indent` path (no panic). (This
+//! differs from C++ `moveStr`, whose `ushort` indent would instead wrap a
+//! negative offset to a huge value and write off the *right* edge — a harmless
+//! divergence past column 8.)
+//!
+//! ## No event handling
+//!
+//! `TIndicator::handleEvent` is not overridden in the C++; the base no-op
+//! suffices. No `set_state` override needed (D8: `drawView` is a no-op;
+//! `sfDragging` is read live from `self.state.state.dragging` each frame).
+//!
+//! ## Deferrals
+//!
+//! - `TStreamable` dropped (D12).
+
+use crate::theme::Role;
+use crate::view::{DrawCtx, GrowMode, Point, Rect, View, ViewState};
+
+// ---------------------------------------------------------------------------
+// Indicator
+// ---------------------------------------------------------------------------
+
+/// `TIndicator` — row/column position display for an editor.
+///
+/// Embed pattern: `state: ViewState`, `impl View`, draw through `DrawCtx`.
+/// Owner pushes updates via [`set_value`](Self::set_value); the whole-tree
+/// redraw (D8) then reads the updated fields.
+pub struct Indicator {
+    /// View state (geometry, flags, etc.) — the D2 composition target.
+    pub state: ViewState,
+    /// Current cursor position. `(0, 0)` when constructed.
+    ///
+    /// `y` = zero-based row, `x` = zero-based column; displayed 1-based.
+    pub location: Point,
+    /// Whether the buffer has unsaved changes.
+    pub modified: bool,
+}
+
+impl Indicator {
+    /// Construct an indicator from `bounds`.
+    ///
+    /// Faithful to `TIndicator::TIndicator(bounds)`:
+    /// - `location = TPoint()` → `Point::new(0, 0)`
+    /// - `modified = False`
+    /// - `growMode = gfGrowLoY | gfGrowHiY`
+    /// - no `ofSelectable` (indicators are not interactive)
+    pub fn new(bounds: Rect) -> Self {
+        let mut state = ViewState::new(bounds);
+        state.grow_mode = GrowMode {
+            lo_y: true,
+            hi_y: true,
+            ..Default::default()
+        };
+        Indicator {
+            state,
+            location: Point::new(0, 0),
+            modified: false,
+        }
+    }
+
+    /// `TIndicator::setValue` — update the displayed position and modified flag.
+    ///
+    /// Faithful to C++: only updates fields (no broadcast). Under D8
+    /// `drawView()` is a no-op — the whole-tree redraw reads the new values
+    /// automatically on the next render pass.
+    ///
+    /// The C++ change-guard (`if location != aLocation || modified != aModified`)
+    /// is retained as a comment (behaviorally inert under D8; we set
+    /// unconditionally for simplicity, matching the spirit without the guard
+    /// since there is no costly side effect to skip).
+    pub fn set_value(&mut self, location: Point, modified: bool) {
+        self.location = location;
+        self.modified = modified;
+    }
+}
+
+impl View for Indicator {
+    fn state(&self) -> &ViewState {
+        &self.state
+    }
+
+    fn state_mut(&mut self) -> &mut ViewState {
+        &mut self.state
+    }
+
+    /// `TIndicator::draw` — paint the one-row position display.
+    ///
+    /// Draw order (faithful to C++):
+    /// 1. Fill row 0 with the frame char (`═` or `─`) in the current role.
+    /// 2. If `modified`, overwrite column 0 with `☼` in the same role.
+    /// 3. Draw the position string so that the `:` lands at column 8.
+    fn draw(&mut self, ctx: &mut DrawCtx) {
+        let glyphs = *ctx.glyphs();
+        let dragging = self.state.state.dragging;
+
+        // Faithful inversion: C++ draws `dragFrame` (═) when NOT dragging,
+        // and `normalFrame` (─) while dragging. Our glyph names follow the
+        // C++ semantics verbatim despite the inverted field names.
+        let (frame_ch, color) = if !dragging {
+            (
+                glyphs.indicator_frame_normal,
+                ctx.style(Role::IndicatorNormal),
+            )
+        } else {
+            (
+                glyphs.indicator_frame_dragging,
+                ctx.style(Role::IndicatorDragging),
+            )
+        };
+
+        // Step 1: fill the entire row with the frame character.
+        ctx.fill(Rect::new(0, 0, self.state.size.x, 1), frame_ch, color);
+
+        // Step 2: modified marker at column 0 (C++ `b.putChar(0, 15)`; char 15 = ☼).
+        if self.modified {
+            ctx.put_char(0, 0, glyphs.indicator_modified, color);
+        }
+
+        // Step 3: position string — " row:col " with ':' at column 8.
+        //
+        // C++: `os << ' ' << (location.y+1) << ':' << (location.x+1) << ' '`
+        // i.e. y (row) before x (col), one-based, space-padded on both sides.
+        let s = format!(" {}:{} ", self.location.y + 1, self.location.x + 1);
+        // The colon's byte offset equals its column index (ASCII prefix only).
+        let colon_col = s.find(':').expect("format string always contains ':'") as i32;
+        let start_col = 8 - colon_col;
+        // start_col can be negative for very large row numbers; put_str handles
+        // that via its text_indent path (skips off-screen prefix without panic).
+        ctx.put_str(start_col, 0, &s, color);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::{HeadlessBackend, Renderer};
+    use crate::screen::Buffer;
+    use crate::theme::Theme;
+    use crate::view::Point;
+
+    // -----------------------------------------------------------------------
+    // set_value
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn set_value_updates_location_and_modified() {
+        let mut ind = Indicator::new(Rect::new(0, 0, 20, 1));
+        assert_eq!(ind.location, Point::new(0, 0));
+        assert!(!ind.modified);
+
+        ind.set_value(Point::new(4, 2), true);
+        assert_eq!(ind.location, Point::new(4, 2));
+        assert!(ind.modified);
+
+        ind.set_value(Point::new(10, 99), false);
+        assert_eq!(ind.location, Point::new(10, 99));
+        assert!(!ind.modified);
+    }
+
+    #[test]
+    fn set_value_overwrites_previous() {
+        let mut ind = Indicator::new(Rect::new(0, 0, 20, 1));
+        ind.set_value(Point::new(1, 1), true);
+        ind.set_value(Point::new(7, 3), false);
+        assert_eq!(ind.location, Point::new(7, 3));
+        assert!(!ind.modified);
+    }
+
+    // -----------------------------------------------------------------------
+    // grow_mode
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn grow_mode_is_lo_y_and_hi_y() {
+        let ind = Indicator::new(Rect::new(0, 0, 20, 1));
+        assert!(ind.state.grow_mode.lo_y, "gfGrowLoY must be set");
+        assert!(ind.state.grow_mode.hi_y, "gfGrowHiY must be set");
+        assert!(!ind.state.grow_mode.lo_x);
+        assert!(!ind.state.grow_mode.hi_x);
+    }
+
+    // -----------------------------------------------------------------------
+    // Snapshot tests
+    // -----------------------------------------------------------------------
+
+    /// Normal state: location (x=4, y=2) → displays " 3:5 " with ':' at col 8.
+    /// Frame = ═ (indicator_frame_normal), role = IndicatorNormal.
+    #[test]
+    fn snapshot_normal() {
+        let theme = Theme::classic_blue();
+        let mut ind = Indicator::new(Rect::new(0, 0, 16, 1));
+        ind.set_value(Point::new(4, 2), false);
+
+        let (backend, screen) = HeadlessBackend::new(16, 1);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = ind.state.get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            ind.draw(&mut dc);
+        });
+        insta::assert_snapshot!(screen.snapshot());
+    }
+
+    /// Modified marker: same position but `modified = true` → ☼ at col 0.
+    #[test]
+    fn snapshot_modified() {
+        let theme = Theme::classic_blue();
+        let mut ind = Indicator::new(Rect::new(0, 0, 16, 1));
+        ind.set_value(Point::new(4, 2), true);
+
+        let (backend, screen) = HeadlessBackend::new(16, 1);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = ind.state.get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            ind.draw(&mut dc);
+        });
+        insta::assert_snapshot!(screen.snapshot());
+    }
+
+    /// Dragging state: `sfDragging` set → ─ frame + IndicatorDragging role.
+    #[test]
+    fn snapshot_dragging() {
+        let theme = Theme::classic_blue();
+        let mut ind = Indicator::new(Rect::new(0, 0, 16, 1));
+        ind.set_value(Point::new(4, 2), false);
+        // Set dragging directly — no ctx needed (D8: no side effects to propagate).
+        ind.state.state.dragging = true;
+
+        let (backend, screen) = HeadlessBackend::new(16, 1);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = ind.state.get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            ind.draw(&mut dc);
+        });
+        insta::assert_snapshot!(screen.snapshot());
+    }
+
+    /// Colon alignment check: location (x=0, y=0) → " 1:1 "
+    /// colon is at byte 2, so start_col = 8 - 2 = 6; ':' rendered at col 8.
+    #[test]
+    fn snapshot_colon_at_column_8_small_numbers() {
+        let theme = Theme::classic_blue();
+        let mut ind = Indicator::new(Rect::new(0, 0, 16, 1));
+        ind.set_value(Point::new(0, 0), false);
+
+        let (backend, screen) = HeadlessBackend::new(16, 1);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = ind.state.get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            ind.draw(&mut dc);
+        });
+        insta::assert_snapshot!(screen.snapshot());
+    }
+
+    /// Large row number: location (x=0, y=9999) → " 10000:1 "
+    /// colon at byte 6, start_col = 7 - 5 digits = 2; ':' at col 8. No panic.
+    #[test]
+    fn snapshot_large_row_number() {
+        let theme = Theme::classic_blue();
+        let mut ind = Indicator::new(Rect::new(0, 0, 16, 1));
+        ind.set_value(Point::new(0, 9999), false);
+
+        let (backend, screen) = HeadlessBackend::new(16, 1);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = ind.state.get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            ind.draw(&mut dc);
+        });
+        insta::assert_snapshot!(screen.snapshot());
+    }
+
+    /// Genuinely-negative `start_col`: an 8-digit displayed row (y=9_999_999 →
+    /// " 10000000:1 ", colon at byte 9, `start_col = 8 - 9 = -1`). Exercises
+    /// `DrawCtx::put_str`'s off-screen-prefix skip — must not panic, and the
+    /// leading space of the string is clipped off the left.
+    #[test]
+    fn negative_start_col_does_not_panic() {
+        let theme = Theme::classic_blue();
+        let mut ind = Indicator::new(Rect::new(0, 0, 16, 1));
+        ind.set_value(Point::new(0, 9_999_999), false);
+
+        let (backend, screen) = HeadlessBackend::new(16, 1);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = ind.state.get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            ind.draw(&mut dc);
+        });
+        // start_col = -1: the leading ' ' is clipped, so "10000000:1 " begins at
+        // col 0 and the colon lands at col 7 (was 8 before the left-clip).
+        let snap = screen.snapshot();
+        assert!(
+            snap.contains("10000000:1"),
+            "row string rendered, left-clipped"
+        );
+    }
+}
