@@ -323,10 +323,10 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
     *interactive* half of `TWindow`. **33d was split** at its natural seam (advisor
     call): 33d-1 = drag/close/setState; 33d-2 = selection (cmNext/cmPrev + Alt-N).
     The split kept 33c's "enable only handled commands" principle clean. Built:
-    (a) a **deferred tree-op channel** on `Context` — `TreeOp {ChangeBounds,
-    SetState, Close}` + `request_bounds`/`request_set_state`/`request_close`, the
-    **3rd member** of the deferred-channel family (`pending_captures`/
-    `command_changes`/`pending_tree_ops`); the pump drains+applies it after dispatch
+    (a) a **deferred tree-op channel** on `Context` —
+    `request_bounds`/`request_set_state`/`request_close` (shipped as a `TreeOp`
+    enum + 3rd parallel channel, since **unified into one `Deferred` queue** by
+    `69897fe`, see below); the pump drains+applies it after dispatch
     against the root via `find_mut`/`change_bounds`, `find_mut`/`set_state`,
     `remove_descendant` (drain-to-local-then-rebuild-ctx, the row-31 destructure
     discipline). (b) **Drag = a `DragCapture` capture handler** (D9, replaces
@@ -346,6 +346,22 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
     close.md`. Two-stage reviewed (SPEC-PASS after strengthening a vacuous
     `dmLimitLoY` clamp test; QUALITY-PASS). 278 unit + 3 integration + 1 doctest
     green; clippy/fmt clean. Working tree clean.
+  - **Refactor — unified `Deferred` channel DONE (`69897fe`)** — the three
+    post-dispatch deferred channels (`pending_captures`/`command_changes`/
+    `pending_tree_ops`) were one concept grown as three parallel structures: *an
+    effect on loop-owned state a downward-borrowed view can't perform inline* (the
+    tree is a live `&mut` borrow stack during dispatch). Collapsed into a single
+    **`Deferred {PushCapture, EnableCommand, DisableCommand, ChangeBounds,
+    SetState, Close}`** enum + one `deferred: Vec<Deferred>` queue (`TreeOp`
+    removed). **`Context::new` is now 4 params** `(out_events, timers, now_ms,
+    deferred)`; the request methods push variants; the pump drains in one
+    `mem::take`+match loop. **A future deferred capability ADDS A VARIANT, not a
+    `Context::new` param** — the per-row call-site churn stops. Boundary held:
+    `post`/`broadcast` stay on `out_events` (input-stream, not `Deferred`). Pure
+    refactor, no behavior change; ordering-equivalence verified in review (the 3
+    apply-families touch disjoint state, and no dispatch co-queues order-dependent
+    different kinds). Design note: `docs/design/deferred-effects.md`. Reviewed PASS
+    (no findings). 282 tests green; clippy/fmt clean. Working tree clean.
 
 ## Next step
 **Phase 2 in progress.** Continue subagent-driven (see "How to run the port"

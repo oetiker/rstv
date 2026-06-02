@@ -9,12 +9,36 @@
 
 | commit | what |
 |--------|------|
-| `7b15782` | Substrate realignment — global `ViewId` + self-id + `find_mut`/`remove_descendant` |
 | `7efecb3` | Phase A — `Event::Broadcast { command, source }` (D4 amendment) |
-| **`2887e95`** | **Row 33d-1 — TWindow drag + close + setState command set** |
+| `2887e95` | Row 33d-1 — TWindow drag + close + setState command set |
+| **`69897fe`** | **Refactor — unify the 3 deferred channels into one `Deferred` queue** |
 
 **Build state:** 278 unit + 3 integration + 1 doctest green; `cargo clippy
 --all-targets -- -D warnings` and `cargo fmt --check` clean. Working tree clean.
+
+## Substrate change since 33d-1: the unified `Deferred` channel (`69897fe`)
+
+**Read this before touching `Context` in 33d-2.** The three post-dispatch deferred
+channels (`pending_captures` / `command_changes` / `pending_tree_ops`) were
+**unified into one** `Deferred` enum + a single `deferred: Vec<Deferred>` queue
+(pure refactor, no behavior change; see
+[`docs/design/deferred-effects.md`](design/deferred-effects.md)). Concretely:
+
+- `Deferred {PushCapture, EnableCommand, DisableCommand, ChangeBounds, SetState,
+  Close}` lives in `context.rs` (`TreeOp` is **gone** — subsumed).
+- **`Context::new` is now 4 params** — `(out_events, timers, now_ms, deferred)`.
+  The request methods (`push_capture`/`enable_command`/`disable_command`/
+  `request_bounds`/`request_set_state`/`request_close`) each push a variant.
+- The pump drains it in **one** `mem::take` + match loop (same drain-to-local
+  borrow discipline).
+- **For 33d-2 this means:** test harnesses build **one** `let mut deferred:
+  Vec<Deferred> = Vec::new();` and pass `&mut deferred` (not three locals). If you
+  add a new deferred capability, **add a `Deferred` variant — do NOT add a
+  `Context::new` parameter.** (Boundary: `post`/`broadcast` still go to
+  `out_events`, a separate input-stream channel — not `Deferred`.)
+- 33d-2's selection work mostly needs **no** deferred channel at all (it uses
+  `focus_next`/`put_in_front_of` and the synchronous `select_window_num` trait
+  call), so this mostly just changes how your test `Context`s are built.
 
 ## What the last session did (33d-1 — read this; it shaped 33d-2's scope)
 
@@ -27,14 +51,14 @@ exist" principle clean: 33d-1 enabled only `{cmClose, cmZoom}`; 33d-2 adds
 What 33d-1 built (brief:
 [`docs/briefs/row33d-1-drag-close.md`](briefs/row33d-1-drag-close.md)):
 
-- **Deferred tree-op channel on `Context`** — `TreeOp {ChangeBounds, SetState,
-  Close}` + `request_bounds`/`request_set_state`/`request_close`, the **third
-  member** of the deferred-channel family (`pending_captures` /
-  `command_changes` / `pending_tree_ops`). The pump drains it after dispatch
-  and applies each against the root `group` via `find_mut`/`change_bounds`,
-  `find_mut`/`set_state`, `remove_descendant` — drain-to-local-then-rebuild-ctx
-  (the row-31 destructure discipline). **Reuse this channel for 33d-2 if needed,
-  but selection mostly uses `focus_next`/`put_in_front_of` directly.**
+- **Deferred tree-op channel on `Context`** (`request_bounds`/`request_set_state`/
+  `request_close`) for the drag/close mutations a capture handler can't do inline.
+  **NOTE: this shipped as a `TreeOp` enum + 3rd parallel channel, then `69897fe`
+  unified all three deferred channels into one `Deferred` queue** — see the
+  "Substrate change" section above. The pump drains it after dispatch and applies
+  each against the root `group` via `find_mut`/`change_bounds`, `find_mut`/
+  `set_state`, `remove_descendant` — drain-to-local-then-rebuild-ctx (the row-31
+  destructure discipline).
 - **Drag = a `DragCapture` capture handler** (D9, replaces `dragView`'s nested
   `mouseEvent` loop). The **window** (not the frame — D3: a frame can't name the
   window it would move) starts the drag from a still-live `MouseDown` after group
@@ -133,7 +157,9 @@ lifecycle on `Program` (the crux: a view can't reach the loop, so `exec_view` ow
 it). `cmOK`/`cmCancel`; gather/scatter typed values (D10). Gray window scheme drives
 the deferred multi-scheme theming. **Also build the return-consuming
 `message()`/`query` tree-owner primitive here** — first consumer is the dialog
-`cmCanCloseForm` veto (design of record: guide D4 "message() — corrected").
+`cmCanCloseForm` veto (design of record: guide D4 "message() — corrected"). Any new
+deferred capability row 34 needs (e.g. the modal-pop) **adds a `Deferred` variant**,
+not a new `Context::new` parameter (the `69897fe` unification — see above).
 
 ## Process reminders
 - Subagent-driven worked well (main-thread design + **advisor consult before
