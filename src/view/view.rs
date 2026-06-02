@@ -648,6 +648,14 @@ pub trait View {
             None
         }
     }
+
+    /// Downcast hook for the rare owner→child push that needs the concrete type
+    /// (e.g. `TWindow::zoom` pushing `set_zoomed` to its `TFrame`). Base returns
+    /// `None`; only views that must be reached concretely override it. (`Any`
+    /// requires `'static`, which every view is.)
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        None
+    }
 }
 
 #[cfg(test)]

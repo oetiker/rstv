@@ -256,6 +256,18 @@ pub struct Context<'a> {
     /// the program's command set, so `enableCommand`/`disableCommand` are realized
     /// as a downward request queue the loop drains into `curCommandSet`.
     command_changes: &'a mut Vec<(Command, bool)>,
+    /// The size of the view's owner (the group currently routing to it), so a child
+    /// can reach `owner->size` / `owner->getExtent()` without an up-pointer (D3).
+    /// Used by `TWindow::zoom`/`sizeLimits` (33c) and the drag limits (33d).
+    ///
+    /// **Transient routing state**, NOT a loop-owned channel: each
+    /// `Group::handle_event` sets it to its own size before delivering to children
+    /// and restores it on exit (so nesting root→desktop→window works). It is valid
+    /// **only during group-routed dispatch**; a capture handler runs *before* group
+    /// routing and sees the default `(0,0)`. That is fine — 33d's drag handler must
+    /// capture its limits at *push time* (inside the window's `handle_event`, where
+    /// `owner_size` is correctly set), never read them at drag time.
+    owner_size: Point,
 }
 
 impl<'a> Context<'a> {
@@ -273,6 +285,7 @@ impl<'a> Context<'a> {
             now_ms,
             pending_captures,
             command_changes,
+            owner_size: Point::default(),
         }
     }
 
@@ -324,6 +337,23 @@ impl<'a> Context<'a> {
     /// The clock value sampled for this dispatch pass.
     pub fn now_ms(&self) -> u64 {
         self.now_ms
+    }
+
+    /// The owner's size for the view currently being routed to — the downward
+    /// realization of `owner->size` / `owner->getExtent()` (D3). See the
+    /// [`owner_size`](Self::owner_size) field docs: it is **transient routing
+    /// state** set/restored by each [`Group::handle_event`](crate::view::Group)
+    /// around delivery, valid only during group-routed dispatch. Defaults to
+    /// `(0, 0)`.
+    pub fn owner_size(&self) -> Point {
+        self.owner_size
+    }
+
+    /// Set the owner size for the routed view — called by
+    /// [`Group::handle_event`](crate::view::Group) before delivering to children
+    /// (set to the group's own size) and to restore it on exit.
+    pub fn set_owner_size(&mut self, size: Point) {
+        self.owner_size = size;
     }
 }
 
@@ -631,5 +661,19 @@ mod tests {
         assert_eq!(cmd_changes.len(), 2);
         assert_eq!(cmd_changes[0], (Command::OK, true));
         assert_eq!(cmd_changes[1], (Command::CANCEL, false));
+    }
+
+    #[test]
+    fn context_owner_size_defaults_zero_and_round_trips() {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut pending: Vec<Box<dyn CaptureHandler>> = Vec::new();
+        let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
+        let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+        // Context::new defaults owner_size to (0, 0).
+        assert_eq!(ctx.owner_size(), Point::new(0, 0));
+        // The setter round-trips.
+        ctx.set_owner_size(Point::new(80, 25));
+        assert_eq!(ctx.owner_size(), Point::new(80, 25));
     }
 }

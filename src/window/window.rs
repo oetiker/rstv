@@ -152,11 +152,11 @@ impl Window {
         let zoom_rect = group.state().get_bounds();
         let extent = group.state().get_extent();
 
-        // TODO(33c): C++ TWindowInit::createFrame lets a subclass inject a custom
-        // TFrame. Under D3 a custom frame needs owner data pushed INTO it via the
-        // downcast seam (33c), so there is no usable frame factory at 33b — we
-        // build the Frame directly. Reintroduce a real createFrame hook when the
-        // downcast seam lands.
+        // NOTE: C++ TWindowInit::createFrame lets a subclass inject a custom
+        // TFrame. We build the Frame directly and push owner data into it (here at
+        // ctor; the 33c downcast seam reaches it post-insert for `set_zoomed`). A
+        // real createFrame/subclass-frame hook has no consumer yet; reintroduce it
+        // when a subclass needs a non-default frame.
         let mut frame = Frame::new(extent);
         frame.set_title(title.clone());
         frame.set_flags(flags);
@@ -246,6 +246,68 @@ impl Window {
         }
         self.group.insert(Box::new(sb))
     }
+
+    // -- zoom (33c) ----------------------------------------------------------
+
+    /// `TWindow::zoom` — toggle between the restored bounds and "filling the
+    /// owner". Faithful to `twindow.cpp`:
+    /// ```cpp
+    /// sizeLimits( minSize, maxSize );      // max = owner->size (virtual)
+    /// if( size != maxSize ) { zoomRect = getBounds(); locate(TRect(0,0,max.x,max.y)); }
+    /// else                    locate( zoomRect );
+    /// ```
+    /// `maxSize` (= `owner->size`) is reached via the owner-extent-down channel
+    /// ([`Context::owner_size`](crate::view::Context::owner_size), D3) instead of
+    /// an up-pointer. The window's own [`size_limits`](View::size_limits) override
+    /// (max = owner size, min = 16×6) is used.
+    fn zoom(&mut self, ctx: &mut Context) {
+        let owner_size = ctx.owner_size();
+        let (_min, max) = View::size_limits(self, owner_size);
+        let size = self.group.state().size;
+        if size != max {
+            self.zoom_rect = self.group.state().get_bounds();
+            self.locate(Rect::new(0, 0, max.x, max.y), owner_size);
+        } else {
+            let zr = self.zoom_rect;
+            self.locate(zr, owner_size);
+        }
+        // D3: the C++ TFrame::draw recomputes `owner->size == maxSize` every draw
+        // to pick the zoom vs unzoom icon. We can't read the owner from the frame,
+        // so push the bool down through the downcast seam.
+        // TODO(33d): re-push set_zoomed on owner resize / change_bounds (this
+        // pushed bool goes stale vs C++'s per-draw recompute).
+        let zoomed = self.group.state().size == max;
+        if let Some(frame) = self
+            .group
+            .child_mut(self.frame_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<Frame>())
+        {
+            frame.set_zoomed(zoomed);
+        }
+    }
+
+    /// `TView::locate` — clamp `bounds`'s size to [`size_limits`](View::size_limits)
+    /// then `change_bounds` iff it differs. `owner_size` feeds the (overridden)
+    /// `size_limits`. The C++ `owner != 0` shadow/`drawUnderRect` tail is dropped
+    /// (D8: whole-tree redraw + diff).
+    fn locate(&mut self, mut bounds: Rect, owner_size: Point) {
+        let (min, max) = View::size_limits(self, owner_size);
+        bounds.b.x = bounds.a.x + range(bounds.b.x - bounds.a.x, min.x, max.x);
+        bounds.b.y = bounds.a.y + range(bounds.b.y - bounds.a.y, min.y, max.y);
+        if bounds != self.group.state().get_bounds() {
+            // Faithful: TGroup::changeBounds (resizes children by the delta).
+            self.group.change_bounds(bounds);
+        }
+    }
+}
+
+/// `range(val, min, max)` (tview.cpp) — clamp `val` into `[min, max]`, pinning
+/// `min` to `max` if inverted. Reimplemented locally (it is two lines) to keep
+/// the `locate` seam contained — the `view.rs` `range` is private there.
+fn range(val: i32, min: i32, max: i32) -> i32 {
+    let min = if min > max { max } else { min };
+    val.clamp(min, max)
 }
 
 /// Map a `TWindow::number` to the frame's `Option<u8>` contract: `wnNoNumber`
@@ -280,26 +342,37 @@ impl View for Window {
         self.group.draw(ctx);
     }
 
-    /// `TWindow::handleEvent` — for 33b: delegate to the group, then handle the
-    /// focus-cycling keys. `TGroup::handleEvent(event)` runs first; then:
+    /// `TWindow::handleEvent` — delegate to the group, then handle the window's
+    /// own commands + the focus-cycling keys. `TGroup::handleEvent(event)` runs
+    /// **first** (faithful order), then:
     ///
+    /// * `cmZoom` (if `wfZoom`) → [`zoom`](Self::zoom) + `clearEvent` (33c). The
+    ///   C++ `infoPtr == 0 || == this` guard is gone (D4 dropped payloads) — a
+    ///   `cmZoom` that routes here is for us.
     /// * `kbTab` → `focusNext(False)` (forwards) + `clearEvent`.
     /// * `kbShiftTab` → `focusNext(True)` (backwards) + `clearEvent`. Shift+Tab
     ///   is `Key::Tab` + the `shift` modifier (there is no `Key::BackTab`).
     ///
-    /// **TODO(33c)** — the C++ command/broadcast cases, each needing
-    /// infrastructure absent at 33b:
+    /// Deferred C++ command/broadcast cases, each needing infrastructure not yet
+    /// built:
     /// * `cmResize` → `dragView(dragMode | (flags & (wfMove|wfGrow)), limits, …)`
-    ///   — needs an owner-extent-down channel + a drag capture handler.
-    /// * `cmClose` → `close()` (or post `cmCancel` if `sfModal`) — needs a
-    ///   close-removal channel; the modal path is row 34.
-    /// * `cmZoom` → `zoom()` — needs the owner-extent-down channel.
-    /// * `evBroadcast cmSelectWindowNum` matching `number` → `select()` — D4
-    ///   dropped event payloads, so the broadcast cannot carry the target
-    ///   window number (the Alt-N deferral already noted in `program.rs`).
+    ///   — **TODO(33d):** needs a transient drag capture handler (limits captured
+    ///   at push time from `ctx.owner_size()`).
+    /// * `cmClose` → `close()` (or post `cmCancel` if `sfModal`) — **TODO(33d):**
+    ///   needs a close-removal channel; the modal path is **row 34**.
+    /// * `evBroadcast cmSelectWindowNum` matching `number` → `select()` —
+    ///   **deferred:** D4 dropped event payloads, so the broadcast cannot carry the
+    ///   target window number (the Alt-N deferral already noted in `program.rs`).
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         self.group.handle_event(ev, ctx);
-        // A consumed event is already `Nothing`, so the match self-guards.
+        // A consumed event is already `Nothing`, so each branch self-guards.
+        if let Event::Command(c) = *ev
+            && c == Command::ZOOM
+            && self.flags.zoom
+        {
+            self.zoom(ctx);
+            ev.clear();
+        }
         if let Event::KeyDown(k) = *ev
             && k.key == Key::Tab
         {
@@ -326,15 +399,28 @@ impl View for Window {
     /// passive, so the explicit C++ `frame->setState(sfActive)` is redundant
     /// here (as `frame.rs` notes) — we do NOT push the frame manually.
     ///
-    // TODO(33c): on sfSelected, enable/disable the window command set via
-    // ctx.enable_command/disable_command (33a channel): always cmNext+cmPrev;
-    // cmResize if (grow|move); cmClose if close; cmZoom if zoom. Deferred until
-    // their handlers exist (zoom/drag/close are 33c) — enabling a command whose
-    // handler is absent would be a dead/inert command (pump filters or no-ops it).
+    /// **DIVERGENCE from C++ (the spec reviewer will check this):** C++
+    /// `TWindow::setState` enables the **full set** `{cmNext, cmPrev, cmResize if
+    /// (grow|move), cmClose if close, cmZoom if zoom}` atomically on `sfSelected`.
+    /// 33c enables **only `cmZoom`** — the one command whose handler now exists.
+    /// Enabling a command whose handler is absent would be an *inert* command (the
+    /// pump would route it to a window that ignores it, or filter it) — a worse
+    /// state than leaving it disabled. This is the documented "enable only commands
+    /// whose handlers exist" staging; the rest land in 33d / row 34 with their
+    /// handlers.
+    ///   33c: cmZoom (handler in [`handle_event`](Self::handle_event)).
+    ///   TODO(33d): cmResize (if grow|move), cmClose (if close), cmNext, cmPrev.
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
         self.group.set_state(flag, enable, ctx);
         if flag == StateFlag::Selected {
             self.group.set_state(StateFlag::Active, enable, ctx);
+            if self.flags.zoom {
+                if enable {
+                    ctx.enable_command(Command::ZOOM);
+                } else {
+                    ctx.disable_command(Command::ZOOM);
+                }
+            }
         }
     }
 
@@ -691,6 +777,156 @@ mod tests {
             view.draw(&mut dc);
         });
         insta::assert_snapshot!(screen.snapshot());
+    }
+
+    // -- 8. setState enables/disables cmZoom (33a channel) --------------------
+
+    /// Selecting a `wfZoom` window queues `(Command::ZOOM, true)` on the
+    /// command-change channel; deselecting queues `(Command::ZOOM, false)`.
+    #[test]
+    fn set_state_select_enables_and_disables_cm_zoom() {
+        let mut w = window_with_frame(); // flags.zoom = true
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = Vec::new();
+        let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
+
+        {
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+            View::set_state(&mut w, StateFlag::Selected, true, &mut ctx);
+        }
+        assert!(
+            cmd_changes.contains(&(Command::ZOOM, true)),
+            "select enables cmZoom"
+        );
+
+        cmd_changes.clear();
+        {
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+            View::set_state(&mut w, StateFlag::Selected, false, &mut ctx);
+        }
+        assert!(
+            cmd_changes.contains(&(Command::ZOOM, false)),
+            "deselect disables cmZoom"
+        );
+    }
+
+    // -- 9. zoom() toggles bounds + pushes the frame zoomed bool --------------
+
+    /// Read the frame child's pushed `zoomed` flag through the 33c seam.
+    fn frame_zoomed(w: &mut Window) -> bool {
+        w.group
+            .child_mut(w.frame_id())
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<Frame>())
+            .expect("frame child resolves through child_mut + as_any_mut")
+            .zoomed()
+    }
+
+    #[test]
+    fn zoom_toggles_bounds_and_pushes_frame_zoomed() {
+        // Window smaller than its owner desktop.
+        let mut w = Window::new(Rect::new(2, 1, 22, 9), Some("Edit".into()), 1); // 20x8
+        let original = w.state().get_bounds();
+        let desktop_size = Point::new(80, 25);
+
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = Vec::new();
+        let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
+
+        // Select the window (realism: the desktop would have it selected) and feed
+        // a cmZoom directly. owner_size is set on the ctx (the desktop's job): the
+        // group.handle_event inside Window restores owner_size to this value, so by
+        // the time the cmZoom arm runs zoom(), owner_size == desktop_size.
+        {
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+            View::set_state(&mut w, StateFlag::Selected, true, &mut ctx);
+        }
+
+        // First zoom: fill the owner.
+        {
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+            ctx.set_owner_size(desktop_size);
+            let mut ev = Event::Command(Command::ZOOM);
+            w.handle_event(&mut ev, &mut ctx);
+            assert!(ev.is_nothing(), "cmZoom consumed");
+        }
+        assert_eq!(
+            w.state().get_bounds(),
+            Rect::new(0, 0, desktop_size.x, desktop_size.y),
+            "first zoom fills the owner"
+        );
+        assert_eq!(
+            w.zoom_rect(),
+            original,
+            "zoom_rect saved the original bounds"
+        );
+        assert!(frame_zoomed(&mut w), "frame pushed zoomed = true");
+
+        // Second zoom (toggle): restore.
+        {
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+            ctx.set_owner_size(desktop_size);
+            let mut ev = Event::Command(Command::ZOOM);
+            w.handle_event(&mut ev, &mut ctx);
+            assert!(ev.is_nothing(), "cmZoom consumed");
+        }
+        assert_eq!(
+            w.state().get_bounds(),
+            original,
+            "second zoom restores the original bounds"
+        );
+        assert!(!frame_zoomed(&mut w), "frame pushed zoomed = false");
+    }
+
+    // -- 10. mandatory snapshot: restored vs zoomed --------------------------
+
+    fn render_window(view: &mut dyn View, theme: &Theme, w: u16, h: u16) -> String {
+        let (backend, screen) = HeadlessBackend::new(w, h);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = view.state().get_bounds();
+            let mut dc = DrawCtx::new(buf, theme, bounds, bounds.a);
+            view.draw(&mut dc);
+        });
+        screen.snapshot()
+    }
+
+    #[test]
+    fn zoom_restored_vs_filled_snapshot() {
+        let theme = Theme::classic_blue();
+        let screen = Point::new(24, 8);
+        // A window occupying the upper-left, smaller than the 24x8 screen.
+        let mut w = Window::new(Rect::new(0, 0, 14, 5), Some("Edit".into()), 1);
+        w.standard_scroll_bar(ScrollBarOptions {
+            vertical: true,
+            handle_keyboard: true,
+        });
+
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = Vec::new();
+        let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
+        {
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+            View::set_state(&mut w, StateFlag::Selected, true, &mut ctx);
+        }
+
+        // Restored snapshot.
+        insta::assert_snapshot!("zoom_restored", render_window(&mut w, &theme, 24, 8));
+
+        // Zoom to fill the screen.
+        {
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+            ctx.set_owner_size(screen);
+            let mut ev = Event::Command(Command::ZOOM);
+            w.handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(w.state().get_bounds(), Rect::new(0, 0, 24, 8));
+
+        // Zoomed snapshot: frame fills the whole 24x8 screen.
+        insta::assert_snapshot!("zoom_filled", render_window(&mut w, &theme, 24, 8));
     }
 
     /// A selected (active) window draws its frame in the double-line

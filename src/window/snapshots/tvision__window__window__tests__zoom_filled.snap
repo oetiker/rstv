@@ -1,0 +1,29 @@
+---
+source: src/window/window.rs
+expression: "render_window(&mut w, &theme, 24, 8)"
+---
+size: 24x8
+cursor: hidden
+text:
+|╔═[■]════ Edit ══1═[↕]═╗|
+|║                      ▲|
+|║                      ▓|
+|║                      ▓|
+|║                      ▓|
+|║                      ▓|
+|║                      ▼|
+|└─════════════════════─┘|
+attr:
+|aaabaaaaaaaaaaaaaaaabaaa|
+|aaaaaaaaaaaaaaaaaaaaaaac|
+|aaaaaaaaaaaaaaaaaaaaaaac|
+|aaaaaaaaaaaaaaaaaaaaaaac|
+|aaaaaaaaaaaaaaaaaaaaaaac|
+|aaaaaaaaaaaaaaaaaaaaaaac|
+|aaaaaaaaaaaaaaaaaaaaaaac|
+|bbaaaaaaaaaaaaaaaaaaaabb|
+legend:
+  . default
+  a fg=BIOS(15) bg=BIOS(1)
+  b fg=BIOS(10) bg=BIOS(1)
+  c fg=BIOS(1) bg=BIOS(3)

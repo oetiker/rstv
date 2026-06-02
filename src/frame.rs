@@ -369,6 +369,13 @@ impl View for Frame {
             // else: bottom-row grow drags + middle-button move — TODO(row 33, D9).
         }
     }
+
+    /// Downcast seam (33c, D3): `TWindow::zoom` pushes `set_zoomed` to its frame
+    /// child via [`Group::child_mut`](crate::view::Group::child_mut) +
+    /// `downcast_mut::<Frame>()`. See [`View::as_any_mut`].
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        Some(self)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -764,5 +771,43 @@ mod tests {
             f.draw(&mut dc);
         });
         insta::assert_snapshot!(screen.snapshot());
+    }
+
+    /// The 33c downcast seam: `Frame` overrides `as_any_mut` so an owner can reach
+    /// it concretely (e.g. `TWindow::zoom` pushing `set_zoomed`); a plain view's
+    /// base `as_any_mut` returns `None`.
+    #[test]
+    fn as_any_mut_seam_resolves_frame_but_not_a_plain_view() {
+        let mut f = Frame::new(Rect::new(0, 0, 10, 5));
+        // The frame downcasts to its concrete type and is mutable through it.
+        {
+            let any = View::as_any_mut(&mut f).expect("Frame overrides as_any_mut");
+            let frame = any
+                .downcast_mut::<Frame>()
+                .expect("downcasts to the concrete Frame");
+            frame.set_zoomed(true);
+        }
+        assert!(f.zoomed(), "the concrete push through the seam took effect");
+
+        // A plain view (base impl) returns None.
+        struct Plain {
+            st: ViewState,
+        }
+        impl View for Plain {
+            fn state(&self) -> &ViewState {
+                &self.st
+            }
+            fn state_mut(&mut self) -> &mut ViewState {
+                &mut self.st
+            }
+            fn draw(&mut self, _ctx: &mut DrawCtx) {}
+        }
+        let mut p = Plain {
+            st: ViewState::new(Rect::new(0, 0, 4, 4)),
+        };
+        assert!(
+            View::as_any_mut(&mut p).is_none(),
+            "base as_any_mut returns None"
+        );
     }
 }

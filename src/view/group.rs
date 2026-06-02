@@ -146,6 +146,14 @@ impl Group {
         self.children[idx].view.state_mut()
     }
 
+    /// Mutably borrow child `id`'s view (for an owner→child push that needs the
+    /// concrete type via [`View::as_any_mut`], e.g. `TWindow::zoom` reaching its
+    /// `TFrame`). `None` for a stale/foreign id.
+    pub fn child_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
+        let i = self.index_of(id)?;
+        Some(self.children[i].view.as_mut())
+    }
+
     // -- insert / remove ----------------------------------------------------
 
     /// Insert `view` on **top** of the group (becomes the frontmost child) and
@@ -654,7 +662,26 @@ impl View for Group {
     /// body) is **not** restored here: under D3 a view does not select *itself
     /// within itself* — that selection is the parent's job (the base
     /// `handle_event` is a no-op).
+    ///
+    /// **owner-extent-down (33c, D3):** the routing body is bracketed by a
+    /// `ctx.set_owner_size(self.size)` / restore so a child can read its owner's
+    /// size (`TWindow::zoom`). The restore is **unconditional**: the actual
+    /// routing lives in [`route_event`](Self::route_event), which may `return`
+    /// early (the positional `mouse_pos` guard), so the bracket here guarantees a
+    /// parent group's later sibling deliveries never see this group's size.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
+        let saved_owner_size = ctx.owner_size();
+        ctx.set_owner_size(self.st.size); // children's owner is THIS group (Copy read first)
+        self.route_event(ev, ctx);
+        ctx.set_owner_size(saved_owner_size); // unconditional restore (see doc above)
+    }
+}
+
+impl Group {
+    /// The three-phase router body of [`handle_event`](View::handle_event),
+    /// extracted so the `owner_size` save/restore bracket in `handle_event` is
+    /// unconditional even though this fn may `return` early.
+    fn route_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         let n = self.children.len();
         match ev {
             // -- focusedEvents: pre-process → focused → post-process ----------
@@ -1683,5 +1710,89 @@ mod tests {
         );
         assert_eq!(order_after, vec![ida, idb]);
         assert_eq!(group.current(), Some(ida), "A is current via set_current");
+    }
+
+    // -- 15. owner_size set during routing + unconditional restore (33c) ------
+
+    /// A probe that records `ctx.owner_size()` at the moment it handles an event,
+    /// so a test can observe the value a child sees during group routing.
+    struct OwnerSizeProbe {
+        st: ViewState,
+        seen: Rc<RefCell<Vec<Point>>>,
+    }
+    impl View for OwnerSizeProbe {
+        fn state(&self) -> &ViewState {
+            &self.st
+        }
+        fn state_mut(&mut self) -> &mut ViewState {
+            &mut self.st
+        }
+        fn draw(&mut self, _ctx: &mut DrawCtx) {}
+        fn handle_event(&mut self, _ev: &mut Event, ctx: &mut Context) {
+            self.seen.borrow_mut().push(ctx.owner_size());
+        }
+    }
+
+    #[test]
+    fn handle_event_sets_owner_size_to_group_and_restores_on_exit() {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+
+        // Nesting: an OUTER group (size 80x25) containing an INNER group (size
+        // 30x12) which contains the probe (the current child). When the broadcast
+        // is routed outer→inner→probe, the probe must see the INNER group's size.
+        let mut inner = Group::new(Rect::new(5, 3, 35, 15)); // size 30x12
+        let probe_id = inner.insert(Box::new(OwnerSizeProbe {
+            st: ViewState::new(Rect::new(0, 0, 10, 5)),
+            seen: seen.clone(),
+        }));
+        // Make the probe current so the focused/broadcast path reaches it.
+        with_ctx(&mut out, &mut timers, |ctx| {
+            inner.set_current(Some(probe_id), SelectMode::Normal, ctx)
+        });
+        assert_eq!(inner.state().size, Point::new(30, 12));
+
+        let mut outer = Group::new(Rect::new(0, 0, 80, 25)); // size 80x25
+        outer.insert(Box::new(inner));
+
+        // Broadcast reaches every child (probe sees owner_size). Set a sentinel
+        // owner_size on the ctx first to prove the OUTER group restores it.
+        let mut ev = Event::Broadcast(Command::SCROLL_BAR_CHANGED);
+        with_ctx(&mut out, &mut timers, |ctx| {
+            ctx.set_owner_size(Point::new(111, 222)); // sentinel (a "parent" value)
+            outer.handle_event(&mut ev, ctx);
+            // Unconditional restore: after routing, owner_size is back to the
+            // sentinel the parent had set, NOT the outer group's 80x25.
+            assert_eq!(
+                ctx.owner_size(),
+                Point::new(111, 222),
+                "owner_size restored to the parent's value after handle_event"
+            );
+        });
+
+        // During routing the probe saw the INNER group's size (its actual owner).
+        assert_eq!(*seen.borrow(), vec![Point::new(30, 12)]);
+    }
+
+    #[test]
+    fn handle_event_restores_owner_size_even_on_early_return_path() {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+
+        // A positional event with no children to hit still runs the positional arm
+        // (which can `return` early inside route_event). The bracket must still
+        // restore owner_size. (Regression guard for the extracted-fn restore.)
+        let mut group = Group::new(Rect::new(0, 0, 40, 20));
+        let mut ev = mouse_down_at(5, 5); // hits nobody (empty group)
+        with_ctx(&mut out, &mut timers, |ctx| {
+            ctx.set_owner_size(Point::new(7, 9));
+            group.handle_event(&mut ev, ctx);
+            assert_eq!(
+                ctx.owner_size(),
+                Point::new(7, 9),
+                "owner_size restored even when routing returns early"
+            );
+        });
     }
 }
