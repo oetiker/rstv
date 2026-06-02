@@ -58,7 +58,7 @@ use crate::event::Event;
 use crate::theme::Theme;
 use crate::timer::Clock;
 use crate::timer::TimerQueue;
-use crate::view::{Context, DrawCtx, Group, Rect, SelectMode, TreeOp, View, ViewId};
+use crate::view::{Context, Deferred, DrawCtx, Group, Rect, SelectMode, View, ViewId};
 
 /// The frame-tick timeout: ports `TProgram::eventTimeoutMs` (20 ms → 50 wakeups
 /// per second). Headless ignores it (D11).
@@ -206,24 +206,15 @@ pub struct Program {
     /// before polling the backend. A distinct field so `Context` can borrow it
     /// disjointly (see the borrow-discipline note on `pump_once`).
     out_events: VecDeque<Event>,
-    /// Deferred capture pushes, applied to `captures` *after* each dispatch.
-    /// Distinct field for the same disjoint-borrow reason.
-    pending_captures: Vec<Box<dyn CaptureHandler>>,
-    /// Deferred command-enable changes (`(cmd, enable)`), applied to
-    /// `command_set` *after* each dispatch — the D3 downward realization of a
-    /// view's `enableCommand`/`disableCommand` (a view has no up-pointer to the
-    /// program). Distinct field for the same disjoint-borrow reason as
-    /// `pending_captures`.
-    pending_command_changes: Vec<(Command, bool)>,
-    /// Deferred tree mutations ([`TreeOp`]), applied to the root `group` *after*
-    /// each dispatch — the third member of the deferred-channel family alongside
-    /// `pending_captures` and `pending_command_changes`. A capture handler / view
-    /// holds only a [`ViewId`] (D3), so drag move/grow (`request_bounds`), drag-end
-    /// `sfDragging` clear (`request_set_state`), and `cmClose` removal
-    /// (`request_close`) all queue here and the loop resolves them via
-    /// `find_mut` / `remove_descendant`. Distinct field for the same
-    /// disjoint-borrow reason as `pending_captures`.
-    pending_tree_ops: Vec<TreeOp>,
+    /// Deferred effects on loop-owned state ([`Deferred`]), applied *after* each
+    /// dispatch — capture pushes (→ `captures`), command enable/disable (→
+    /// `command_set`), and tree mutations (bounds / state-flag / close → `group`).
+    /// A downward-borrowed view / capture handler cannot touch the capture stack,
+    /// the command set, or the tree inline (D3/D9), so it requests the effect via
+    /// `Context` and the loop drains this one queue. A distinct field for the same
+    /// disjoint-borrow reason as `out_events`. One channel — a new capability adds a
+    /// [`Deferred`] variant, not a field.
+    deferred: Vec<Deferred>,
     /// The enabled-command set (`curCommandSet`); see [`default_command_set`].
     command_set: CommandSet,
     /// The inserted desktop child's id (`canMoveFocus` / Alt-N target).
@@ -275,7 +266,7 @@ impl Program {
         let renderer = Renderer::new(backend);
         let mut out_events = VecDeque::new();
         let mut timers = TimerQueue::new();
-        let mut pending_captures: Vec<Box<dyn CaptureHandler>> = Vec::new();
+        let mut deferred: Vec<Deferred> = Vec::new();
 
         // Insert the three subviews in C++ order: desktop, statusline, menubar.
         // Each factory receives the full extent and owns its own shrinking
@@ -295,18 +286,9 @@ impl Program {
         // `Group::insert` (row 26) deliberately never auto-selects, so we drive it
         // here via a throwaway Context; the RECEIVED_FOCUS broadcast it queues
         // sits in `out_events` and is processed on the first pump.
-        let mut pending_command_changes: Vec<(Command, bool)> = Vec::new();
-        let mut pending_tree_ops: Vec<TreeOp> = Vec::new();
         if let Some(id) = desktop {
             let now = clock.now_ms();
-            let mut ctx = Context::new(
-                &mut out_events,
-                &mut timers,
-                now,
-                &mut pending_captures,
-                &mut pending_command_changes,
-                &mut pending_tree_ops,
-            );
+            let mut ctx = Context::new(&mut out_events, &mut timers, now, &mut deferred);
             group.set_current(Some(id), SelectMode::Normal, &mut ctx);
         }
 
@@ -318,9 +300,7 @@ impl Program {
             clock,
             theme,
             out_events,
-            pending_captures,
-            pending_command_changes,
-            pending_tree_ops,
+            deferred,
             command_set: default_command_set(),
             desktop,
             end_state: None,
@@ -412,7 +392,7 @@ impl Program {
     ///
     /// Borrow discipline (the brief's #1 risk): `self` is destructured into field
     /// bindings at the top, so the disjoint fields backing [`Context`]
-    /// (`out_events` / `timers` / `pending_captures`) can be borrowed alongside
+    /// (`out_events` / `timers` / `deferred`) can be borrowed alongside
     /// `group` / `captures`. The dispatch is a free function with explicit field
     /// borrows; there are no `&mut self` helpers with overlapping field sets.
     pub fn pump_once(&mut self) {
@@ -424,9 +404,7 @@ impl Program {
             clock,
             theme,
             out_events,
-            pending_captures,
-            pending_command_changes,
-            pending_tree_ops,
+            deferred,
             command_set,
             desktop: _,
             end_state,
@@ -494,16 +472,9 @@ impl Program {
 
                 if !ev.is_nothing() {
                     // The Context borrow ends at this block's close, before we
-                    // drain pending_captures back into the stack.
+                    // drain the deferred queue back into loop/tree state.
                     {
-                        let mut ctx = Context::new(
-                            out_events,
-                            timers,
-                            now,
-                            pending_captures,
-                            pending_command_changes,
-                            pending_tree_ops,
-                        );
+                        let mut ctx = Context::new(out_events, timers, now, deferred);
                         // Offer to the capture stack first; if consumed, skip view
                         // routing.
                         let consumed = captures.dispatch(&mut ev, &mut ctx);
@@ -511,57 +482,54 @@ impl Program {
                             program_handle_event(group, &mut ev, &mut ctx, end_state);
                         }
                     }
-                    // Apply deferred capture pushes AFTER dispatch, so a pushed
-                    // handler sees the NEXT event (the compose_full_protocol
-                    // invariant, now through the real pump).
-                    for h in pending_captures.drain(..) {
-                        captures.push(h);
-                    }
-                    // Apply deferred command-enable changes AFTER dispatch (same
-                    // discipline as pending_captures). Inline the
-                    // enable_command/disable_command bodies — the destructure gives
-                    // the fields, not `self`. Flip `command_set_changed` on a real
-                    // change so the next idle broadcasts cmCommandSetChanged.
-                    for (cmd, enable) in pending_command_changes.drain(..) {
-                        if enable && !command_set.has(cmd) {
-                            command_set.enable_cmd(cmd);
-                            *command_set_changed = true;
-                        } else if !enable && command_set.has(cmd) {
-                            command_set.disable_cmd(cmd);
-                            *command_set_changed = true;
-                        }
-                    }
-                    // Apply deferred tree ops AFTER dispatch (the third member of
-                    // the deferred-channel family: pending_captures /
-                    // pending_command_changes / pending_tree_ops). Drain to a local
-                    // first: the apply-Context borrows `pending_tree_ops` (so a
+                    // Apply the deferred queue AFTER dispatch — one drain, in
+                    // insertion order. Drain to a local first (`mem::take`): the
+                    // apply-Context borrows the now-empty `deferred` field (so a
                     // SetState/Close that re-queues lands for the NEXT pump), which
-                    // would alias the iteration otherwise. ONE pass only — anything
-                    // an applied op re-queues (none do, in 33d-1) waits for the next
+                    // would otherwise alias the iteration. ONE pass only — anything
+                    // an applied effect re-queues (none do today) waits for the next
                     // pump; do not loop until empty (a bug would spin).
-                    let ops: Vec<TreeOp> = std::mem::take(pending_tree_ops);
-                    if !ops.is_empty() {
-                        let mut ctx = Context::new(
-                            out_events,
-                            timers,
-                            now,
-                            pending_captures,
-                            pending_command_changes,
-                            pending_tree_ops,
-                        );
-                        for op in ops {
-                            match op {
-                                TreeOp::ChangeBounds(id, r) => {
+                    //
+                    // The three families touch disjoint loop-owned state — capture
+                    // stack / command set / view tree — so applying in insertion
+                    // order (interleaving kinds) is equivalent to today's
+                    // captures-then-commands-then-tree ordering: cross-family order
+                    // cannot affect the result, and same-family relative order is
+                    // preserved. PushCapture still applies after dispatch, so a
+                    // pushed handler still sees the NEXT event (compose_full_protocol).
+                    let effects: Vec<Deferred> = std::mem::take(deferred);
+                    if !effects.is_empty() {
+                        let mut ctx = Context::new(out_events, timers, now, deferred);
+                        for effect in effects {
+                            match effect {
+                                Deferred::PushCapture(h) => captures.push(h),
+                                // Inline the enable/disable bodies — the destructure
+                                // gives the fields, not `self`. Flip
+                                // `command_set_changed` on a real change so the next
+                                // idle broadcasts cmCommandSetChanged.
+                                Deferred::EnableCommand(cmd) => {
+                                    if !command_set.has(cmd) {
+                                        command_set.enable_cmd(cmd);
+                                        *command_set_changed = true;
+                                    }
+                                }
+                                Deferred::DisableCommand(cmd) => {
+                                    if command_set.has(cmd) {
+                                        command_set.disable_cmd(cmd);
+                                        *command_set_changed = true;
+                                    }
+                                }
+                                Deferred::ChangeBounds(id, r) => {
                                     if let Some(v) = group.find_mut(id) {
                                         v.change_bounds(r);
                                     }
                                 }
-                                TreeOp::SetState(id, f, e) => {
+                                Deferred::SetState(id, f, e) => {
                                     if let Some(v) = group.find_mut(id) {
                                         v.set_state(f, e, &mut ctx);
                                     }
                                 }
-                                TreeOp::Close(id) => {
+                                Deferred::Close(id) => {
                                     group.remove_descendant(id, &mut ctx);
                                 }
                             }
@@ -610,9 +578,7 @@ impl Program {
             &mut self.out_events,
             &mut self.timers,
             now,
-            &mut self.pending_captures,
-            &mut self.pending_command_changes,
-            &mut self.pending_tree_ops,
+            &mut self.deferred,
         );
         f(&mut self.group, &mut ctx)
     }
@@ -1189,7 +1155,7 @@ mod tests {
 
     /// End-to-end drag: MouseDown(title) → MouseMove×2 → MouseUp, driven through
     /// `pump_once`. Proves the deferred round-trip: capture consumes the
-    /// `MouseMove`, `request_bounds` queues a `TreeOp`, the loop drains it and
+    /// `MouseMove`, `request_bounds` queues a `Deferred`, the loop drains it and
     /// applies `change_bounds`, and `MouseUp` clears `sfDragging` + pops the
     /// capture (the deferred SetState applied).
     #[test]

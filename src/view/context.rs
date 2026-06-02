@@ -29,17 +29,31 @@ use std::time::Duration;
 use unicode_width::UnicodeWidthChar;
 
 // ---------------------------------------------------------------------------
-// TreeOp — a deferred tree mutation requested through Context (D3 / D9)
+// Deferred — an effect on loop-owned state requested through Context (D3 / D9)
 // ---------------------------------------------------------------------------
 
-/// A deferred tree mutation a capture handler / view requests through [`Context`];
-/// the loop applies it against the root view after dispatch (D3/D9). A view/
-/// handler holds only a [`ViewId`], so it cannot mutate the tree inline — it queues
-/// the op and the loop resolves the id via `find_mut` / `remove_descendant`.
+/// An effect on loop-owned state that a downward-borrowed view / capture handler
+/// cannot perform inline (D3/D9). During dispatch the view tree is a live `&mut`
+/// borrow stack (root → desktop → window → frame): a view cannot reach *up* or
+/// *sideways* — every ancestor is already `&mut`-borrowed above it, and a fresh
+/// `root.find_mut(id)` would alias that borrow. Nor does a view hold the program's
+/// capture stack or command set. So any such effect is **requested** through
+/// [`Context`] (which pushes a variant here) and **applied** by the loop after the
+/// dispatch unwinds and the root is free again.
 ///
-/// The third member of the deferred-channel family alongside `pending_captures`
-/// and `command_changes`: queued during dispatch, applied by the loop afterwards.
-pub enum TreeOp {
+/// One queue, drained once per pump in **insertion order**. The variants fall into
+/// three disjoint families by the loop-owned state they touch — capture stack,
+/// command set, view tree — so cross-family apply order never affects the result;
+/// same-family items keep their relative order.
+pub enum Deferred {
+    /// Push a capture handler onto the program's capture stack. Applied *after* the
+    /// current dispatch, so the pushed handler sees the *next* event, never the
+    /// current one (the `compose_full_protocol` invariant).
+    PushCapture(Box<dyn CaptureHandler>),
+    /// Enable a command in the program's command set (`enableCommand`).
+    EnableCommand(Command),
+    /// Disable a command in the program's command set (`disableCommand`).
+    DisableCommand(Command),
     /// Apply new bounds to the view named by `ViewId` (drag move/grow). No ctx
     /// needed at apply time (`change_bounds` takes none).
     ChangeBounds(ViewId, Rect),
@@ -272,21 +286,13 @@ pub struct Context<'a> {
     timers: &'a mut TimerQueue,
     /// The clock value sampled for this dispatch pass.
     now_ms: u64,
-    /// Deferred capture pushes — applied by the loop *after* the current
-    /// dispatch, so a pushed handler sees the next event, never the current one.
-    pending_captures: &'a mut Vec<Box<dyn CaptureHandler>>,
-    /// Deferred command-enable changes (`(cmd, enable)`; `true` = enable, `false`
-    /// = disable) — applied by the loop *after* the current dispatch, exactly like
-    /// [`pending_captures`](Self::pending_captures). A view (D3) has no handle to
-    /// the program's command set, so `enableCommand`/`disableCommand` are realized
-    /// as a downward request queue the loop drains into `curCommandSet`.
-    command_changes: &'a mut Vec<(Command, bool)>,
-    /// Deferred tree mutations ([`TreeOp`]) — applied by the loop *after* the
-    /// current dispatch, exactly like [`pending_captures`](Self::pending_captures)
-    /// and [`command_changes`](Self::command_changes). A view/capture handler holds
-    /// only a [`ViewId`] (D3), so it cannot touch the tree inline; it queues the op
-    /// and the loop resolves the id via `find_mut` / `remove_descendant`.
-    pending_tree_ops: &'a mut Vec<TreeOp>,
+    /// Deferred effects on loop-owned state ([`Deferred`]) — capture pushes, command
+    /// enable/disable, and tree mutations (bounds / state-flag / close). A
+    /// downward-borrowed view / capture handler cannot touch the capture stack, the
+    /// command set, or the tree inline (D3/D9; see [`Deferred`]); it requests the
+    /// effect here and the loop applies the queue *after* the current dispatch. One
+    /// channel — adding a capability adds a variant, not a field.
+    deferred: &'a mut Vec<Deferred>,
     /// The size of the view's owner (the group currently routing to it), so a child
     /// can reach `owner->size` / `owner->getExtent()` without an up-pointer (D3).
     /// Used by `TWindow::zoom`/`sizeLimits` (33c) and the drag limits (33d).
@@ -307,17 +313,13 @@ impl<'a> Context<'a> {
         out_events: &'a mut VecDeque<Event>,
         timers: &'a mut TimerQueue,
         now_ms: u64,
-        pending_captures: &'a mut Vec<Box<dyn CaptureHandler>>,
-        command_changes: &'a mut Vec<(Command, bool)>,
-        pending_tree_ops: &'a mut Vec<TreeOp>,
+        deferred: &'a mut Vec<Deferred>,
     ) -> Self {
         Context {
             out_events,
             timers,
             now_ms,
-            pending_captures,
-            command_changes,
-            pending_tree_ops,
+            deferred,
             owner_size: Point::default(),
         }
     }
@@ -346,52 +348,50 @@ impl<'a> Context<'a> {
         self.timers.kill_timer(id);
     }
 
-    /// Push a capture handler — **deferred**. The loop applies pending pushes
-    /// after the current dispatch, so the pushed handler sees the *next* event,
-    /// never the current one.
+    /// Push a capture handler — **deferred** ([`Deferred::PushCapture`]). The loop
+    /// applies the queue after the current dispatch, so the pushed handler sees the
+    /// *next* event, never the current one.
     ///
     /// There is intentionally **no `pop_capture`**: a handler pops itself by
     /// returning [`CaptureFlow::ConsumedPop`](crate::capture::CaptureFlow::ConsumedPop).
     pub fn push_capture(&mut self, handler: Box<dyn CaptureHandler>) {
-        self.pending_captures.push(handler);
+        self.deferred.push(Deferred::PushCapture(handler));
     }
 
-    /// Request `cmd` be enabled in the program's command set — **deferred**. The
-    /// loop applies queued changes after the current dispatch (mirrors
-    /// [`push_capture`](Self::push_capture)). Realizes `TView::enableCommand` from
-    /// a view that has no up-pointer to the program (D3).
+    /// Request `cmd` be enabled in the program's command set — **deferred**
+    /// ([`Deferred::EnableCommand`]). Realizes `TView::enableCommand` from a view
+    /// that has no up-pointer to the program (D3).
     pub fn enable_command(&mut self, cmd: Command) {
-        self.command_changes.push((cmd, true));
+        self.deferred.push(Deferred::EnableCommand(cmd));
     }
 
-    /// Request `cmd` be disabled — **deferred** (see
+    /// Request `cmd` be disabled — **deferred** ([`Deferred::DisableCommand`]; see
     /// [`enable_command`](Self::enable_command)).
     pub fn disable_command(&mut self, cmd: Command) {
-        self.command_changes.push((cmd, false));
+        self.deferred.push(Deferred::DisableCommand(cmd));
     }
 
-    /// Request the view named by `id` be moved/resized to `bounds` — **deferred**.
-    /// The loop applies it after the current dispatch (mirrors
-    /// [`push_capture`](Self::push_capture) / [`enable_command`](Self::enable_command)),
-    /// resolving `id` via `find_mut` and calling `change_bounds`. A capture handler
-    /// (the drag) holds only a [`ViewId`] (D3), so it cannot mutate the tree inline.
+    /// Request the view named by `id` be moved/resized to `bounds` — **deferred**
+    /// ([`Deferred::ChangeBounds`]). The loop resolves `id` via `find_mut` and calls
+    /// `change_bounds`. A capture handler (the drag) holds only a [`ViewId`] (D3),
+    /// so it cannot mutate the tree inline.
     pub fn request_bounds(&mut self, id: ViewId, bounds: Rect) {
-        self.pending_tree_ops.push(TreeOp::ChangeBounds(id, bounds));
+        self.deferred.push(Deferred::ChangeBounds(id, bounds));
     }
 
     /// Request a propagating state flag be flipped on the view named by `id` —
-    /// **deferred** (see [`request_bounds`](Self::request_bounds)). The loop resolves
-    /// `id` via `find_mut` and calls `set_state` (drag end → `sfDragging` off).
+    /// **deferred** ([`Deferred::SetState`]; see [`request_bounds`](Self::request_bounds)).
+    /// The loop resolves `id` via `find_mut` and calls `set_state` (drag end →
+    /// `sfDragging` off).
     pub fn request_set_state(&mut self, id: ViewId, flag: StateFlag, enable: bool) {
-        self.pending_tree_ops
-            .push(TreeOp::SetState(id, flag, enable));
+        self.deferred.push(Deferred::SetState(id, flag, enable));
     }
 
     /// Request the view named by `id` be removed from whichever group owns it —
-    /// **deferred** (see [`request_bounds`](Self::request_bounds)). The loop resolves
-    /// it via `remove_descendant` (`cmClose`).
+    /// **deferred** ([`Deferred::Close`]; see [`request_bounds`](Self::request_bounds)).
+    /// The loop resolves it via `remove_descendant` (`cmClose`).
     pub fn request_close(&mut self, id: ViewId) {
-        self.pending_tree_ops.push(TreeOp::Close(id));
+        self.deferred.push(Deferred::Close(id));
     }
 
     /// The clock value sampled for this dispatch pass.
@@ -676,18 +676,9 @@ mod tests {
     fn context_post_and_broadcast_land_in_out_events() {
         let mut out = VecDeque::new();
         let mut timers = TimerQueue::new();
-        let mut pending: Vec<Box<dyn CaptureHandler>> = Vec::new();
-        let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
-        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
+        let mut deferred: Vec<Deferred> = Vec::new();
         {
-            let mut ctx = Context::new(
-                &mut out,
-                &mut timers,
-                0,
-                &mut pending,
-                &mut cmd_changes,
-                &mut tree_ops,
-            );
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
             ctx.post(Command::OK);
             ctx.broadcast(Command::QUIT, None);
         }
@@ -706,31 +697,15 @@ mod tests {
     fn context_set_and_kill_timer() {
         let mut out = VecDeque::new();
         let mut timers = TimerQueue::new();
-        let mut pending: Vec<Box<dyn CaptureHandler>> = Vec::new();
-        let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
-        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
+        let mut deferred: Vec<Deferred> = Vec::new();
         let id = {
-            let mut ctx = Context::new(
-                &mut out,
-                &mut timers,
-                100,
-                &mut pending,
-                &mut cmd_changes,
-                &mut tree_ops,
-            );
+            let mut ctx = Context::new(&mut out, &mut timers, 100, &mut deferred);
             assert_eq!(ctx.now_ms(), 100);
             ctx.set_timer(Duration::from_millis(50), None)
         };
         assert_eq!(timers.len(), 1);
         {
-            let mut ctx = Context::new(
-                &mut out,
-                &mut timers,
-                100,
-                &mut pending,
-                &mut cmd_changes,
-                &mut tree_ops,
-            );
+            let mut ctx = Context::new(&mut out, &mut timers, 100, &mut deferred);
             ctx.kill_timer(id);
         }
         assert_eq!(timers.len(), 0);
@@ -740,41 +715,26 @@ mod tests {
     fn context_command_changes_queue_enable_and_disable() {
         let mut out = VecDeque::new();
         let mut timers = TimerQueue::new();
-        let mut pending: Vec<Box<dyn CaptureHandler>> = Vec::new();
-        let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
-        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
+        let mut deferred: Vec<Deferred> = Vec::new();
         {
-            let mut ctx = Context::new(
-                &mut out,
-                &mut timers,
-                0,
-                &mut pending,
-                &mut cmd_changes,
-                &mut tree_ops,
-            );
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
             ctx.enable_command(Command::OK);
             ctx.disable_command(Command::CANCEL);
         }
-        assert_eq!(cmd_changes.len(), 2);
-        assert_eq!(cmd_changes[0], (Command::OK, true));
-        assert_eq!(cmd_changes[1], (Command::CANCEL, false));
+        assert_eq!(deferred.len(), 2);
+        assert!(matches!(deferred[0], Deferred::EnableCommand(Command::OK)));
+        assert!(matches!(
+            deferred[1],
+            Deferred::DisableCommand(Command::CANCEL)
+        ));
     }
 
     #[test]
     fn context_owner_size_defaults_zero_and_round_trips() {
         let mut out = VecDeque::new();
         let mut timers = TimerQueue::new();
-        let mut pending: Vec<Box<dyn CaptureHandler>> = Vec::new();
-        let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
-        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
-        let mut ctx = Context::new(
-            &mut out,
-            &mut timers,
-            0,
-            &mut pending,
-            &mut cmd_changes,
-            &mut tree_ops,
-        );
+        let mut deferred: Vec<Deferred> = Vec::new();
+        let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
         // Context::new defaults owner_size to (0, 0).
         assert_eq!(ctx.owner_size(), Point::new(0, 0));
         // The setter round-trips.

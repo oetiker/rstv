@@ -200,24 +200,17 @@ mod tests {
 
         let mut out = VecDeque::new();
         let mut timers = TimerQueue::new();
-        let mut pending: Vec<Box<dyn CaptureHandler>> = Vec::new();
-        let mut cmd_changes: Vec<(crate::command::Command, bool)> = Vec::new();
-        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
+        let mut deferred: Vec<crate::view::Deferred> = Vec::new();
         let mut ev = key_event(Key::Enter);
 
         let consumed = {
-            let mut ctx = Context::new(
-                &mut out,
-                &mut timers,
-                0,
-                &mut pending,
-                &mut cmd_changes,
-                &mut tree_ops,
-            );
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
             stack.dispatch(&mut ev, &mut ctx)
         };
-        for h in pending.drain(..) {
-            stack.push(h);
+        for effect in deferred.drain(..) {
+            if let crate::view::Deferred::PushCapture(h) = effect {
+                stack.push(h);
+            }
         }
 
         // Upper passed, lower consumed.
@@ -247,24 +240,17 @@ mod tests {
 
         let mut out = VecDeque::new();
         let mut timers = TimerQueue::new();
-        let mut pending: Vec<Box<dyn CaptureHandler>> = Vec::new();
-        let mut cmd_changes: Vec<(crate::command::Command, bool)> = Vec::new();
-        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
+        let mut deferred: Vec<crate::view::Deferred> = Vec::new();
         let mut ev = key_event(Key::Esc);
 
         let consumed = {
-            let mut ctx = Context::new(
-                &mut out,
-                &mut timers,
-                0,
-                &mut pending,
-                &mut cmd_changes,
-                &mut tree_ops,
-            );
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
             stack.dispatch(&mut ev, &mut ctx)
         };
-        for h in pending.drain(..) {
-            stack.push(h);
+        for effect in deferred.drain(..) {
+            if let crate::view::Deferred::PushCapture(h) = effect {
+                stack.push(h);
+            }
         }
 
         assert!(consumed);
@@ -289,25 +275,18 @@ mod tests {
 
         let mut out = VecDeque::new();
         let mut timers = TimerQueue::new();
-        let mut pending: Vec<Box<dyn CaptureHandler>> = Vec::new();
-        let mut cmd_changes: Vec<(crate::command::Command, bool)> = Vec::new();
-        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
+        let mut deferred: Vec<crate::view::Deferred> = Vec::new();
 
         // First event: consumed-and-popped.
         let mut ev1 = key_event(Key::Enter);
         let consumed1 = {
-            let mut ctx = Context::new(
-                &mut out,
-                &mut timers,
-                0,
-                &mut pending,
-                &mut cmd_changes,
-                &mut tree_ops,
-            );
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
             stack.dispatch(&mut ev1, &mut ctx)
         };
-        for h in pending.drain(..) {
-            stack.push(h);
+        for effect in deferred.drain(..) {
+            if let crate::view::Deferred::PushCapture(h) = effect {
+                stack.push(h);
+            }
         }
         assert!(consumed1);
         assert_eq!(stack.len(), 0, "ConsumedPop removed the handler");
@@ -316,18 +295,13 @@ mod tests {
         // Second event: the popped handler must not see it (stack empty -> false).
         let mut ev2 = key_event(Key::Esc);
         let consumed2 = {
-            let mut ctx = Context::new(
-                &mut out,
-                &mut timers,
-                0,
-                &mut pending,
-                &mut cmd_changes,
-                &mut tree_ops,
-            );
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
             stack.dispatch(&mut ev2, &mut ctx)
         };
-        for h in pending.drain(..) {
-            stack.push(h);
+        for effect in deferred.drain(..) {
+            if let crate::view::Deferred::PushCapture(h) = effect {
+                stack.push(h);
+            }
         }
         assert!(!consumed2, "no handler left to consume");
         assert_eq!(
@@ -344,9 +318,7 @@ mod tests {
         // Loop-owned state as locals, exactly as the real loop (row 31) will hold it.
         let mut out: VecDeque<Event> = VecDeque::new();
         let mut timers = TimerQueue::new();
-        let mut pending: Vec<Box<dyn CaptureHandler>> = Vec::new();
-        let mut cmd_changes: Vec<(crate::command::Command, bool)> = Vec::new();
-        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
+        let mut deferred: Vec<crate::view::Deferred> = Vec::new();
 
         let pushed_log = Rc::new(RefCell::new(Vec::new()));
 
@@ -363,19 +335,12 @@ mod tests {
         // those side effects landed in the loop-owned state afterward.
         let mut ev1 = key_event(Key::Char('a'));
         let consumed1 = {
-            let mut ctx = Context::new(
-                &mut out,
-                &mut timers,
-                1_000,
-                &mut pending,
-                &mut cmd_changes,
-                &mut tree_ops,
-            );
+            let mut ctx = Context::new(&mut out, &mut timers, 1_000, &mut deferred);
             assert_eq!(ctx.now_ms(), 1_000);
             stack.dispatch(&mut ev1, &mut ctx)
         };
-        // The deferred push is still in `pending` and has NOT been applied yet.
-        assert_eq!(pending.len(), 1, "push_capture deferred the handler");
+        // The deferred push is still in `deferred` and has NOT been applied yet.
+        assert_eq!(deferred.len(), 1, "push_capture deferred the handler");
         assert_eq!(
             pushed_log.borrow().len(),
             0,
@@ -384,8 +349,10 @@ mod tests {
         assert!(consumed1, "Pusher consumed event 1");
 
         // The loop applies deferred pushes AFTER dispatch.
-        for h in pending.drain(..) {
-            stack.push(h);
+        for effect in deferred.drain(..) {
+            if let crate::view::Deferred::PushCapture(h) = effect {
+                stack.push(h);
+            }
         }
         assert_eq!(stack.len(), 2, "nested handler now on the stack");
 
@@ -405,18 +372,13 @@ mod tests {
         // -- Event 2: the nested handler (top of stack) now sees it. --------
         let mut ev2 = key_event(Key::Char('b'));
         let consumed2 = {
-            let mut ctx = Context::new(
-                &mut out,
-                &mut timers,
-                1_050,
-                &mut pending,
-                &mut cmd_changes,
-                &mut tree_ops,
-            );
+            let mut ctx = Context::new(&mut out, &mut timers, 1_050, &mut deferred);
             stack.dispatch(&mut ev2, &mut ctx)
         };
-        for h in pending.drain(..) {
-            stack.push(h);
+        for effect in deferred.drain(..) {
+            if let crate::view::Deferred::PushCapture(h) = effect {
+                stack.push(h);
+            }
         }
         assert!(consumed2);
         assert_eq!(

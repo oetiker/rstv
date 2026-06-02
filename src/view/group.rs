@@ -808,17 +808,8 @@ mod tests {
         timers: &mut TimerQueue,
         f: impl FnOnce(&mut Context) -> R,
     ) -> R {
-        let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = Vec::new();
-        let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
-        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
-        let mut ctx = Context::new(
-            out,
-            timers,
-            0,
-            &mut pending,
-            &mut cmd_changes,
-            &mut tree_ops,
-        );
+        let mut deferred: Vec<crate::view::Deferred> = Vec::new();
+        let mut ctx = Context::new(out, timers, 0, &mut deferred);
         f(&mut ctx)
     }
 

@@ -794,17 +794,8 @@ mod tests {
         timers: &mut TimerQueue,
         f: impl FnOnce(&mut Context) -> R,
     ) -> R {
-        let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = Vec::new();
-        let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
-        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
-        let mut ctx = Context::new(
-            out,
-            timers,
-            0,
-            &mut pending,
-            &mut cmd_changes,
-            &mut tree_ops,
-        );
+        let mut deferred: Vec<crate::view::Deferred> = Vec::new();
+        let mut ctx = Context::new(out, timers, 0, &mut deferred);
         f(&mut ctx)
     }
 
@@ -1114,48 +1105,41 @@ mod tests {
         let mut w = window_with_frame(); // flags.zoom = true, flags.close = true
         let mut out = VecDeque::new();
         let mut timers = TimerQueue::new();
-        let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = Vec::new();
-        let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
-        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
+        let mut deferred: Vec<crate::view::Deferred> = Vec::new();
 
         {
-            let mut ctx = Context::new(
-                &mut out,
-                &mut timers,
-                0,
-                &mut pending,
-                &mut cmd_changes,
-                &mut tree_ops,
-            );
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
             View::set_state(&mut w, StateFlag::Selected, true, &mut ctx);
         }
+        use crate::view::Deferred;
         assert!(
-            cmd_changes.contains(&(Command::ZOOM, true)),
+            deferred
+                .iter()
+                .any(|d| matches!(d, Deferred::EnableCommand(Command::ZOOM))),
             "select enables cmZoom"
         );
         assert!(
-            cmd_changes.contains(&(Command::CLOSE, true)),
+            deferred
+                .iter()
+                .any(|d| matches!(d, Deferred::EnableCommand(Command::CLOSE))),
             "select enables cmClose"
         );
 
-        cmd_changes.clear();
+        deferred.clear();
         {
-            let mut ctx = Context::new(
-                &mut out,
-                &mut timers,
-                0,
-                &mut pending,
-                &mut cmd_changes,
-                &mut tree_ops,
-            );
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
             View::set_state(&mut w, StateFlag::Selected, false, &mut ctx);
         }
         assert!(
-            cmd_changes.contains(&(Command::ZOOM, false)),
+            deferred
+                .iter()
+                .any(|d| matches!(d, Deferred::DisableCommand(Command::ZOOM))),
             "deselect disables cmZoom"
         );
         assert!(
-            cmd_changes.contains(&(Command::CLOSE, false)),
+            deferred
+                .iter()
+                .any(|d| matches!(d, Deferred::DisableCommand(Command::CLOSE))),
             "deselect disables cmClose"
         );
     }
@@ -1181,36 +1165,20 @@ mod tests {
 
         let mut out = VecDeque::new();
         let mut timers = TimerQueue::new();
-        let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = Vec::new();
-        let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
-        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
+        let mut deferred: Vec<crate::view::Deferred> = Vec::new();
 
         // Select the window (realism: the desktop would have it selected) and feed
         // a cmZoom directly. owner_size is set on the ctx (the desktop's job): the
         // group.handle_event inside Window restores owner_size to this value, so by
         // the time the cmZoom arm runs zoom(), owner_size == desktop_size.
         {
-            let mut ctx = Context::new(
-                &mut out,
-                &mut timers,
-                0,
-                &mut pending,
-                &mut cmd_changes,
-                &mut tree_ops,
-            );
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
             View::set_state(&mut w, StateFlag::Selected, true, &mut ctx);
         }
 
         // First zoom: fill the owner.
         {
-            let mut ctx = Context::new(
-                &mut out,
-                &mut timers,
-                0,
-                &mut pending,
-                &mut cmd_changes,
-                &mut tree_ops,
-            );
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
             ctx.set_owner_size(desktop_size);
             let mut ev = Event::Command(Command::ZOOM);
             w.handle_event(&mut ev, &mut ctx);
@@ -1230,14 +1198,7 @@ mod tests {
 
         // Second zoom (toggle): restore.
         {
-            let mut ctx = Context::new(
-                &mut out,
-                &mut timers,
-                0,
-                &mut pending,
-                &mut cmd_changes,
-                &mut tree_ops,
-            );
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
             ctx.set_owner_size(desktop_size);
             let mut ev = Event::Command(Command::ZOOM);
             w.handle_event(&mut ev, &mut ctx);
@@ -1277,18 +1238,9 @@ mod tests {
 
         let mut out = VecDeque::new();
         let mut timers = TimerQueue::new();
-        let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = Vec::new();
-        let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
-        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
+        let mut deferred: Vec<crate::view::Deferred> = Vec::new();
         {
-            let mut ctx = Context::new(
-                &mut out,
-                &mut timers,
-                0,
-                &mut pending,
-                &mut cmd_changes,
-                &mut tree_ops,
-            );
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
             View::set_state(&mut w, StateFlag::Selected, true, &mut ctx);
         }
 
@@ -1297,14 +1249,7 @@ mod tests {
 
         // Zoom to fill the screen.
         {
-            let mut ctx = Context::new(
-                &mut out,
-                &mut timers,
-                0,
-                &mut pending,
-                &mut cmd_changes,
-                &mut tree_ops,
-            );
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
             ctx.set_owner_size(screen);
             let mut ev = Event::Command(Command::ZOOM);
             w.handle_event(&mut ev, &mut ctx);
@@ -1383,7 +1328,7 @@ mod tests {
     }
 
     /// Helper: build a `Context`, call `handle_event` on the window resolved by
-    /// `id` inside `parent`, and report (event-consumed, pending-capture-count).
+    /// `id` inside `parent`, and report (event-consumed, pushed-capture-count).
     fn drive_window(
         parent: &mut Group,
         id: ViewId,
@@ -1392,28 +1337,23 @@ mod tests {
     ) -> (bool, usize) {
         let mut out = VecDeque::new();
         let mut timers = TimerQueue::new();
-        let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = Vec::new();
-        let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
-        let mut tree_ops: Vec<crate::view::TreeOp> = Vec::new();
+        let mut deferred: Vec<crate::view::Deferred> = Vec::new();
         {
-            let mut ctx = Context::new(
-                &mut out,
-                &mut timers,
-                0,
-                &mut pending,
-                &mut cmd_changes,
-                &mut tree_ops,
-            );
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
             ctx.set_owner_size(owner_size);
             let win = parent.find_mut(id).expect("window resolves");
             win.handle_event(ev, &mut ctx);
         }
-        (ev.is_nothing(), pending.len())
+        let pushed = deferred
+            .iter()
+            .filter(|d| matches!(d, crate::view::Deferred::PushCapture(_)))
+            .count();
+        (ev.is_nothing(), pushed)
     }
 
     /// A title-bar `MouseDown` (window-local `y == 0`) starts a Move drag: the
     /// window's `dragging` goes true, the event is consumed, and one capture is
-    /// queued in the local `pending` Vec.
+    /// queued in the local `deferred` Vec.
     #[test]
     fn title_bar_mouse_down_starts_move_drag() {
         let (mut parent, id) = window_in_group(Rect::new(2, 1, 22, 9)); // 20x8

@@ -16,7 +16,7 @@ mod id;
 #[allow(clippy::module_inception)]
 mod view;
 
-pub use context::{Context, DrawCtx, TreeOp};
+pub use context::{Context, Deferred, DrawCtx};
 pub use geometry::{Point, Rect};
 pub use group::{Group, SelectMode};
 pub use id::ViewId;
