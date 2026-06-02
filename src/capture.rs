@@ -80,6 +80,17 @@ impl CaptureStack {
         self.handlers.push(handler);
     }
 
+    /// Remove and return the top handler, if any. Used by
+    /// [`Program::exec_view`](crate::app::Program::exec_view) to remove the
+    /// [`ModalFrame`](crate::app::ModalFrame) it pushed once the modal loop ends —
+    /// the **one** place a frame is popped other than a handler self-popping via
+    /// [`CaptureFlow::ConsumedPop`]. (The loop owns the stack; a handler cannot
+    /// reach it to do a `valid(end_state)`-conditional pop, so the owner-side
+    /// `exec_view` does it.)
+    pub fn pop(&mut self) -> Option<Box<dyn CaptureHandler>> {
+        self.handlers.pop()
+    }
+
     /// Number of handlers currently on the stack.
     pub fn len(&self) -> usize {
         self.handlers.len()

@@ -466,12 +466,46 @@ modal closes; `dragView` and a pressed button's mouse-tracking do the same.
   that consumes every otherwise-unhandled event *is* the modal loop. Handlers
   hold `ViewId`, not view references.
 
-**Integration.** `exec_view` can't block-and-return its result; the result is
-delivered when the modal handler pops — by **posting a completion `Command`** (or
-invoking a callback) to the owner. Animation / cursor-blink / auto-repeat
-schedule against an **injected `Clock`** with cancelable handles and set the
-loop's poll timeout — never `sleep` (this is also what makes timing
-deterministic under test, D11).
+**Integration.** Animation / cursor-blink / auto-repeat schedule against an
+**injected `Clock`** with cancelable handles and set the loop's poll timeout —
+never `sleep` (this is also what makes timing deterministic under test, D11).
+
+> **`exec_view` — corrected (the two modal-invocation paths; ratified at row 34).**
+> The original note said "`exec_view` can't block-and-return; deliver the result
+> by posting a completion `Command`." That is true for *one* of the two callers,
+> and the type system draws the line between them cleanly:
+>
+> * **Owner-/top-level-initiated (sync return, `row 34`).** `exec_view` is an
+>   inherent `&mut self` method on **`Program`** (`TGroup::execView`'s owner). It
+>   runs a **nested `while end_state.is_none() { pump_once() }`** loop (the
+>   `TGroup::execute` shape, incl. the outer `while !valid(end_state)`), then pops
+>   its pushed `ModalFrame` and returns the end command **synchronously**. This is
+>   **not** a forbidden nested *re-entrant* loop: `pump_once` releases the view-tree
+>   `&mut` borrow stack between iterations, and **a `View` holds only `&mut Context`,
+>   never `&mut Program`** — so a view *cannot* call `exec_view` from inside its own
+>   `handle_event`. The compiler enforces that the sync loop only ever runs at the
+>   top level (startup, an app's `main`, a test driving pre-queued events), where
+>   no other `pump_once` borrow is live. The D9 "one non-recursive loop" rule is
+>   preserved: there is still exactly one `pump_once`; `exec_view` just *drives* it
+>   in a bounded loop instead of `run()`.
+> * **View-/menu-triggered (async, `Phase 4`).** A menu item or button that wants a
+>   modal *is* inside `handle_event`, so it cannot call `exec_view`. It **requests**
+>   the modal downward — a `Deferred::OpenModal(Box<dyn View>)` variant (or posts an
+>   app command) — and `run()` drains the request **between pumps** and calls
+>   `exec_view` itself; the result is delivered back to the requester via a **posted
+>   completion `Command`** (the original note's mechanism). *Designed, not built —
+>   no menu/button exists until Phase 4; row 34 builds only the sync path.*
+>
+> **`endModal` is downward (no up-pointer, D3).** `TDialog::handleEvent` cannot call
+> `Program::endModal` (it has `&mut Context`, not the program). It signals through a
+> new **`Deferred::EndModal(Command)`** variant (`ctx.end_modal(cmd)`); the pump
+> applies it by setting `Program::end_state`, which the nested `exec_view` loop then
+> observes. This is the unified-`Deferred`-channel rule from `69897fe` — *a new
+> deferred capability adds a variant, not a `Context::new` param.* The pop lives in
+> `exec_view` (not the `ModalFrame` handler): the handler holds no `&mut Program`,
+> so it cannot reach the capture stack / `end_state` to decide a `valid(end_state)`
+> conditional pop — only the owner-side `exec_view` can. `CaptureStack` gains a
+> `pop()` for this (the one place a frame is removed other than `ConsumedPop`).
 
 > **`Clock` + `TimerQueue` shape (ratified during the row 20 port).** The
 > injected clock is a `trait Clock { fn now_ms(&self) -> u64 }` (faithful to TV's

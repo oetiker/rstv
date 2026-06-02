@@ -61,6 +61,17 @@ pub enum Deferred {
     SetState(ViewId, StateFlag, bool),
     /// Remove the view from whichever group owns it (`cmClose`).
     Close(ViewId),
+    /// Request the (modal) loop end with `command` (`TGroup::endModal`). The pump
+    /// applies it by setting `Program::end_state`; the nested `exec_view` loop then
+    /// observes it. The downward (D3) replacement for a view calling `endModal` up
+    /// its owner chain.
+    ///
+    /// This touches **loop state** (`end_state`) — a fourth disjoint target
+    /// alongside the capture stack / command set / view tree — so the `69897fe`
+    /// insertion-order drain stays order-equivalent: no dispatch co-queues an
+    /// `EndModal` with an effect on the *same* state, and cross-family order never
+    /// affects the result.
+    EndModal(Command),
 }
 
 // ---------------------------------------------------------------------------
@@ -392,6 +403,18 @@ impl<'a> Context<'a> {
     /// The loop resolves it via `remove_descendant` (`cmClose`).
     pub fn request_close(&mut self, id: ViewId) {
         self.deferred.push(Deferred::Close(id));
+    }
+
+    /// Request the (modal) loop end with `cmd` — **deferred** ([`Deferred::EndModal`]).
+    /// `TGroup::endModal` from a view with no up-pointer to the program (D3): the
+    /// pump sets `Program::end_state` and the nested `exec_view` loop observes it.
+    ///
+    /// **View-side, deferred.** This is the path a [`View`](crate::view::View)
+    /// takes (it holds only `&mut Context`, never `&mut Program`). The owner /
+    /// top-level path is the immediate `Program::end_modal`. Rule of thumb:
+    /// view → `ctx.end_modal`; owner / top-level → `Program::end_modal`.
+    pub fn end_modal(&mut self, cmd: Command) {
+        self.deferred.push(Deferred::EndModal(cmd));
     }
 
     /// The clock value sampled for this dispatch pass.
@@ -727,6 +750,19 @@ mod tests {
             deferred[1],
             Deferred::DisableCommand(Command::CANCEL)
         ));
+    }
+
+    #[test]
+    fn context_end_modal_queues_deferred() {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut deferred: Vec<Deferred> = Vec::new();
+        {
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
+            ctx.end_modal(Command::CANCEL);
+        }
+        assert_eq!(deferred.len(), 1);
+        assert!(matches!(deferred[0], Deferred::EndModal(Command::CANCEL)));
     }
 
     #[test]

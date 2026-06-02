@@ -317,6 +317,13 @@ impl Program {
     /// `TProgram::endModal` — request the (modal) loop end with `cmd`. Ports
     /// `TGroup::endModal`: store the end state; [`run`](Self::run) returns it once
     /// the tree validates it.
+    ///
+    /// **Owner-side, immediate.** This is the top-level path — call it when you
+    /// hold `&mut Program` (an app `main`, startup, or a test). A *view* has no
+    /// up-pointer to the program (D3) and must instead defer via
+    /// [`Context::end_modal`](crate::view::Context::end_modal) (→
+    /// [`Deferred::EndModal`], applied by the pump). Rule of thumb: view →
+    /// `ctx.end_modal`; owner / top-level → `Program::end_modal`.
     pub fn end_modal(&mut self, cmd: Command) {
         self.end_state = Some(cmd);
     }
@@ -387,6 +394,169 @@ impl Program {
     /// if the tree validates the end command.
     fn valid_end(&self, cmd: Command) -> bool {
         self.group.valid(cmd)
+    }
+
+    // -- exec_view: the blocking modal wrapper (row 34, D9) -----------------
+
+    /// `TGroup::execView` (run on `TProgram`, the owner group) — insert a view
+    /// modally, drive the loop until it validates an end command, and return that
+    /// command. Ports `TGroup::execView` + `TGroup::execute` (`tgroup.cpp`).
+    ///
+    /// **Top-level only — the type system enforces it:** a [`View`] holds only
+    /// `&mut Context`, never `&mut Program`, so a view *cannot* call this from
+    /// inside `handle_event` (which is what makes the nested
+    /// [`pump_once`](Self::pump_once) loop sound — D9 "exec_view — corrected"). Call
+    /// from an app `main`, startup, or a test driving pre-queued events. The
+    /// view-/menu-triggered async modal (`Deferred::OpenModal` + a posted
+    /// completion command) is **Phase 4** — only the sync `exec_view` is built here.
+    ///
+    /// **HEADLESS HANG WARNING:** [`pump_once`](Self::pump_once) does not block on a
+    /// headless backend, so the inner `while end_state.is_none()` loop spins until
+    /// something sets `end_state`. The caller MUST ensure the modal reaches
+    /// [`Context::end_modal`] (e.g. a pre-queued `cmOK`/`cmCancel`, or an Esc that a
+    /// [`Dialog`](crate::dialog::Dialog) turns into a posted `cmCancel`). A modal
+    /// with no path to `end_modal` hangs.
+    ///
+    /// Control flow (faithful to `execView`):
+    /// 1. Save `current` + a clone of the command set (`getCommands`).
+    /// 2. **Insert** the view into the root group (we always own it — `saveOwner ==
+    ///    0` always here; the "already owned" branch has no caller at row 34).
+    ///    Insert FIRST so `set_current` can resolve the id.
+    /// 3. Clear `ofSelectable` on the view (`p->options &= ~ofSelectable`).
+    /// 4. `setState(sfModal, True)` — set the bit **directly** (NOT via the
+    ///    propagating `set_state`: C++ `TGroup::setState` never propagates `sfModal`
+    ///    to children, and every existing site sets `.state.modal` directly).
+    /// 5. `setCurrent(p, enterSelect)` — selects + focuses the view (fires its
+    ///    command enables, deferred; unwound by the command-set restore in step 9).
+    /// 6. Push the [`ModalFrame`] directly (we hold `&mut self`, not inside a
+    ///    dispatch).
+    /// 7. The loop: `loop { end_state = None; while none { pump_once }; if the
+    ///    MODAL view's own valid(es) break es }` — validate `p`'s `valid`
+    ///    (`TDialog::valid`), NOT the root group's (`tgroup.cpp:184/205`).
+    /// 8. Pop the frame, `remove` the view, `setCurrent(saveCurrent, leaveSelect)`.
+    /// 9. Restore the command set (`setCommands`).
+    pub fn exec_view(&mut self, view: Box<dyn View>) -> Command {
+        // 1. getCommands / save the outgoing current.
+        let save_current = self.group.current();
+        let save_commands = self.command_set.clone();
+
+        // 2. Insert FIRST (always own it: saveOwner == 0). Insert before
+        //    set_current so the group can resolve the id (set_current resolves via
+        //    index_of and is a silent no-op for an absent id).
+        //
+        // ROOT-INSERT DEVIATION: this inserts the modal into the ROOT group — the
+        // modal becomes a sibling of the desktop. Faithful to C++
+        // `application->execView(pD)` (msgbox.cpp:90/186 use exactly this). The
+        // alternative C++ pattern, `TProgram::executeDialog`, uses
+        // `deskTop->execView(pD)` (tprogram.cpp:119) — the desktop variant, which
+        // inserts into the desktop instead. Root-insert is fine for row 34. Revisit
+        // when the desktop is inset by a menu/status bar (Phase 4): a desktop-inset
+        // modal would then need to clip to the desktop region, compounding the
+        // `ModalFrame` (0,0)-coordinate caveat. Do NOT change the insert target now.
+        let id = self.group.insert(view);
+
+        // The modal view's bounds in the root group's frame, for the ModalFrame
+        // hit-test. For row 31 the root group is at (0,0), so group-local ==
+        // absolute (the same ModalFrame coordinate caveat).
+        let bounds = self
+            .group
+            .find_mut(id)
+            .map(|v| v.state().get_bounds())
+            .unwrap_or_default();
+
+        // 3+4. p->options &= ~ofSelectable (a modal view is not tab-selectable among
+        //      siblings — a REAL true->false flip: Window::new sets ofSelectable and a
+        //      Dialog delegates `state`) + setState(sfModal, True) set directly (C++
+        //      TGroup::setState propagates sfActive/sfDragging/sfFocused, NEVER sfModal,
+        //      so a direct write is the faithful port). The saveOptions/restore is moot
+        //      — the view is dropped on remove (step 8).
+        if let Some(v) = self.group.find_mut(id) {
+            let st = v.state_mut();
+            st.options.selectable = false;
+            st.state.modal = true;
+        }
+
+        // 5. setCurrent(p, enterSelect). enterSelect does not deselect the old
+        //    current (the desktop stays selected beneath). Build a throwaway
+        //    Context over the disjoint fields (the pump's discipline).
+        {
+            let now = self.clock.now_ms();
+            let mut ctx = Context::new(
+                &mut self.out_events,
+                &mut self.timers,
+                now,
+                &mut self.deferred,
+            );
+            self.group
+                .set_current(Some(id), SelectMode::Enter, &mut ctx);
+        }
+
+        // 6. Push the ModalFrame DIRECTLY (we hold &mut self; we are not inside a
+        //    dispatch, so this is not deferred).
+        self.captures.push(Box::new(ModalFrame::new(id, bounds)));
+
+        // 7. TGroup::execute — drive the single pump in a bounded top-level loop.
+        //    The inner while spins on a headless backend until the modal sets
+        //    end_state (the HEADLESS HANG WARNING above); the outer loop re-runs if
+        //    valid_end refuses the end command (TGroup::execute's while(!valid)).
+        let retval = loop {
+            self.end_state = None;
+            while self.end_state.is_none() {
+                self.pump_once();
+            }
+            let es = self.end_state.unwrap();
+            // TGroup::execView calls `p->execute()` (tgroup.cpp:205), whose outer
+            // `while( !valid(endState) )` (tgroup.cpp:184) invokes the VIRTUAL
+            // `valid` on `p` = the modal view (TDialog::valid: cmCancel->true,
+            // else the DIALOG's own children). Validate the modal view's OWN
+            // `valid` — NOT `self.group.valid` (the ROOT group), which would also
+            // consult the desktop sibling (a scope C++ never uses) and is a latent
+            // hang if a sibling ever vetoed (the outer loop would re-spin with
+            // nothing re-issuing the command). The id still resolves here: `remove`
+            // happens after this loop.
+            let valid = self.group.find_mut(id).map(|v| v.valid(es)).unwrap_or(true);
+            if valid {
+                break es;
+            }
+        };
+
+        // 8. Pop the frame (it is on top — drags self-pop on MouseUp, so nothing
+        //    unbalanced remains when end_state is set), then remove the view.
+        self.captures.pop();
+        {
+            let now = self.clock.now_ms();
+            let mut ctx = Context::new(
+                &mut self.out_events,
+                &mut self.timers,
+                now,
+                &mut self.deferred,
+            );
+            // saveOwner == 0 -> remove. Group::remove runs reset_current (re-selects
+            // the desktop), so the following setCurrent(saveCurrent, leaveSelect) is
+            // a faithful no-op in the common case. The view is a direct child of the
+            // root group, so Group::remove (not remove_descendant) is correct.
+            self.group.remove(id, &mut ctx);
+            // setCurrent(saveCurrent, leaveSelect). leaveSelect does not re-select
+            // the new current (the desktop already is, via reset_current).
+            self.group
+                .set_current(save_current, SelectMode::Leave, &mut ctx);
+        }
+
+        // The C++ tail `p->setState(sfModal, False); p->options = saveOptions;` is
+        // **moot** here: the removed view is owned by the group and dropped on
+        // `remove` (we keep no Box from it), so clearing sfModal / restoring options
+        // on a dropped object is unobservable — not ported (faithfulness note, D3).
+
+        // 9. setCommands(saveCommands): restore the command set. Restoring is not an
+        //    app-visible toggle the way enable/disable is, so we do NOT set
+        //    command_set_changed (no re-broadcast): the modal's command enables were
+        //    transient and unwinding them is internal bookkeeping, not a state the
+        //    app reacts to.
+        self.command_set = save_commands;
+
+        // TheTopView dropped (D8: no occlusion/exposed); no consumer.
+
+        retval
     }
 
     /// One iteration of the loop — the heart of D9.
@@ -532,6 +702,11 @@ impl Program {
                                 }
                                 Deferred::Close(id) => {
                                     group.remove_descendant(id, &mut ctx);
+                                }
+                                // TGroup::endModal — set the loop end state; the
+                                // nested exec_view loop (row 34) observes it.
+                                Deferred::EndModal(cmd) => {
+                                    *end_state = Some(cmd);
                                 }
                             }
                         }
@@ -1539,6 +1714,160 @@ mod tests {
             program.group_mut().find_mut(id).is_none(),
             "window removed via remove_descendant after cmClose"
         );
+    }
+
+    // -- 13. exec_view modal round-trips (row 34, FOUNDATION gate) -----------
+
+    use crate::dialog::Dialog;
+
+    /// `exec_view` full round-trip: pre-queue `cmOK`, run a `Dialog` modally, and
+    /// assert it returns `Command::OK`. The trace: `exec_view` inserts + selects +
+    /// pushes the frame + enters the loop -> pump 1 pops the queued `cmOK` -> routes
+    /// to the current (modal) dialog -> `end_modal(OK)` deferred -> the pump applies
+    /// it -> `end_state = Some(OK)` -> the inner loop exits -> `valid(OK)` true ->
+    /// returns OK. Post-conditions: the frame was popped (`capture_len == 0`), the
+    /// dialog was removed (the root child count returned to its pre-exec value), and
+    /// `current` was restored to the saved value (the desktop).
+    #[test]
+    fn exec_view_returns_ok_via_queued_command() {
+        let (mut program, _screen, _clock) = program_with_desktop(40, 12);
+        let children_before = program.group_mut().len();
+        let current_before = program.group_mut().current();
+        assert_eq!(program.capture_len(), 0);
+
+        // Pre-queue cmOK BEFORE exec_view: it sits ahead of the set_current focus
+        // broadcasts, so pump 1 consumes it and routes it to the modal dialog.
+        program.out_events.push_back(Event::Command(Command::OK));
+
+        let dialog = Dialog::new(Rect::new(4, 2, 36, 10), Some("Setup".into()));
+        let result = program.exec_view(Box::new(dialog));
+
+        assert_eq!(
+            result,
+            Command::OK,
+            "exec_view returns the modal end command"
+        );
+        assert_eq!(program.capture_len(), 0, "ModalFrame popped after the loop");
+        assert_eq!(
+            program.group_mut().len(),
+            children_before,
+            "dialog removed: child count restored"
+        );
+        assert_eq!(
+            program.group_mut().current(),
+            current_before,
+            "current restored to the saved value (the desktop)"
+        );
+    }
+
+    /// `exec_view` returns `cmCancel` via Esc: pre-queue an Esc `KeyDown`. The
+    /// dialog turns it into a posted `cmCancel` (a later pump consumes that), so
+    /// the modal ends with cmCancel. Multiple pumps — still hang-safe because an
+    /// end-command is always in flight once the Esc is processed.
+    #[test]
+    fn exec_view_returns_cancel_via_esc() {
+        let (mut program, _screen, _clock) = program_with_desktop(40, 12);
+
+        // Pre-queue Esc: pump 1 routes it to the dialog -> posts cmCancel; a later
+        // pump routes cmCancel -> end_modal(Cancel) -> exits.
+        program.out_events.push_back(key(Key::Esc));
+
+        let dialog = Dialog::new(Rect::new(4, 2, 36, 10), Some("Setup".into()));
+        let result = program.exec_view(Box::new(dialog));
+
+        assert_eq!(result, Command::CANCEL, "Esc -> cmCancel ends the modal");
+        assert_eq!(program.capture_len(), 0, "ModalFrame popped");
+    }
+
+    /// `cmQuit` during a modal (the non-obvious edge). Inside the modal,
+    /// `Event::Command(Command::QUIT)` is caught by `program_handle_event` ->
+    /// `end_state = Some(QUIT)`. The inner loop exits, `valid_end(QUIT)` ->
+    /// `group.valid(QUIT)` -> true (the dialog's `valid` defers to the group, no
+    /// child vetoes QUIT), so `exec_view` returns `QUIT` and pops the frame.
+    ///
+    /// Faithful behavior: in C++ `cmQuit` inside a modal ends the *modal* with
+    /// `cmQuit`; the caller (an app's outer `run`) is expected to re-post / propagate
+    /// the quit. We assert `exec_view` returns `QUIT` and the frame is popped (no
+    /// hang, no panic). App-level quit propagation is NOT built (no app exists).
+    #[test]
+    fn exec_view_cm_quit_ends_modal_with_quit() {
+        let (mut program, _screen, _clock) = program_with_desktop(40, 12);
+
+        program.out_events.push_back(Event::Command(Command::QUIT));
+
+        let dialog = Dialog::new(Rect::new(4, 2, 36, 10), Some("Setup".into()));
+        let result = program.exec_view(Box::new(dialog));
+
+        assert_eq!(
+            result,
+            Command::QUIT,
+            "cmQuit during a modal ends the modal with cmQuit (caller propagates)"
+        );
+        assert_eq!(program.capture_len(), 0, "ModalFrame popped on cmQuit");
+    }
+
+    /// A sibling view in the ROOT group whose `valid` vetoes one specific command
+    /// (and is otherwise valid). Used to prove `exec_view`'s outer validation is
+    /// scoped to the MODAL view, not the root group (a root-scoped check would also
+    /// consult this sibling).
+    struct VetoView {
+        st: ViewState,
+        veto: Command,
+    }
+    impl View for VetoView {
+        fn state(&self) -> &ViewState {
+            &self.st
+        }
+        fn state_mut(&mut self) -> &mut ViewState {
+            &mut self.st
+        }
+        fn draw(&mut self, _ctx: &mut DrawCtx) {}
+        fn valid(&self, cmd: Command) -> bool {
+            cmd != self.veto
+        }
+    }
+
+    /// DISCRIMINATING (Fix 1): `exec_view`'s outer `while(!valid)` validates the
+    /// MODAL view's own `valid` (TDialog::valid, scoped to the dialog's children) —
+    /// NOT the root group's `valid` (which would also consult the desktop's
+    /// siblings). We insert a sibling into the ROOT group whose `valid` vetoes
+    /// `cmOK`, then run a dialog modally that ends with `cmOK`. The dialog's own
+    /// `valid(cmOK)` is true (no validating children), so `exec_view` returns OK.
+    ///
+    /// **Bite verification (no CI-hang risk):** with the BUGGY `self.group.valid(es)`,
+    /// the sibling's `cmOK` veto makes the root `valid(cmOK)` false, the outer loop
+    /// re-spins with `end_state = None` and nothing queued, and the inner `while`
+    /// HANGS — so we cannot run the buggy code under CI. The bite was confirmed
+    /// MANUALLY by temporarily reverting Fix 1 to `self.valid_end(es)` and adding a
+    /// bounded outer-iteration guard (max 3 spins -> panic): under the bug the guard
+    /// fired (re-spin observed); with the fix the loop breaks on the first pass.
+    /// The guard + revert were removed after confirming; the committed test asserts
+    /// only the fixed behavior (returns OK despite the sibling veto).
+    #[test]
+    fn exec_view_outer_valid_scopes_to_modal_not_root_group() {
+        let (mut program, _screen, _clock) = program_with_desktop(40, 12);
+        // Sibling in the ROOT group that vetoes cmOK (and only cmOK).
+        {
+            let sibling = VetoView {
+                st: ViewState::new(Rect::new(0, 0, 2, 2)),
+                veto: Command::OK,
+            };
+            program.group_mut().insert(Box::new(sibling));
+        }
+        // Pre-queue cmOK so the modal ends with OK.
+        program.out_events.push_back(Event::Command(Command::OK));
+
+        let dialog = Dialog::new(Rect::new(4, 2, 36, 10), Some("Setup".into()));
+        let result = program.exec_view(Box::new(dialog));
+
+        assert_eq!(
+            result,
+            Command::OK,
+            "exec_view validates the MODAL view's own valid (dialog: OK ok), \
+             NOT the root group (where the sibling vetoes OK) — the sibling's \
+             veto must NOT keep the loop spinning"
+        );
+        assert_eq!(program.capture_len(), 0, "ModalFrame popped");
     }
 
     /// A `sfModal` window posts `cmCancel` on `cmClose` and is NOT removed (row 34

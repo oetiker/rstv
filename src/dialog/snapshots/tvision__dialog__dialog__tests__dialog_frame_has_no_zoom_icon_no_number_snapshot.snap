@@ -1,0 +1,28 @@
+---
+source: src/dialog/dialog.rs
+expression: screen.snapshot()
+---
+size: 24x8
+cursor: hidden
+text:
+|╔═[■]═══ Setup ════════╗|
+|║                      ║|
+|║                      ║|
+|║                      ║|
+|║                      ║|
+|║                      ║|
+|║                      ║|
+|╚══════════════════════╝|
+attr:
+|aaabaaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(15) bg=BIOS(1)
+  b fg=BIOS(10) bg=BIOS(1)

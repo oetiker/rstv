@@ -209,6 +209,48 @@ impl Window {
         self.title.as_deref()
     }
 
+    // -- setters (subclass field overrides, e.g. TDialog) -------------------
+
+    /// Override the decoration flags after construction (`TDialog::TDialog` sets
+    /// `flags = wfMove | wfClose`). Re-pushes to the frame child (D3
+    /// owner-data-down): the ctor pushes `flags` to the frame once, so a later
+    /// change must re-push or the frame would still draw the ctor's zoom/grow
+    /// icons. Resolves `frame_id` then downcast then [`Frame::set_flags`], the same
+    /// seam `zoom` uses to push `set_zoomed`.
+    pub(crate) fn set_flags(&mut self, flags: WindowFlags) {
+        self.flags = flags;
+        if let Some(frame) = self
+            .group
+            .child_mut(self.frame_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<Frame>())
+        {
+            frame.set_flags(flags);
+        }
+    }
+
+    /// Override the colour scheme after construction (`TDialog::TDialog` sets
+    /// `palette = dpGrayDialog`). TODO(row 34 gray theming): the `Gray` scheme is
+    /// only recorded here; the frame still renders the blue `Frame*` roles. The
+    /// gray/cyan to theme-role mapping is a follow-on cosmetic chunk (see the
+    /// `WindowPalette` doc).
+    pub(crate) fn set_palette(&mut self, palette: WindowPalette) {
+        self.palette = palette;
+    }
+
+    /// Override the grow mode after construction (`TDialog::TDialog` sets
+    /// `growMode = 0` — a dialog does not track its owner's resize).
+    pub(crate) fn set_grow_mode(&mut self, grow_mode: GrowMode) {
+        self.group.state_mut().grow_mode = grow_mode;
+    }
+
+    /// Insert a child view into the embedded group (test hook — used by the
+    /// `Dialog::valid` veto test to add a validating probe child).
+    #[cfg(test)]
+    pub(crate) fn insert_child(&mut self, view: Box<dyn View>) -> ViewId {
+        self.group.insert(view)
+    }
+
     // -- standardScrollBar ---------------------------------------------------
 
     /// `TWindow::standardScrollBar(aOptions)` — insert a standard scroll bar on

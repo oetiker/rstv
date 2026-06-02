@@ -59,6 +59,8 @@
 //! | 24 | `TFrame` (`Frame`) | [`frame`] | ✅ |
 //! | 31 | `TProgram` (`Program`, live loop) | [`app`] | ✅ |
 //! | 33 | `TWindow` (`Window`, core) | [`window`] | ✅ |
+//! | 30 | `TDeskTop` (`Desktop`) | [`desktop`] | ✅ |
+//! | 34 | `TDialog` (`Dialog`, modal `exec_view`) | [`dialog`] | ✅ |
 
 pub mod app;
 pub mod backend;
@@ -66,6 +68,7 @@ pub mod capture;
 pub mod color;
 pub mod command;
 pub mod desktop;
+pub mod dialog;
 pub mod event;
 pub mod frame;
 pub mod help;
@@ -85,6 +88,7 @@ pub use capture::{CaptureFlow, CaptureHandler, CaptureStack};
 pub use color::{Color, Modifiers, Style};
 pub use command::{Command, CommandSet};
 pub use desktop::{Background, Desktop};
+pub use dialog::Dialog;
 pub use event::{
     Event, EventMask, Key, KeyEvent, KeyModifiers, MouseButtons, MouseEvent, MouseEventFlags,
     MouseWheel,
