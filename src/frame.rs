@@ -28,8 +28,9 @@
 //!
 //! * **D2** — `TView` is the [`View`] trait + [`ViewState`]; `Frame` embeds
 //!   `st: ViewState` and `impl View for Frame`.
-//! * **D5** — `wf*` flag word → [`WindowFlags`] struct-of-bools. Defined here
-//!   for now; `TWindow` (row 33) will own/relocate it.
+//! * **D5** — `wf*` flag word → [`WindowFlags`] struct-of-bools. Now owned by
+//!   the `window` module (relocated at row 33); `frame.rs` imports it via
+//!   `use crate::window::WindowFlags;` and renders the pushed-down copy.
 //! * **D7** — no `getColor`/`getPalette`; border roles are
 //!   [`Role::FrameActive`] / [`Role::FramePassive`] / [`Role::FrameDragging`],
 //!   icons are [`Role::FrameIcon`]. The C++ has distinct title palette entries
@@ -62,31 +63,7 @@ use crate::command::Command;
 use crate::event::Event;
 use crate::theme::Role;
 use crate::view::{Context, DrawCtx, GrowMode, Rect, View, ViewState};
-
-// ---------------------------------------------------------------------------
-// WindowFlags — D5 struct-of-bools for the `wf*` word (relocates to row 33)
-// ---------------------------------------------------------------------------
-
-/// Window decoration flags — ports the `wf*` family (`dialogs.h`), D5.
-///
-/// `TWindow` (row 33) will own these; they live here for now because [`Frame`]
-/// is the first thing that needs them (it draws the close / zoom / resize icons
-/// and routes their clicks). The window pushes its flags down via
-/// [`Frame::set_flags`].
-///
-/// The keyword-colliding `wfMove` becomes the raw identifier `r#move`,
-/// consistent with the project's `r#move` / `r#union` precedent in geometry.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct WindowFlags {
-    /// `wfMove` — the window can be moved by dragging its frame.
-    pub r#move: bool,
-    /// `wfGrow` — the window can be resized by dragging its bottom corners.
-    pub grow: bool,
-    /// `wfClose` — the window shows a close icon (and accepts `cmClose`).
-    pub close: bool,
-    /// `wfZoom` — the window shows a zoom icon (and accepts `cmZoom`).
-    pub zoom: bool,
-}
+use crate::window::WindowFlags;
 
 // ---------------------------------------------------------------------------
 // Frame

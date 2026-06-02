@@ -58,6 +58,7 @@
 //! | 26 | `TGroup` (`Group`) | [`view`] | ✅ |
 //! | 24 | `TFrame` (`Frame`) | [`frame`] | ✅ |
 //! | 31 | `TProgram` (`Program`, live loop) | [`app`] | ✅ |
+//! | 33 | `TWindow` (`Window`, core) | [`window`] | ✅ |
 
 pub mod app;
 pub mod backend;
@@ -74,6 +75,7 @@ pub mod theme;
 pub mod timer;
 pub mod view;
 pub mod widgets;
+pub mod window;
 
 // --- House-style root re-exports (so `tv::Point` etc. resolve without `use`) ---
 
@@ -87,7 +89,7 @@ pub use event::{
     Event, EventMask, Key, KeyEvent, KeyModifiers, MouseButtons, MouseEvent, MouseEventFlags,
     MouseWheel,
 };
-pub use frame::{Frame, WindowFlags};
+pub use frame::Frame;
 pub use help::HelpCtx;
 pub use screen::{Buffer, Cell, DrawBuffer};
 pub use theme::{Role, Theme};
@@ -97,3 +99,4 @@ pub use view::{
     StateFlag, View, ViewId, ViewState,
 };
 pub use widgets::ScrollBar;
+pub use window::{ScrollBarOptions, Window, WindowFlags, WindowPalette};
