@@ -454,6 +454,18 @@ impl View for Window {
     fn cursor_request(&self) -> Option<Point> {
         self.group.cursor_request()
     }
+
+    /// Delegate the D3 tree-walk into the embedded group (as `draw`/`handle_event`
+    /// already delegate), so a `find_mut` from above descends through the window.
+    fn find_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
+        self.group.find_mut(id)
+    }
+
+    /// Delegate descendant removal into the embedded group (the owning group runs
+    /// the faithful removal + `reset_current`).
+    fn remove_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
+        self.group.remove_descendant(id, ctx)
+    }
 }
 
 // ---------------------------------------------------------------------------

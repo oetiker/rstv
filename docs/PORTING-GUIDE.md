@@ -165,8 +165,9 @@ handlers and `message()` receivers hold `TView*`.
 - **Downward ownership is a tree:** a `Group` owns `children: Vec<Box<dyn View>>`
   in Z-order; recursive dispatch (`for c in &mut self.children { … }`) doesn't
   alias.
-- **Up/sideways links are `ViewId` handles** (a generational arena index), never
-  `&View`. Identity is `ViewId` equality.
+- **Up/sideways links are `ViewId` handles** (a single global, monotonic id —
+  see the resolution-substrate note below), never `&View`. Identity is `ViewId`
+  equality.
 - **No up-pointers:** the parent passes `&mut Context` / `DrawCtx` *down*,
   carrying everything a child would otherwise reach upward for — including the
   **resolved parent/background style and the current clip rect**.
@@ -176,6 +177,34 @@ the per-group `current` vs. global `focused` distinction, validate-on-focus-leav
 `makeFirst` raising a window). Only two substitutions: pointer → `ViewId`, and
 "reach upward" → "read from `Context`." A targeted `message(view, …)` becomes a
 `Context` query addressed by `ViewId` (see D4).
+
+> **Resolution substrate — corrected (was an unexamined default).** A `ViewId`
+> is a **single, process-global, monotonic identity** (`NonZeroU64`, keeping the
+> `Option<ViewId>` niche), minted once at `insert` and **stamped into the view's
+> own `ViewState.id`** so a view knows its own handle. Resolving a `ViewId` to a
+> view is the **tree-walk this section always promised**: `View::find_mut(id)` (a
+> `Group` searches its children and recurses; a `Group`-embedding view delegates;
+> a leaf returns `None`), with `remove_descendant(id, ctx)` for self-removal and
+> `ctx.query(id, …)` riding the same walk when a consumer needs it.
+>
+> This **replaces** the original implementation, in which each `Group` held its
+> own generational `ViewArena`, making ids **group-local**. That was never a
+> reasoned constraint — it was an artifact of embedding the standalone row-17
+> arena inside `Group` (row 26). It had two bad effects: **(a)** it silently
+> dropped the global-resolution / `ctx.query` mechanism this section promises,
+> forcing each new cross-tree need (drag, close) to invent a bespoke downward
+> channel; and **(b)** it carried generational reuse-safety whose validator
+> (`is_valid`) was **never called** outside its own unit tests — resolution was
+> always `Group::index_of`, which already yields `None` for a removed child, so
+> the use-after-free / ABA hazard the generations guarded against could not
+> occur. Global monotonic ids preserve the one real benefit (constructing a
+> `Group` + children *before* insertion) via a process-wide counter — no
+> allocator threading — and a stale handle simply resolves to nothing.
+>
+> **Unaffected:** genuine D3 *downward* channels (owner extent/size, deferred
+> command-enable, deferred capture pushes, owner-data-down to a frame) remain —
+> they carry parent→program state a child cannot reach *upward*, which global
+> *downward* resolution does not address.
 
 ---
 
@@ -230,6 +259,46 @@ translates directly.
 > (`kbEnter = 0x1c0d`) do not survive — an enum variant carries no number at all;
 > the name transfers, the magic value does not. The `CrosstermBackend` translates
 > crossterm's key model into this at a later row.
+
+> **`message()` — corrected (the payload + query were droppable only because the
+> id substrate was broken).** D4 originally "dropped `infoPtr`" and deferred the
+> targeted query. The whole-tree audit of C++ `message()` (42 call sites) shows
+> the objective splits cleanly and ports **directly** onto the corrected D3
+> substrate (global resolvable `ViewId` + `find_mut`):
+>
+> * **39/42 are fire-and-forget** `message(owner, evBroadcast, cmX, this)` — the
+>   return is ignored; the only thing carried is *which view* it is about. These
+>   become a posted **`Broadcast { command: Command, source: Option<ViewId> }`**:
+>   the `void* infoPtr` is reinstated as a **resolvable `ViewId`**, not a pointer.
+>   A receiver's C++ `infoPtr == hScrollBar` becomes `source == self.h_scroll_bar`.
+> * **3/42 consume the return** (Alt-N `cmSelectWindowNum`; an app's
+>   `cmCanCloseForm` veto-poll inside `valid()`; one test) — a **synchronous
+>   "broadcast a question, get back *was it claimed*"**. Every one is
+>   **owner-initiated and downward** (the program's own handler, or `valid()`
+>   invoked by the owner) — *never* a view re-entering the tree mid-`handle_event`.
+>   So they port as one primitive on the tree owner:
+>
+>   ```rust
+>   // inherent on Group (and Program via its root group):
+>   fn message(&mut self, target: ViewId, ev: Event /*+ctx*/) -> Option<ViewId> {
+>       let v = self.find_mut(target)?;        // D3 substrate
+>       v.handle_event(&mut ev, ctx);
+>       if ev.is_nothing() { ev.source() } else { None }   // faithful: payload iff consumed
+>   }
+>   ```
+>
+> The aliasing rule (`&mut` forbids re-entering a tree mid-mutation) bars exactly
+> one pattern — *a view synchronously querying across the tree from inside its own
+> `handle_event`* — and the audit shows that pattern **occurs zero times**. Rust's
+> borrow rule and TV's actual usage coincide; nothing needs inverting. `message`
+> is **not** a `Context` method (a `Context` deliberately holds no tree) — it lives
+> on the tree owner, which is the only place a synchronous `message()` is ever
+> called from. `query(id, …) -> Option<T>` is the read-only sibling (`find` +
+> read). The synchronous `valid(cmd)` aggregate (`Group::valid`) is the same shape
+> already in the tree, and `cmCanCloseForm` is an app-specific specialization of it.
+>
+> **Not solved by this** (different payload type, own design when needed): the
+> `cmTimerExpired` `TTimerId` payload — that carries *which timer*, not a `ViewId`.
 
 ---
 

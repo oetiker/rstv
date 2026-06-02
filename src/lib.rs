@@ -41,7 +41,7 @@
 //! | 11 | `Event` | [`event`] | ✅ |
 //! | 12 | `Command` / command set | [`command`] | ✅ |
 //! | 16 | `Theme` (minimal) | [`theme`] | ✅ |
-//! | 17 | `ViewId` arena | [`view`] | ✅ |
+//! | 17 | `ViewId` minter | [`view`] | ✅ |
 //! | 18 | back-buffer + diff | [`screen`] | ✅ |
 //! | 19 | `Backend` (+ crossterm/headless) | [`backend`] | ✅ |
 //! | 20 | `Clock` + timer queue | [`timer`] | ✅ |

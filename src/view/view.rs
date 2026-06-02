@@ -72,6 +72,7 @@ use crate::event::{Event, EventMask};
 use crate::help::HelpCtx;
 use crate::view::context::{Context, DrawCtx};
 use crate::view::geometry::{Point, Rect};
+use crate::view::id::ViewId;
 
 // ---------------------------------------------------------------------------
 // D5 flag structs (struct-of-bools replacing the packed sf*/of*/gf*/dm* words)
@@ -239,7 +240,9 @@ pub enum StateFlag {
 /// Widgets embed a `ViewState` (typically as a field named `state`) and reach
 /// its flags/geometry directly (`self.state.state.focused`, `self.state.size`),
 /// matching D5's field-access idiom. The data fields are `pub`; only
-/// `resize_balance` (the `calcBounds` rounding-recovery accumulator) is private.
+/// `resize_balance` (the `calcBounds` rounding-recovery accumulator) and `id`
+/// (stamped by [`Group::insert`](crate::view::Group) — write-once, enforced by
+/// `pub(crate)`) are not public.
 ///
 /// **Do not `derive(Default)`** — the all-false derive would leave the view
 /// invisible with no drag limit, a silent bug. Construct via [`ViewState::new`]
@@ -266,6 +269,11 @@ pub struct ViewState {
     pub event_mask: EventMask,
     /// Help context (`hc*`). TV's `helpCtx`.
     pub help_ctx: HelpCtx,
+    /// This view's global identity, set by [`Group::insert`](crate::view::Group)
+    /// when the view enters a group; `None` before insertion. NOT an up-pointer
+    /// — it is the view's own handle (like an ECS entity id), which lets a
+    /// handler/loop address it by id (D3).
+    pub(crate) id: Option<ViewId>,
     /// `calcBounds` rounding-recovery accumulator — TV's `resizeBalance`.
     /// Private: only `ViewState::calc_bounds` touches it.
     resize_balance: Point,
@@ -296,6 +304,7 @@ impl ViewState {
             },
             event_mask: EventMask::default(),
             help_ctx: HelpCtx::NO_CONTEXT,
+            id: None,
             resize_balance: Point::new(0, 0),
         };
         s.set_bounds(bounds);
@@ -386,6 +395,14 @@ impl ViewState {
     /// `TView::normalCursor` — underline cursor shape (`sfCursorIns` off).
     pub fn normal_cursor(&mut self) {
         self.state.cursor_ins = false;
+    }
+
+    /// This view's global identity, set by [`Group::insert`](crate::view::Group)
+    /// when the view enters a group; `None` before insertion. NOT an up-pointer
+    /// — it is the view's own handle (like an ECS entity id), which lets a
+    /// handler/loop address it by id.
+    pub fn id(&self) -> Option<ViewId> {
+        self.id
     }
 
     /// `TView::getHelpCtx` — [`HelpCtx::DRAGGING`] while dragging, else `help_ctx`.
@@ -647,6 +664,29 @@ pub trait View {
         } else {
             None
         }
+    }
+
+    /// Resolve `id` to a **descendant** of this view (never self — the *parent*
+    /// identifies a view by id). A leaf has no descendants, so the base returns
+    /// `None`; a [`Group`](crate::view::Group) overrides to search its children
+    /// and recurse; a `Group`-embedding view delegates to its inner group. This is
+    /// the "tree-walk via Context" promised by D3 — the uniform way the event loop
+    /// / a capture handler acts on a view it holds only by id (move a window's
+    /// bounds, flip `sfDragging`, …).
+    fn find_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
+        let _ = id;
+        None
+    }
+
+    /// Remove the descendant named by `id` from whichever group owns it (faithful
+    /// `destroy`/self-removal). Returns `true` if it was found+removed. Distinct
+    /// from [`find_mut`](View::find_mut) because removal happens in the *owner's*
+    /// child `Vec` (a view cannot remove itself — it doesn't know its owner, D3)
+    /// and must run the owning group's `reset_current`. Base: `false` (a leaf owns
+    /// nothing).
+    fn remove_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
+        let _ = (id, ctx);
+        false
     }
 
     /// Downcast hook for the rare owner→child push that needs the concrete type

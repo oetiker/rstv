@@ -71,7 +71,7 @@ the Backend row is "net-new trait wrapping ported code," not write-from-scratch.
 | 15 | `TNSSortedCollection`/`TSortedCollection` | `TCollection` | `tsortcol.cpp` | (idiom) | MECHANICAL | → `Vec<T: Ord>` |
 | 15a | `TStringCollection` | `TSortedCollection` | `tstrcoll.cpp`, `sstrcoll.cpp` | (idiom) | MECHANICAL | → sorted `Vec<String>`; needed by `TStringLookupValidator` (#61) |
 | 16 | `Theme` | — | (synthesizes D7 palettes) | `theme` | INFRA | Role→Style map + `Glyphs`; default = classic blue (`cpAppColor`) |
-| 17 | `ViewId` arena | — | (replaces `owner`/`current`/`next`) | `view` (`ViewId`) | INFRA | D3 generational index; up/sideways links |
+| 17 | `ViewId` minter | — | (replaces `owner`/`current`/`next`) | `view` (`ViewId`) | INFRA | D3 global monotonic `ViewId` identity; up/sideways links by id |
 | 18 | renderer back-buffer + diff | — | (replaces `TVWrite`/`drawUnder*`) | `screen` | INFRA | D8 whole-tree redraw + cell diff; vendored ratatui `Buffer` |
 | 19 | `Backend` trait + `CrosstermBackend` + `HeadlessBackend` | — | `THardwareInfo`/`TScreen`/`TClipboard` (`tscreen.cpp`, `hardwrvr.cpp`, `tclipbrd.cpp`) as design ref | `backend` | INFRA | D11; size/flush/cursor/clipboard; wraps row 5 ladder |
 | 20 | `Clock` + timer queue | — | `TTimerQueue` (`ttimerqu.cpp`) as ref | `timer` | INFRA | D9/D11 injected clock, cancelable handles, poll timeout |

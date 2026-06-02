@@ -165,6 +165,18 @@ impl View for Desktop {
     fn cursor_request(&self) -> Option<Point> {
         self.group.cursor_request()
     }
+
+    /// Delegate the D3 tree-walk into the embedded group, so a `find_mut` from
+    /// above (e.g. a root `Group` or `Program`) descends through the desktop.
+    fn find_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
+        self.group.find_mut(id)
+    }
+
+    /// Delegate descendant removal into the embedded group (the owning group runs
+    /// the faithful removal + `reset_current`).
+    fn remove_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
+        self.group.remove_descendant(id, ctx)
+    }
 }
 
 #[cfg(test)]
@@ -173,6 +185,20 @@ mod tests {
     use crate::backend::{HeadlessBackend, Renderer};
     use crate::screen::Buffer;
     use crate::theme::Theme;
+    use crate::view::SelectMode;
+    use crate::window::{ScrollBarOptions, Window};
+    use std::collections::VecDeque;
+
+    /// Build a throwaway `Context` over loop-owned locals, run `f`, return its
+    /// value (the same harness shape the `group`/`window` test modules use).
+    fn with_ctx<R>(f: impl FnOnce(&mut Context) -> R) -> R {
+        let mut out: VecDeque<Event> = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut pending: Vec<Box<dyn crate::capture::CaptureHandler>> = Vec::new();
+        let mut cmd_changes: Vec<(Command, bool)> = Vec::new();
+        let mut ctx = Context::new(&mut out, &mut timers, 0, &mut pending, &mut cmd_changes);
+        f(&mut ctx)
+    }
 
     // -- 1. ctor inserts background + records its id --------------------------
 
@@ -277,6 +303,129 @@ mod tests {
             child_bounds,
             Rect::new(0, 0, 25, 13),
             "the background grew with the desktop (delegation to Group::change_bounds works)"
+        );
+    }
+
+    // -- 7. D3 tree-walk resolvers through the embedders ---------------------
+
+    /// Build `Desktop` → `Window` → probe (a standard scroll bar) and return the
+    /// desktop plus the window/probe ids. The desktop's `group` is reachable here
+    /// (same module); the window's probe is its scroll bar. The window is made the
+    /// desktop's `current` child so a later removal's `reset_current` is
+    /// observable.
+    fn nested_desktop() -> (Desktop, ViewId, ViewId) {
+        let mut window = Window::new(Rect::new(2, 1, 30, 12), Some("W".into()), 1);
+        let probe_id = window.standard_scroll_bar(ScrollBarOptions {
+            vertical: true,
+            ..Default::default()
+        });
+
+        // Desktop owning the window. Reach the private group directly (same
+        // module) since Desktop exposes no public arbitrary-child insert.
+        let mut desktop = Desktop::new(Rect::new(0, 0, 80, 25), |_| None);
+        let window_id = desktop.group.insert(Box::new(window));
+        with_ctx(|ctx| {
+            desktop
+                .group
+                .set_current(Some(window_id), SelectMode::Normal, ctx)
+        });
+
+        (desktop, window_id, probe_id)
+    }
+
+    #[test]
+    fn find_mut_resolves_through_desktop_and_window() {
+        let (desktop, window_id, probe_id) = nested_desktop();
+        // Wrap the desktop in a plain root group to prove the walk descends
+        // through *both* embedders (root Group -> Desktop -> Window -> group).
+        let mut root = Group::new(Rect::new(0, 0, 80, 25));
+        root.insert(Box::new(desktop));
+
+        // The deeply-nested probe resolves through Desktop -> Window -> group.
+        {
+            let v = root
+                .find_mut(probe_id)
+                .expect("probe resolves through the embedders");
+            v.state_mut().set_cursor(7, 8); // mutate a field through the reference
+        }
+        assert_eq!(
+            root.find_mut(probe_id)
+                .expect("probe resolves")
+                .state()
+                .cursor,
+            Point::new(7, 8),
+            "mutation through the nested find_mut is observed"
+        );
+
+        // The window itself resolves (it is a direct child of the desktop group).
+        assert!(
+            root.find_mut(window_id).is_some(),
+            "the window resolves through the desktop"
+        );
+
+        // A never-inserted id resolves to None.
+        let bogus = ViewId::next();
+        assert!(root.find_mut(bogus).is_none(), "unknown id -> None");
+    }
+
+    /// `remove_descendant` recurses into a child group and removes a grandchild.
+    ///
+    /// The probe is NOT a direct child of the desktop group, so the direct-child
+    /// check fails and the implementation must recurse into the window group —
+    /// exercising the `for child … remove_descendant … return true` branch.
+    #[test]
+    fn remove_descendant_recurses_into_child_group_for_grandchild() {
+        let (mut desktop, window_id, probe_id) = nested_desktop();
+
+        // Remove the probe — it is a child of the window, not of the desktop group.
+        let removed = with_ctx(|ctx| desktop.remove_descendant(probe_id, ctx));
+        assert!(removed, "recursion-success branch returns true");
+
+        // The probe is gone.
+        assert!(
+            desktop.find_mut(probe_id).is_none(),
+            "probe is no longer reachable"
+        );
+        // The window itself is still present.
+        assert!(
+            desktop.find_mut(window_id).is_some(),
+            "the window that owned the probe is still present"
+        );
+    }
+
+    #[test]
+    fn remove_descendant_removes_through_embedders_and_resets_current() {
+        // Operate on the Desktop directly (its `remove_descendant` delegates to
+        // the group), so the owning desktop group's `current` is readable here.
+        let (mut desktop, window_id, probe_id) = nested_desktop();
+        assert_eq!(
+            desktop.group.current(),
+            Some(window_id),
+            "window is current"
+        );
+
+        // Bogus id: false, nothing changes.
+        let removed_bogus = with_ctx(|ctx| desktop.remove_descendant(ViewId::next(), ctx));
+        assert!(!removed_bogus, "unknown id -> false");
+        assert!(
+            desktop.find_mut(window_id).is_some(),
+            "window still present"
+        );
+
+        // Remove the window (a child of the desktop group, reached via the
+        // Desktop delegate). reset_current runs: no other selectable child
+        // remains, so current becomes None.
+        let removed = with_ctx(|ctx| desktop.remove_descendant(window_id, ctx));
+        assert!(removed, "nested removal -> true");
+        assert!(desktop.find_mut(window_id).is_none(), "window gone");
+        assert!(
+            desktop.find_mut(probe_id).is_none(),
+            "the window's child is gone with it"
+        );
+        assert_eq!(
+            desktop.group.current(),
+            None,
+            "reset_current ran on the owning desktop group"
         );
     }
 }

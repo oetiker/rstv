@@ -7,9 +7,11 @@
 //!
 //! * **Ownership is a `Vec`, links are gone (D3).** C++ threads children on a
 //!   circular `next`/`prev` ring with `last`, and every child keeps an `owner`
-//!   back-pointer. Here a [`Group`] owns `children: Vec<Child>` and a group-local
-//!   [`ViewArena`]; children hold no up-pointer. Cross-links (`current`) are a
-//!   [`ViewId`], resolved by an internal index lookup ([`Group::index_of`]).
+//!   back-pointer. Here a [`Group`] owns `children: Vec<Child>`; children hold no
+//!   up-pointer. Each child's [`ViewId`] is a process-global identity minted at
+//!   [`Group::insert`] and stamped into the child's own `ViewState.id` (self-id,
+//!   D3). Cross-links (`current`) are a [`ViewId`], resolved by an internal index
+//!   lookup ([`Group::index_of`]).
 //!
 //!   The ring maps to the `Vec` in **back-to-front paint order**:
 //!   `children[0]` == C++ `last` == bottom (drawn first); `children.last()` ==
@@ -50,7 +52,7 @@ use crate::command::Command;
 use crate::event::Event;
 use crate::view::context::{Context, DrawCtx};
 use crate::view::geometry::{Point, Rect};
-use crate::view::id::{ViewArena, ViewId};
+use crate::view::id::ViewId;
 use crate::view::view::{StateFlag, View, ViewState};
 
 /// Which side effects `set_current` applies when changing the current view —
@@ -68,7 +70,8 @@ pub enum SelectMode {
     Leave,
 }
 
-/// One owned child view plus its group-local identity.
+/// One owned child view plus its global identity (mirrors the child's own
+/// `ViewState.id`).
 struct Child {
     id: ViewId,
     view: Box<dyn View>,
@@ -81,8 +84,6 @@ struct Child {
 /// and drive it as any other [`View`] (`draw` / `handle_event` / …).
 pub struct Group {
     st: ViewState,
-    /// Group-local identity allocator (D3): not a view store, just reuse-safe ids.
-    arena: ViewArena,
     /// Children in back-to-front paint order (`children[0]` == C++ `last`/bottom,
     /// `children.last()` == C++ `first()`/top).
     children: Vec<Child>,
@@ -106,7 +107,6 @@ impl Group {
         st.event_mask.mouse_auto = true;
         Group {
             st,
-            arena: ViewArena::new(),
             children: Vec::new(),
             current: None,
         }
@@ -156,8 +156,9 @@ impl Group {
 
     // -- insert / remove ----------------------------------------------------
 
-    /// Insert `view` on **top** of the group (becomes the frontmost child) and
-    /// return its group-local [`ViewId`]. Ports `TGroup::insert` →
+    /// Insert `view` on **top** of the group (becomes the frontmost child),
+    /// mint a process-global [`ViewId`], stamp it into the view's own
+    /// `ViewState.id` (self-id, D3), and return it. Ports `TGroup::insert` →
     /// `insertBefore(p, first())`.
     ///
     /// Applies `ofCenterX`/`ofCenterY` centering. Under D8 the `insertBefore`
@@ -183,7 +184,8 @@ impl Group {
             view.state_mut().set_bounds(bounds);
         }
 
-        let id = self.arena.alloc();
+        let id = ViewId::next();
+        view.state_mut().id = Some(id); // stamp the view's own handle (self-id)
         self.children.push(Child { id, view });
         id
     }
@@ -197,7 +199,6 @@ impl Group {
         };
         let was_current = self.current == Some(id);
         self.children.remove(i);
-        self.arena.free(id);
         if was_current {
             self.current = None;
             self.reset_current(ctx);
@@ -623,6 +624,42 @@ impl View for Group {
             .view
             .cursor_request()
             .map(|p| p + child.view.state().origin)
+    }
+
+    /// `Group`'s [`View::find_mut`] override — the recursive tree-walk (D3).
+    /// One pass per child: match the child's own id, else recurse into it. A
+    /// two-pass split (all direct children, then all recursions) fails the borrow
+    /// checker (E0499) — the early `return` of `&mut` in the first loop escapes to
+    /// the function's return lifetime, blocking the second `iter_mut`. The single
+    /// pass is semantically identical here: ids are process-global and unique, so
+    /// at most one node in the subtree matches and visit order is irrelevant.
+    fn find_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
+        for child in self.children.iter_mut() {
+            if child.id == id {
+                return Some(child.view.as_mut());
+            }
+            if let Some(v) = child.view.find_mut(id) {
+                return Some(v);
+            }
+        }
+        None
+    }
+
+    /// `Group`'s [`View::remove_descendant`] override — route to the owning
+    /// group's [`remove`](Self::remove) (faithful removal + `reset_current`). If
+    /// `id` is a direct child, remove it here; otherwise recurse so the group that
+    /// actually owns it does the removal.
+    fn remove_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
+        if self.index_of(id).is_some() {
+            self.remove(id, ctx); // direct child: faithful removal + reset_current
+            return true;
+        }
+        for child in self.children.iter_mut() {
+            if child.view.remove_descendant(id, ctx) {
+                return true;
+            }
+        }
+        false
     }
 
     /// `TGroup::valid` — for `cmReleasedFocus`, defer to the current child iff it
@@ -1794,5 +1831,83 @@ mod tests {
                 "owner_size restored even when routing returns early"
             );
         });
+    }
+
+    // -- 16. find_mut / remove_descendant on a plain Group (direct-child path) --
+
+    #[test]
+    fn find_mut_resolves_direct_child_and_misses_unknown() {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        let (ida, idb) = with_ctx(&mut out, &mut timers, |_ctx| {
+            let ida = group.insert(Probe::boxed(Rect::new(0, 0, 5, 5), 'A', log.clone()));
+            let idb = group.insert(Probe::boxed(Rect::new(6, 0, 11, 5), 'B', log.clone()));
+            (ida, idb)
+        });
+
+        // Resolve A and mutate a field through the returned reference; observe it.
+        {
+            let v = group.find_mut(ida).expect("A resolves");
+            v.state_mut().set_cursor(3, 4);
+        }
+        assert_eq!(
+            group.find_mut(idb).expect("B resolves").state().origin,
+            Point::new(6, 0)
+        );
+        // The mutation through find_mut(ida) is visible on the child.
+        assert_eq!(
+            group.find_mut(ida).expect("A resolves").state().cursor,
+            Point::new(3, 4),
+            "mutation through find_mut is observed on the child"
+        );
+
+        // A never-inserted id resolves to None.
+        let bogus = ViewId::next();
+        assert!(group.find_mut(bogus).is_none(), "unknown id -> None");
+    }
+
+    #[test]
+    fn remove_descendant_removes_direct_child_and_misses_unknown() {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+
+        // Two selectable children; A current. Remove the current (A) and the
+        // non-current (B) via remove_descendant; verify removal + reset_current.
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        let (ida, idb) = with_ctx(&mut out, &mut timers, |ctx| {
+            let mut a = Probe::new(Rect::new(0, 0, 5, 5), 'A', log.clone());
+            a.st.options.selectable = true;
+            let ida = group.insert(Box::new(a));
+            let mut b = Probe::new(Rect::new(6, 0, 11, 5), 'B', log.clone());
+            b.st.options.selectable = true;
+            let idb = group.insert(Box::new(b));
+            group.set_current(Some(ida), SelectMode::Normal, ctx);
+            (ida, idb)
+        });
+        assert_eq!(group.current(), Some(ida));
+
+        // Removing a bogus id changes nothing and returns false.
+        let bogus = ViewId::next();
+        let removed_bogus = with_ctx(&mut out, &mut timers, |ctx| {
+            group.remove_descendant(bogus, ctx)
+        });
+        assert!(!removed_bogus, "unknown id -> false");
+        assert_eq!(group.len(), 2, "no child removed");
+
+        // Remove the current child A -> true; reset_current picks B.
+        let removed = with_ctx(&mut out, &mut timers, |ctx| {
+            group.remove_descendant(ida, ctx)
+        });
+        assert!(removed, "direct current child removed -> true");
+        assert!(group.find_mut(ida).is_none(), "A gone");
+        assert_eq!(
+            group.current(),
+            Some(idb),
+            "reset_current selected the remaining child"
+        );
     }
 }
