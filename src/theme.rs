@@ -75,10 +75,14 @@ pub enum Role {
     ClusterSelectedShortcut,
     /// A disabled cluster item's text — idx 5.
     ClusterDisabled,
+    /// `TIndicator` normal (not-dragging) row/col display — `cpIndicator` idx 1.
+    IndicatorNormal,
+    /// `TIndicator` while its owner is dragging — `cpIndicator` idx 2.
+    IndicatorDragging,
 }
 
 /// Number of [`Role`] variants — the fixed length of [`Theme`]'s style array.
-const ROLE_COUNT: usize = 25;
+const ROLE_COUNT: usize = 27;
 
 impl Role {
     /// Total mapping of each variant to its index into the style array.
@@ -112,6 +116,8 @@ impl Role {
             Role::ClusterNormalShortcut => 22,
             Role::ClusterSelectedShortcut => 23,
             Role::ClusterDisabled => 24,
+            Role::IndicatorNormal => 25,
+            Role::IndicatorDragging => 26,
         }
     }
 }
@@ -225,6 +231,15 @@ pub struct Glyphs {
     pub drag_icon: &'static str,
     /// Resize/drag icon (bottom-left) `"~└─~"`.
     pub drag_left_icon: &'static str,
+
+    // --- Indicator glyphs (row 45) ---
+    /// `TIndicator::dragFrame` (`\xCD` ═) — drawn when the owner is **not**
+    /// dragging (the C++ field name is inverted; ported verbatim).
+    pub indicator_frame_normal: char,
+    /// `TIndicator::normalFrame` (`\xC4` ─) — drawn while the owner is dragging.
+    pub indicator_frame_dragging: char,
+    /// The "buffer modified" marker drawn at column 0 (`char 15`, ☼).
+    pub indicator_modified: char,
 }
 
 impl Default for Glyphs {
@@ -275,6 +290,11 @@ impl Default for Glyphs {
             unzoom_icon: "[~\u{2195}~]",
             drag_icon: "~\u{2500}\u{2518}~",
             drag_left_icon: "~\u{2514}\u{2500}~",
+
+            // Indicator (row 45): ═ (0xCD) not-dragging, ─ (0xC4) dragging, ☼ (0x0F) modified.
+            indicator_frame_normal: '\u{2550}',
+            indicator_frame_dragging: '\u{2500}',
+            indicator_modified: '\u{263C}',
         }
     }
 }
@@ -340,6 +360,12 @@ impl Theme {
         set(&mut styles, Role::ClusterSelectedShortcut, 0xE, 0x2); // yellow on green
         set(&mut styles, Role::ClusterDisabled, 0x8, 0x7); // darkgray on lightgray
 
+        // Indicator (editor row/col display, row 45). Provisional, modelled on the
+        // classic editor-indicator look (`cpIndicator`): black on cyan normally,
+        // bright while the owner is dragging. Realigns with editor theming later.
+        set(&mut styles, Role::IndicatorNormal, 0x0, 0x3); // black on cyan
+        set(&mut styles, Role::IndicatorDragging, 0xF, 0x3); // white on cyan
+
         Theme {
             styles,
             glyphs: Glyphs::default(),
@@ -394,6 +420,8 @@ mod tests {
         Role::ClusterNormalShortcut,
         Role::ClusterSelectedShortcut,
         Role::ClusterDisabled,
+        Role::IndicatorNormal,
+        Role::IndicatorDragging,
     ];
 
     #[test]
