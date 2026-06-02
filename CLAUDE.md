@@ -300,6 +300,25 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
     so the aliasing rule bars only a pattern that never occurs. Two-stage
     reviewed; 271 tests green. Working tree clean. Phase-2 stage detail lives in
     [`docs/HANDOVER.md`](docs/HANDOVER.md), not duplicated here.
+  - **Phase A — `Broadcast{source:ViewId}` DONE (`7efecb3`)** — the *buildable*
+    slice of the D4 amendment, landed ahead of 33d. `Event::Broadcast(Command)`
+    → `Event::Broadcast { command, source: Option<ViewId> }`: `source` reinstates
+    the C++ broadcast-subject `infoPtr` (`this`) as a resolvable `ViewId`, threaded
+    from each emitter (focus broadcasts in `view.rs`/`group.rs` `set_state`;
+    scrollbar's 4 changed/clicked sends; `None` for pump-internal + capture).
+    **Data-only — no receiver reads `source` yet** (first consumer = a two-bar
+    scroller, Batch B); routing unchanged. **Investigation collapsed the rest of
+    Phase A to docs** (the `infoPtr` is *polymorphic*, only the subject case ports
+    to a `ViewId`): the `cmZoom`/`cmClose` `infoPtr==0||==this` guard is **provably
+    vacuous** (frame posts only while `sfActive` → owner is the active window, and
+    focused commands route to `current` only) — **not** rebuilt; Alt-N's payload is
+    an *integer* (window number) + needs `select`/`canMoveFocus` → **deferred to
+    33d** as a direct number-walk, not "blocked on a payload story"; the
+    return-consuming `message()`/`query` primitive → **row 34** (its first
+    consumer, a dialog `cmCanCloseForm` veto). Guide `D4 "message()"` rewritten for
+    the polymorphism. Brief: `docs/briefs/row33-phaseA-broadcast-source.md`.
+    Two-stage reviewed (SPEC-PASS + QUALITY-PASS). 268 unit + 3 integration + 1
+    doctest green; clippy/fmt clean. Working tree clean.
 
 ## Next step
 **Phase 2 in progress.** Continue subagent-driven (see "How to run the port"
@@ -325,17 +344,14 @@ above). Sequence:
      `Program` a real named desktop.
    - **`TWindow` 33** (module `window`) — the D2 embed-and-delegate exemplar,
      **staged**: ~~33a Group/Context primitives~~ ✅, ~~33b core~~ ✅, ~~33c zoom~~ ✅,
-     ~~SUBSTRATE realign (global `ViewId`)~~ ✅ (`7b15782`).
-     **NEXT → Phase A (cleanup): build `message`/`query` + `Broadcast{source:ViewId}`
-     (D4 amendment) and remove the kludges that exist because it was missing**
-     (scrollbar source disambiguation, the dropped `cmZoom`/`cmClose` self-target
-     guard, Alt-N window select, the `context.rs` query note). **Then 33d** —
-     now *simplified* by the substrate: drag = capture handler (window names
-     itself via `self.id()`, loop applies bounds via `find_mut(id)`), close =
-     `root.remove_descendant(id)`, full setState enable-set + TDeskTop
-     cmNext/cmPrev, scrollbar auto-repeat/thumb-drag. The old close-removal channel
-     + drag path-building are **gone**. See
-     [`docs/HANDOVER.md`](docs/HANDOVER.md) (the Phase-A/B plan + the
+     ~~SUBSTRATE realign (global `ViewId`)~~ ✅ (`7b15782`),
+     ~~Phase A `Broadcast{source}`~~ ✅ (`7efecb3`, see Current state).
+     **NEXT → 33d** — now *simplified* by the substrate: drag = capture handler
+     (window names itself via `self.id()`, loop applies bounds via `find_mut(id)`),
+     close = `root.remove_descendant(id)`, full setState enable-set + TDeskTop
+     cmNext/cmPrev (+ Alt-N number-walk, now unblocked), scrollbar
+     auto-repeat/thumb-drag. The old close-removal channel + drag path-building are
+     **gone**. See [`docs/HANDOVER.md`](docs/HANDOVER.md) (the 33d plan + the
      `docs/briefs/row33*-*.md` templates).
    - **`TDialog` 34** designs `exec_view`/`executeDialog` + the `ModalFrame`
      push→pop lifecycle on `Program` (pop conditional on `valid(end_state)` — the
