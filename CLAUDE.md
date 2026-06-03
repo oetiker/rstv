@@ -481,11 +481,35 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
       (`Deferred::FocusById` + `View::focus_descendant`, mirroring
       `remove_descendant`; first `Broadcast{source}` consumer; 4 cpLabel roles
       pre-seeded `6b890a1`).
-    - **Remaining Batch B = the validator wave** (FOUNDATION, do per-row, full
-      two-stage review): **TValidator (35)** → **TInputLine (39)** (the **D10
-      `value`/`set_value`** protocol — where the row-34/38 deferred
-      `getData`/`setData`/`dataSize` lands), then **msgbox (63)**. 408 lib + 3
-      integration + 2 doctests green; clippy/fmt clean.
+    - **Validator wave DONE (`43e5c68`)** — **Batch B is now COMPLETE.**
+      **TValidator (35)** → `src/validate.rs`: object-safe abstract `Validator`
+      trait (D2) — `is_valid_input`/`is_valid`/`error`/`is_status_ok` (defaults
+      accept) + provided `validate`; `transfer` omitted (no overrider until
+      TRangeValidator row 59 — no dead stub). **D10 value protocol** →
+      `src/data.rs`: `FieldValue` typed-transfer currency (one `Text(String)`
+      variant, grows per control) + defaulted **`View::value`/`set_value`**
+      (getData/setData successors); the dialog gather/scatter **group-walk** is
+      deferred to its first consumer (inputBox/Batch E). **TInputLine (39)** →
+      `src/widgets/input_line.rs`: faithful `tinputli.cpp` port — draw (scrolled
+      moveStr + ◄/► arrows + selection redraw + cursor), full keyboard
+      (nav/word-nav/edit/Ins/Shift-block/printable-insert with the
+      `maxLen&&maxWidth&&maxChars` guard/Ctrl-Y), single-shot mouse positioning +
+      the faithful single edge-click scroll-by-one, validator
+      save/restore/`check_valid`, `valid(cmd)` (faithful return), `set_state`→
+      `select_all`, `value`/`set_value`. **`first_pos` is a display COLUMN**
+      (implementer-caught — the rest are byte offsets); all `data` indexing steps
+      through grapheme helpers (D13, panic-safe). Seams: `text::prev`,
+      `DrawCtx::put_str_part`, 3 roles (`Input{Normal,Selected,Arrow}`,
+      provisional gray) + 2 glyphs, `cmValid`, `State::cursor_ins`. **Deferred +
+      breadcrumbed:** clipboard cmCut/Copy/Paste, command-graying
+      `updateCommands`, mouse press-and-hold/drag loops (row 31 D9), `valid()`'s
+      `select()` focus side-effect (needs `&mut Context` + `request_focus`),
+      validator `transfer` hook (row 59), error→msgbox (row 63), a row-59/62
+      `cur_pos` re-clamp hazard for future *mutating* validators. Two-stage
+      reviewed (SPEC-PASS after fixing double-click + single-shot edge scroll;
+      QUALITY-PASS after adding the validator reject/restore test). Brief:
+      `docs/briefs/row35-39-validator-inputline.md`. 439 lib + 3 integration + 2
+      doctests green; clippy/fmt clean.
 
 ## Next step
 **Phase 2 in progress.** Continue subagent-driven (see "How to run the port"
@@ -523,12 +547,11 @@ above). Sequence:
      re-entering the loop). **Scoped to the modal mechanism**; gray theming /
      `getData`-`setData` (D10) / `message()`-`query` veto deferred (no consumers
      yet — see the row-34 deferrals).
-7. **Batch B — Phase-3 leaves (IN PROGRESS).** Done: 36/38/42/43/44/45/40, **37
-   (TButton)**, **41 (TLabel + focus-by-id seam)** (see Current state).
-   **Remaining rows are FOUNDATION, not a clean fan-out** — do them per-row with
-   full two-stage review (see [`docs/HANDOVER.md`](docs/HANDOVER.md)): the
-   **validator wave** — 35 `TValidator` → 39 `TInputLine` (the D10
-   `value`/`set_value` protocol). Then `msgbox` (63).
+7. ~~**Batch B — Phase-3 leaves**~~ ✅ **COMPLETE.** Done: 36/38/42/43/44/45/40,
+   **37 (TButton)**, **41 (TLabel + focus-by-id seam)**, **35 (TValidator) + 39
+   (TInputLine) + the D10 `value`/`set_value` protocol** (`43e5c68`, see Current
+   state). `msgbox` (63) is now *buildable* but deferred to its first consumer
+   (the D9 view-triggered async-modal path — Phase 4), per the row-34 design.
 8. **Then Batches C–E fan out hard** (validators, menus, dialogs, editor): the
    bulk `MECHANICAL` rows; parallel worktree implementer+reviewer trios, commit at
    batch boundaries.
