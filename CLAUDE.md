@@ -472,17 +472,20 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
     - **Theme pre-seeds** (`8399d2b`, `8662624`): orchestrator-owned `theme.rs`
       role/glyph additions ahead of the worktree implementers (StaticText, the
       5-role cluster palette, Indicator). Provisional gray-dialog colours.
-    - **Remaining Batch B rows all have a FOUNDATION gap** (do per-row, full
+    - **Batch B gated-FOUNDATION rows DONE this milestone** (per-row, full
       two-stage review — see `docs/HANDOVER.md`): shared key helpers
-      (`hotKey`/`getAltCode`/`ctrlToArrow`, prereq for 37+41) → **TButton (37)**
-      (must resolve the **timer-id payload** gap, `program.rs:654` — the id-less
-      `cmTimerExpired` broadcast makes a button fire on any timer once a 2nd timer
-      source exists; first `exec_view` consumer) → **TLabel (41)** (link by
-      `ViewId`; **first `Broadcast{source}` consumer**; needs a **focus-by-id**
-      deferred tree-op, reuse the row-33d-2 `focus_by_number` shape) →
-      **validator wave** TValidator (35) → TInputLine (39, the **D10
-      `value`/`set_value`** protocol). 338 lib + 3 integration + 1 doctest green;
-      clippy/fmt clean.
+      (`hot_key`/`is_alt_hotkey`/`is_plain_hotkey`/`ctrl_to_arrow`, `b53c618`) +
+      **`Event::Timer(TimerId)`** (`9c5fda7`, resolved the timer-id payload gap) +
+      **`View::grabs_focus_on_click`** (`53d011e`) → **TButton (37, `6d763dc`)** →
+      **TLabel (41, `3483760`)** + the **focus-by-`ViewId` deferred tree-op seam**
+      (`Deferred::FocusById` + `View::focus_descendant`, mirroring
+      `remove_descendant`; first `Broadcast{source}` consumer; 4 cpLabel roles
+      pre-seeded `6b890a1`).
+    - **Remaining Batch B = the validator wave** (FOUNDATION, do per-row, full
+      two-stage review): **TValidator (35)** → **TInputLine (39)** (the **D10
+      `value`/`set_value`** protocol — where the row-34/38 deferred
+      `getData`/`setData`/`dataSize` lands), then **msgbox (63)**. 408 lib + 3
+      integration + 2 doctests green; clippy/fmt clean.
 
 ## Next step
 **Phase 2 in progress.** Continue subagent-driven (see "How to run the port"
@@ -520,12 +523,12 @@ above). Sequence:
      re-entering the loop). **Scoped to the modal mechanism**; gray theming /
      `getData`-`setData` (D10) / `message()`-`query` veto deferred (no consumers
      yet — see the row-34 deferrals).
-7. **Batch B — Phase-3 leaves (IN PROGRESS).** Done: 36/38/42/43/44/45/40 (see
-   Current state). **Remaining rows are FOUNDATION, not a clean fan-out** — do them
-   per-row with full two-stage review (see [`docs/HANDOVER.md`](docs/HANDOVER.md)):
-   shared key helpers → TButton (37, resolve the timer-id payload) → TLabel (41,
-   focus-by-id + `Broadcast{source}`) → validator wave (35 `TValidator` → 39
-   `TInputLine`, the D10 `value`/`set_value` protocol). Then `msgbox` (63).
+7. **Batch B — Phase-3 leaves (IN PROGRESS).** Done: 36/38/42/43/44/45/40, **37
+   (TButton)**, **41 (TLabel + focus-by-id seam)** (see Current state).
+   **Remaining rows are FOUNDATION, not a clean fan-out** — do them per-row with
+   full two-stage review (see [`docs/HANDOVER.md`](docs/HANDOVER.md)): the
+   **validator wave** — 35 `TValidator` → 39 `TInputLine` (the D10
+   `value`/`set_value` protocol). Then `msgbox` (63).
 8. **Then Batches C–E fan out hard** (validators, menus, dialogs, editor): the
    bulk `MECHANICAL` rows; parallel worktree implementer+reviewer trios, commit at
    batch boundaries.
