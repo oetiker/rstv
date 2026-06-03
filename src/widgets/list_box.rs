@@ -1,0 +1,465 @@
+//! `TListBox` — faithful Rust port of `tlistbox.cpp` (row 48, MECHANICAL).
+//!
+//! `TListBox` is the first **concrete** `TListViewer`: it holds a `Vec<String>`
+//! of items and delegates all draw/event/nav logic to the row-28 free functions
+//! via the [`ListViewer`] trait. Only [`get_text`](ListViewer::get_text) is
+//! overridden; `is_selected` and `select_item` inherit the base behavior
+//! (`item == focused` / broadcast `cmListItemSelected`).
+//!
+//! ## Population wiring
+//!
+//! The ctor sets fields only (empty `items`, `range` 0) — no `Context` is
+//! available at construction time. After insertion into a group:
+//!
+//! 1. Call [`new_list`](ListBox::new_list) to populate the items and publish the
+//!    v-bar range + focus position.
+//! 2. Call [`list_viewer::update_steps`](crate::widgets::list_viewer::update_steps)
+//!    to publish the page/arrow step sizes to the bars.
+//!
+//! Missing step 1 leaves `range == 0` (empty display). Missing step 2 leaves the
+//! scrollbar thumb unsized. Both require a `Context`, so they cannot run in the
+//! ctor.
+//!
+//! ## `set_value` deferral
+//!
+//! `set_value` (the scatter half of `getData`/`setData`) is **deferred**: it
+//! needs a `Context` (to republish the v-bar via `new_list`/`focus_item`) that
+//! the `Context`-free `View::set_value` signature does not provide. It lands
+//! with the dialog **gather/scatter group-walk** consumer (inputBox / Batch E),
+//! which must itself solve threading a `Context` into scatter.
+//! `TODO(set_value: dialog gather/scatter)`.
+//!
+//! ## Drops / deferrals (faithful, breadcrumbed)
+//!
+//! - `dataSize`/`getData`/`setData` → the typed `value()`/(deferred `set_value`)
+//!   above; `TListBoxRec` has no analogue.
+//! - `write`/`read`/`build`/`streamableName`/`name` → D12 streaming dropped.
+//! - `drawView()` calls → D8 whole-tree redraw.
+//! - Mouse press-and-hold/auto-scroll, `change_bounds` step republish, etc. are
+//!   in the row-28 base already (not re-ported here).
+
+use crate::data::FieldValue;
+use crate::event::Event;
+use crate::view::{Context, DrawCtx, Point, StateFlag, View, ViewId, ViewState};
+use crate::widgets::list_viewer::{self, ListViewer, ListViewerState};
+
+/// `TListBox` — a concrete list viewer over a `Vec<String>`.
+///
+/// Reuses all of `TListViewer`'s draw/event/nav logic via the [`ListViewer`]
+/// trait and overrides only [`get_text`](ListViewer::get_text). See the module
+/// doc for population wiring notes.
+pub struct ListBox {
+    lv: ListViewerState,
+    items: Vec<String>,
+}
+
+impl ListBox {
+    /// Construct a new, empty list box — ports `TListBox::TListBox`.
+    ///
+    /// Faithful: `ListViewerState::new(bounds, num_cols, h, v)` (options set,
+    /// `topItem = focused = range = 0`), `items = Vec::new()`. No `Context`
+    /// here — publish the v-bar range + steps with [`new_list`](Self::new_list)
+    /// + [`list_viewer::update_steps`](list_viewer::update_steps) after insertion.
+    pub fn new(
+        bounds: crate::view::Rect,
+        num_cols: i32,
+        h: Option<ViewId>,
+        v: Option<ViewId>,
+    ) -> Self {
+        ListBox {
+            lv: ListViewerState::new(bounds, num_cols, h, v),
+            items: Vec::new(),
+        }
+    }
+
+    /// Replace the item collection and (re)publish the v-bar range — ports
+    /// `TListBox::newList`.
+    ///
+    /// Faithful: replace `self.items`; call `set_range(len)` (publishes the
+    /// v-bar `setParams(focused, 0, len-1, …)`); call `focus_item(0)` iff
+    /// `range > 0` (publishes `setValue(0)`). `destroy(items)` = the old Vec
+    /// drops on assignment; `drawView()` dropped (D8).
+    ///
+    /// Call this **post-insert**, with a `Context`, so the v-bar `ViewId`s are
+    /// resolvable and the deferred ops land correctly. Also call
+    /// [`list_viewer::update_steps`](list_viewer::update_steps) after this to
+    /// publish the page/arrow step sizes.
+    pub fn new_list(&mut self, items: Vec<String>, ctx: &mut Context) {
+        self.items = items;
+        let len = self.items.len() as i32;
+        list_viewer::set_range(self, len, ctx);
+        if self.lv.range > 0 {
+            list_viewer::focus_item(self, 0, ctx);
+        }
+    }
+
+    /// The current item collection (`TListBox::list()`).
+    pub fn list(&self) -> &[String] {
+        &self.items
+    }
+}
+
+impl ListViewer for ListBox {
+    fn lv(&self) -> &ListViewerState {
+        &self.lv
+    }
+
+    fn lv_mut(&mut self) -> &mut ListViewerState {
+        &mut self.lv
+    }
+
+    /// `TListBox::getText` — return the text for `item` from the owned Vec.
+    ///
+    /// Faithful: `items->at(item)` → `self.items.get(item as usize)`;
+    /// out-of-bounds (including the `items == 0 → EOS` case) → empty string.
+    fn get_text(&self, item: i32) -> String {
+        self.items.get(item as usize).cloned().unwrap_or_default()
+    }
+    // is_selected / select_item: inherit the base (item == focused / broadcast
+    // cmListItemSelected). TListBox does NOT override these.
+}
+
+impl View for ListBox {
+    fn state(&self) -> &ViewState {
+        &self.lv.state
+    }
+
+    fn state_mut(&mut self) -> &mut ViewState {
+        &mut self.lv.state
+    }
+
+    fn draw(&mut self, ctx: &mut DrawCtx) {
+        list_viewer::draw(self, ctx);
+    }
+
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
+        list_viewer::handle_event(self, ev, ctx);
+    }
+
+    fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
+        list_viewer::set_state(self, flag, enable, ctx);
+    }
+
+    fn cursor_request(&self) -> Option<Point> {
+        list_viewer::focused_cursor(self)
+    }
+
+    fn apply_list_scroll(&mut self, h: Option<i32>, v: Option<i32>, ctx: &mut Context) {
+        list_viewer::apply_scroll(self, h, v, ctx);
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        Some(self)
+    }
+
+    /// `TListBox::getData` (selection half) — the focused item index as a typed
+    /// `FieldValue::Int`. The collection is configuration (`new_list` manages
+    /// it), NOT part of the transferable value; no `List` variant is added (D10:
+    /// `FieldValue` grows per consumer, and there is no gather/scatter consumer
+    /// yet). `TODO(set_value: dialog gather/scatter)`.
+    fn value(&self) -> Option<FieldValue> {
+        Some(FieldValue::Int(self.lv.focused))
+    }
+    // set_value: NOT overridden — the default no-op is intentional.
+    // See the module doc for the deferral rationale.
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::{HeadlessBackend, Renderer};
+    use crate::event::{Key, KeyEvent, KeyModifiers};
+    use crate::screen::Buffer;
+    use crate::theme::Theme;
+    use crate::view::{Deferred, Group, Rect};
+    use std::collections::VecDeque;
+
+    fn make_ctx<'a>(
+        out: &'a mut VecDeque<Event>,
+        timers: &'a mut crate::timer::TimerQueue,
+        deferred: &'a mut Vec<Deferred>,
+    ) -> Context<'a> {
+        Context::new(out, timers, 0, deferred)
+    }
+
+    fn key_ev(k: Key) -> Event {
+        Event::KeyDown(KeyEvent::new(k, KeyModifiers::default()))
+    }
+
+    /// Render a ListBox into a snapshot string.
+    fn render(lb: &mut ListBox, w: u16, h: u16) -> String {
+        let theme = Theme::classic_blue();
+        let (backend, screen) = HeadlessBackend::new(w, h);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = lb.state().get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            lb.draw(&mut dc);
+        });
+        screen.snapshot()
+    }
+
+    // -- 1. ctor ----------------------------------------------------------------
+
+    #[test]
+    fn ctor_empty_items_and_zeroed_fields() {
+        let lb = ListBox::new(Rect::new(0, 0, 20, 8), 1, None, None);
+        assert!(lb.lv.state.options.first_click, "ofFirstClick set");
+        assert!(lb.lv.state.options.selectable, "ofSelectable set");
+        assert_eq!(lb.lv.range, 0, "range starts at 0");
+        assert_eq!(lb.lv.focused, 0, "focused starts at 0");
+        assert_eq!(lb.lv.top_item, 0, "top_item starts at 0");
+        assert_eq!(lb.lv.indent, 0, "indent starts at 0");
+        assert_eq!(lb.lv.num_cols, 1, "num_cols == 1");
+        assert!(lb.items.is_empty(), "items starts empty");
+    }
+
+    // -- 2. new_list --------------------------------------------------------
+
+    #[test]
+    fn new_list_sets_range_and_queues_vbar_params() {
+        // Need a real ViewId for the v-bar.
+        let mut mint_group = Group::new(Rect::new(0, 0, 4, 4));
+        let sentinel =
+            mint_group.insert(Box::new(ListBox::new(Rect::new(0, 0, 1, 1), 1, None, None)));
+
+        let mut lb = ListBox::new(Rect::new(0, 0, 20, 8), 1, None, Some(sentinel));
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            lb.new_list(
+                vec!["alpha".into(), "beta".into(), "gamma".into()],
+                &mut ctx,
+            );
+        }
+        assert_eq!(lb.lv.range, 3, "range == N after new_list");
+        assert_eq!(lb.lv.focused, 0, "focus_item(0) called");
+        // set_range queues ScrollBarSetParams{value:0, min:0, max:2, pg:None, ar:None}
+        // focus_item queues ScrollBarSetParams{value:0, min:None, max:None, …}
+        assert_eq!(
+            deferred.len(),
+            2,
+            "set_range + focus_item each queue one op"
+        );
+        assert!(matches!(
+            deferred[0],
+            Deferred::ScrollBarSetParams {
+                id,
+                value: Some(0),
+                min: Some(0),
+                max: Some(2),
+                page_step: None,
+                arrow_step: None,
+            } if id == sentinel
+        ));
+        assert!(matches!(
+            deferred[1],
+            Deferred::ScrollBarSetParams {
+                id,
+                value: Some(0),
+                min: None,
+                max: None,
+                page_step: None,
+                arrow_step: None,
+            } if id == sentinel
+        ));
+    }
+
+    #[test]
+    fn new_list_empty_skips_focus_item() {
+        let mut lb = ListBox::new(Rect::new(0, 0, 20, 8), 1, None, None);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            lb.new_list(vec![], &mut ctx);
+        }
+        assert_eq!(lb.lv.range, 0, "range == 0 for empty list");
+        // No v-bar, so set_range queues nothing; focus_item not called.
+        assert!(deferred.is_empty(), "empty list queues nothing");
+    }
+
+    #[test]
+    fn new_list_replaces_previous_items() {
+        let mut lb = ListBox::new(Rect::new(0, 0, 20, 8), 1, None, None);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            lb.new_list(vec!["first".into()], &mut ctx);
+        }
+        deferred.clear();
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            lb.new_list(vec!["second".into(), "third".into()], &mut ctx);
+        }
+        assert_eq!(lb.items.len(), 2, "old items replaced");
+        assert_eq!(lb.items[0], "second");
+        assert_eq!(lb.items[1], "third");
+        assert!(
+            lb.items.iter().all(|s| s != "first"),
+            "old item 'first' is gone"
+        );
+    }
+
+    // -- 3. get_text --------------------------------------------------------
+
+    #[test]
+    fn get_text_returns_item_or_empty_for_oob() {
+        let mut lb = ListBox::new(Rect::new(0, 0, 20, 8), 1, None, None);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            lb.new_list(vec!["alpha".into(), "beta".into()], &mut ctx);
+        }
+        // In-range: a real item differs from empty (bite check).
+        let text0 = lb.get_text(0);
+        assert_eq!(text0, "alpha");
+        assert_ne!(
+            text0, "",
+            "in-range item is not empty (bite: distinguishes from OOB)"
+        );
+
+        let text1 = lb.get_text(1);
+        assert_eq!(text1, "beta");
+
+        // Out-of-range returns empty string (faithful: C++ `*dest = EOS`).
+        assert_eq!(lb.get_text(2), "");
+        assert_eq!(lb.get_text(99), "");
+        assert_eq!(lb.get_text(-1_i32), "");
+    }
+
+    // -- 4. value() ---------------------------------------------------------
+
+    #[test]
+    fn value_reflects_focused_item() {
+        let mut lb = ListBox::new(Rect::new(0, 0, 20, 8), 1, None, None);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            lb.new_list(
+                vec!["a".into(), "b".into(), "c".into(), "d".into(), "e".into()],
+                &mut ctx,
+            );
+        }
+        // Initial focused == 0.
+        assert_eq!(lb.value(), Some(FieldValue::Int(0)), "initial focused == 0");
+
+        // Drive focus to item 2 via KeyDown(Down) twice.
+        deferred.clear();
+        let mut ev = key_ev(Key::Down);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            lb.handle_event(&mut ev, &mut ctx);
+        }
+        let mut ev = key_ev(Key::Down);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            lb.handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(lb.lv.focused, 2, "focus moved to 2");
+        // value() must reflect the new focus (bite: 0 vs 2).
+        assert_eq!(
+            lb.value(),
+            Some(FieldValue::Int(2)),
+            "value() reflects focused == 2 (not the initial 0)"
+        );
+    }
+
+    // -- 5. draw snapshot ---------------------------------------------------
+
+    #[test]
+    fn snapshot_active_focused_list_box() {
+        let mut lb = ListBox::new(Rect::new(0, 0, 14, 5), 1, None, None);
+        lb.lv.state.state.selected = true;
+        lb.lv.state.state.active = true;
+        // Set items directly (no Context needed for draw test; range set manually).
+        lb.items = vec![
+            "apple".into(),
+            "banana".into(),
+            "cherry".into(),
+            "date".into(),
+        ];
+        lb.lv.range = 4;
+        lb.lv.focused = 1;
+        insta::assert_snapshot!(render(&mut lb, 14, 5));
+    }
+
+    // -- 6. delegation smoke ------------------------------------------------
+
+    #[test]
+    fn handle_event_wired_down_moves_focused() {
+        let mut lb = ListBox::new(Rect::new(0, 0, 20, 8), 1, None, None);
+        lb.items = vec!["x".into(), "y".into(), "z".into()];
+        lb.lv.range = 3;
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+
+        let mut ev = key_ev(Key::Down);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            lb.handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(lb.lv.focused, 1, "KeyDown(Down) wired: focused moves to 1");
+        assert!(ev.is_nothing(), "Down consumed");
+    }
+
+    #[test]
+    fn broadcast_from_own_vbar_queues_sync_list_viewer() {
+        // Insert the list box into a group so it has a ViewId.
+        let mut group = Group::new(Rect::new(0, 0, 30, 20));
+
+        // Mint a v-bar id.
+        let mut vbar_group = Group::new(Rect::new(0, 0, 4, 4));
+        let v_id = vbar_group.insert(Box::new(ListBox::new(Rect::new(0, 0, 1, 1), 1, None, None)));
+
+        let lb_id = group.insert(Box::new(ListBox::new(
+            Rect::new(0, 0, 20, 8),
+            1,
+            None,
+            Some(v_id),
+        )));
+
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+
+        // cmScrollBarChanged from own v-bar → SyncListViewer queued.
+        let mut ev = Event::Broadcast {
+            command: crate::command::Command::SCROLL_BAR_CHANGED,
+            source: Some(v_id),
+        };
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            group
+                .find_mut(lb_id)
+                .unwrap()
+                .handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(deferred.len(), 1, "one SyncListViewer op queued");
+        assert!(
+            matches!(
+                deferred[0],
+                Deferred::SyncListViewer {
+                    list,
+                    h: None,
+                    v: Some(vid),
+                } if list == lb_id && vid == v_id
+            ),
+            "SyncListViewer carries correct list and v-bar ids"
+        );
+    }
+}

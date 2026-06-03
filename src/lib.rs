@@ -107,5 +107,5 @@ pub use view::{
     Context, DragMode, DrawCtx, Group, GrowMode, Options, Point, Rect, SelectMode, State,
     StateFlag, View, ViewId, ViewState,
 };
-pub use widgets::{InputLine, ListViewer, ListViewerState, ScrollBar, Scroller};
+pub use widgets::{InputLine, ListBox, ListViewer, ListViewerState, ScrollBar, Scroller};
 pub use window::{ScrollBarOptions, Window, WindowFlags, WindowPalette};
