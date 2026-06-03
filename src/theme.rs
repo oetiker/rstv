@@ -102,10 +102,24 @@ pub enum Role {
     ButtonSelectedShortcut,
     /// `TButton` drop-shadow cells — `cpButton` idx 8 (`getColor(8)`).
     ButtonShadow,
+    /// `TLabel` caption text when **not** lit (linked control unfocused) —
+    /// `cpLabel "\x07\x08\x09\x09"`, `getColor(0x0301)` lo (dialog palette idx 7).
+    LabelNormal,
+    /// `TLabel` caption text when **lit** (linked control focused) —
+    /// `getColor(0x0402)` lo (dialog palette idx 8).
+    LabelLight,
+    /// `TLabel` shortcut highlight when **not** lit — `getColor(0x0301)` hi
+    /// (dialog palette idx 9; cpLabel maps idx 3 → entry 9).
+    LabelNormalShortcut,
+    /// `TLabel` shortcut highlight when **lit** — `getColor(0x0402)` hi (dialog
+    /// palette idx 9 as well; cpLabel maps idx 4 → entry 9, so this equals
+    /// [`LabelNormalShortcut`](Role::LabelNormalShortcut) but is kept a distinct
+    /// role so future theming can differ).
+    LabelLightShortcut,
 }
 
 /// Number of [`Role`] variants — the fixed length of [`Theme`]'s style array.
-const ROLE_COUNT: usize = 35;
+const ROLE_COUNT: usize = 39;
 
 impl Role {
     /// Total mapping of each variant to its index into the style array.
@@ -149,6 +163,10 @@ impl Role {
             Role::ButtonDefaultShortcut => 32,
             Role::ButtonSelectedShortcut => 33,
             Role::ButtonShadow => 34,
+            Role::LabelNormal => 35,
+            Role::LabelLight => 36,
+            Role::LabelNormalShortcut => 37,
+            Role::LabelLightShortcut => 38,
         }
     }
 }
@@ -427,6 +445,18 @@ impl Theme {
         set(&mut styles, Role::ButtonSelectedShortcut, 0xE, 0x2); // yellow on green
         set(&mut styles, Role::ButtonShadow, 0x8, 0x0); // darkgray on black
 
+        // Label family (row 41). Provisional values modelled on the classic
+        // gray-dialog `cpLabel` chain (dialog palette idx 7/8/9): black on
+        // lightgray when not lit, brighter white when lit (linked control
+        // focused), red shortcut accent (identical in both states, since cpLabel
+        // maps both shortcut indices to dialog entry 9). Not authoritative — they
+        // realign with the deferred gray dialog theming (`TODO(row 34 gray
+        // theming)`).
+        set(&mut styles, Role::LabelNormal, 0x0, 0x7); // black on lightgray
+        set(&mut styles, Role::LabelLight, 0xF, 0x7); // white on lightgray (lit)
+        set(&mut styles, Role::LabelNormalShortcut, 0x4, 0x7); // red on lightgray
+        set(&mut styles, Role::LabelLightShortcut, 0x4, 0x7); // red on lightgray
+
         Theme {
             styles,
             glyphs: Glyphs::default(),
@@ -491,6 +521,10 @@ mod tests {
         Role::ButtonDefaultShortcut,
         Role::ButtonSelectedShortcut,
         Role::ButtonShadow,
+        Role::LabelNormal,
+        Role::LabelLight,
+        Role::LabelNormalShortcut,
+        Role::LabelLightShortcut,
     ];
 
     #[test]
