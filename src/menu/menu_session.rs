@@ -27,6 +27,18 @@
 //! `execView`. The [`bounds`](MenuLevel::bounds) is shaped for stage-2 mouse from
 //! day one (cross-level mouse gates against this cached per-level set).
 //!
+//! **Known divergence (clone-at-open consequence, breadcrumbed):** the child-pop
+//! `menu.default = current` write (C++ `menu->deflt = current`, `tmnuview.cpp:386`)
+//! lands on the *level's clone* of the menu, which is discarded when the session
+//! closes — so the bar's permanent `Menu::default` is NOT updated, and a later
+//! *re-activation* restarts on the original default rather than the last-selected
+//! item (TV's "the menu remembers your last choice"). Inert within a session (a
+//! closed box is only reopened by re-cloning through the bar); the same accepted
+//! trade-off as the `disabled`-freezing rationale above. To make deflt persist, a
+//! future row would write the chosen index back to the bar's real menu at
+//! `end_session_with` (the session has the bar's `view_id`, so a new
+//! `Deferred::SetMenuDefault(id, idx)` mirroring `SetMenuCurrent` would do it).
+//!
 //! ## What is implemented (Step-2 stage 1 — keyboard)
 //!
 //! The **keyboard** arms of `execute()`'s switch: `kbUp`/`kbDown`/`kbLeft`/
