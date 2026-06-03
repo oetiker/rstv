@@ -42,8 +42,9 @@ use unicode_width::UnicodeWidthChar;
 /// dispatch unwinds and the root is free again.
 ///
 /// One queue, drained once per pump in **insertion order**. The variants fall into
-/// three disjoint families by the loop-owned state they touch — capture stack,
-/// command set, view tree — so cross-family apply order never affects the result;
+/// four disjoint families by the loop-owned state they touch — capture stack,
+/// command set, view tree, loop state (`end_state`) — so cross-family apply order
+/// never affects the result;
 /// same-family items keep their relative order.
 pub enum Deferred {
     /// Push a capture handler onto the program's capture stack. Applied *after* the
@@ -79,6 +80,58 @@ pub enum Deferred {
     /// `EndModal` with an effect on the *same* state, and cross-family order never
     /// affects the result.
     EndModal(Command),
+
+    // -- row 27: the TScroller cross-view scrollbar broker (D3) --------------
+    //
+    // All three touch the **view tree** family (same as `ChangeBounds`/`SetState`/
+    // `Close`/`FocusById`), so the `69897fe` insertion-order drain stays
+    // order-equivalent: no single dispatch co-queues two ops on the *same*
+    // scrollbar/scroller in a conflicting order. They exist because a leaf view
+    // (the scroller) holds only `&mut Context` (D3) and so can neither **read** nor
+    // **mutate** its window-frame sibling scrollbars; the pump — which owns the
+    // whole tree — is the cross-view broker, performing every read/write at
+    // deferred-apply time via `group.find_mut(id)`.
+    /// **Read direction** (`TScroller::scrollDraw`): resolve the `h`/`v` scrollbars,
+    /// read each `value` (via [`View::value`](crate::view::View::value) →
+    /// [`FieldValue::Int`](crate::data::FieldValue::Int)), and push the resulting
+    /// delta into `scroller` (the pump downcasts it to `Scroller` and calls
+    /// `apply_delta`, which does the `setCursor` adjust + `delta = d`). The scroller
+    /// requests this from `handle_event` when a `cmScrollBarChanged` broadcast names
+    /// one of its bars as `source`.
+    SyncScrollerDelta {
+        /// The scroller whose `delta`/`cursor` to update.
+        scroller: ViewId,
+        /// The horizontal scrollbar to read `value` from (`None` = no h bar → 0).
+        h: Option<ViewId>,
+        /// The vertical scrollbar to read `value` from (`None` = no v bar → 0).
+        v: Option<ViewId>,
+    },
+    /// **Write direction** (`TScrollBar::setParams`/`setValue`, driven by
+    /// `TScroller::setLimit`/`scrollTo`). The pump resolves `id`, downcasts to
+    /// `ScrollBar`, fills each `None` field from the bar's **live** value
+    /// (preserve-where-`None`), then calls `set_params` — which clamps and may
+    /// re-broadcast `cmScrollBarChanged`. One flexible variant serves row 27 and the
+    /// future `TListViewer`/`TEditor` (`setRange`/`setStep`/`setValue` shapes).
+    ScrollBarSetParams {
+        /// The scrollbar to update.
+        id: ViewId,
+        /// New value, or `None` to preserve the bar's live `value`.
+        value: Option<i32>,
+        /// New range minimum, or `None` to preserve `min_value`.
+        min: Option<i32>,
+        /// New range maximum, or `None` to preserve `max_value`.
+        max: Option<i32>,
+        /// New page step, or `None` to preserve `page_step`.
+        page_step: Option<i32>,
+        /// New arrow step, or `None` to preserve `arrow_step`.
+        arrow_step: Option<i32>,
+    },
+    /// **Visibility direction** (`TScroller::showSBar` → `TView::show`/`hide`). The
+    /// pump resolves `id` and sets `state.state.visible` (no downcast —
+    /// `state_mut` is on the trait; the painter skips `!visible` children). There is
+    /// no propagating `StateFlag::Visible` (D8 dropped `sfVisible`'s side effects),
+    /// so visibility is set directly on the [`ViewState`](crate::view::ViewState).
+    SetVisible(ViewId, bool),
 }
 
 // ---------------------------------------------------------------------------
@@ -464,6 +517,52 @@ impl<'a> Context<'a> {
     /// view → `ctx.end_modal`; owner / top-level → `Program::end_modal`.
     pub fn end_modal(&mut self, cmd: Command) {
         self.deferred.push(Deferred::EndModal(cmd));
+    }
+
+    /// Request the `TScroller` `scroller` re-read its scrollbars' values and update
+    /// its `delta`/`cursor` — **deferred** ([`Deferred::SyncScrollerDelta`]). The
+    /// scroller (a leaf, D3) cannot read its window-frame sibling bars itself; the
+    /// pump brokers the read. `h`/`v` are the bar [`ViewId`]s (`None` = no bar).
+    pub fn request_sync_scroller_delta(
+        &mut self,
+        scroller: ViewId,
+        h: Option<ViewId>,
+        v: Option<ViewId>,
+    ) {
+        self.deferred
+            .push(Deferred::SyncScrollerDelta { scroller, h, v });
+    }
+
+    /// Request the scrollbar `id` have its parameters set — **deferred**
+    /// ([`Deferred::ScrollBarSetParams`]). Each `None` field is preserved from the
+    /// bar's live value at apply time (`TScrollBar::setParams`/`setValue` driven by
+    /// `TScroller::setLimit`/`scrollTo`). The scroller (a leaf, D3) cannot mutate its
+    /// sibling bar inline.
+    #[allow(clippy::too_many_arguments)]
+    pub fn request_scroll_bar_params(
+        &mut self,
+        id: ViewId,
+        value: Option<i32>,
+        min: Option<i32>,
+        max: Option<i32>,
+        page_step: Option<i32>,
+        arrow_step: Option<i32>,
+    ) {
+        self.deferred.push(Deferred::ScrollBarSetParams {
+            id,
+            value,
+            min,
+            max,
+            page_step,
+            arrow_step,
+        });
+    }
+
+    /// Request the view `id` be shown/hidden — **deferred**
+    /// ([`Deferred::SetVisible`]). `TScroller::showSBar` → `TView::show`/`hide` on a
+    /// sibling scrollbar (which the scroller, a leaf, cannot reach inline, D3).
+    pub fn request_set_visible(&mut self, id: ViewId, visible: bool) {
+        self.deferred.push(Deferred::SetVisible(id, visible));
     }
 
     /// The clock value sampled for this dispatch pass.

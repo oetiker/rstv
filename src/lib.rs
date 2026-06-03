@@ -61,6 +61,7 @@
 //! | 33 | `TWindow` (`Window`, core) | [`window`] | ✅ |
 //! | 30 | `TDeskTop` (`Desktop`) | [`desktop`] | ✅ |
 //! | 34 | `TDialog` (`Dialog`, modal `exec_view`) | [`dialog`] | ✅ |
+//! | 27 | `TScroller` (`Scroller`, cross-view broker) | [`widgets`] | ✅ |
 
 pub mod app;
 pub mod backend;
@@ -106,5 +107,5 @@ pub use view::{
     Context, DragMode, DrawCtx, Group, GrowMode, Options, Point, Rect, SelectMode, State,
     StateFlag, View, ViewId, ViewState,
 };
-pub use widgets::{InputLine, ScrollBar};
+pub use widgets::{InputLine, ScrollBar, Scroller};
 pub use window::{ScrollBarOptions, Window, WindowFlags, WindowPalette};

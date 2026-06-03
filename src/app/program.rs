@@ -60,7 +60,7 @@ use crate::event::{Event, Key};
 use crate::theme::Theme;
 use crate::timer::Clock;
 use crate::timer::TimerQueue;
-use crate::view::{Context, Deferred, DrawCtx, Group, Rect, SelectMode, View, ViewId};
+use crate::view::{Context, Deferred, DrawCtx, Group, Point, Rect, SelectMode, View, ViewId};
 
 /// The frame-tick timeout: ports `TProgram::eventTimeoutMs` (20 ms → 50 wakeups
 /// per second). Headless ignores it (D11).
@@ -757,6 +757,74 @@ impl Program {
                                 Deferred::EndModal(cmd) => {
                                     *end_state = Some(cmd);
                                 }
+                                // -- row 27: TScroller cross-view broker --------
+                                //
+                                // The pump is the broker: a scroller (a leaf, D3)
+                                // can neither read nor mutate its window-frame
+                                // sibling scrollbars, so the read/write happens here
+                                // where the whole tree is reachable via `group`.
+                                //
+                                // Read direction (TScroller::scrollDraw): resolve
+                                // each bar and read its `value` (via View::value →
+                                // FieldValue::Int) in its OWN find_mut so only one
+                                // `&mut` is live at a time, then find_mut the
+                                // scroller and push the delta in.
+                                Deferred::SyncScrollerDelta { scroller, h, v } => {
+                                    use crate::widgets::Scroller;
+                                    let dx = h
+                                        .and_then(|id| group.find_mut(id))
+                                        .and_then(|view| view.value())
+                                        .and_then(field_int)
+                                        .unwrap_or(0);
+                                    let dy = v
+                                        .and_then(|id| group.find_mut(id))
+                                        .and_then(|view| view.value())
+                                        .and_then(field_int)
+                                        .unwrap_or(0);
+                                    if let Some(s) = group
+                                        .find_mut(scroller)
+                                        .and_then(|view| view.as_any_mut())
+                                        .and_then(|a| a.downcast_mut::<Scroller>())
+                                    {
+                                        s.apply_delta(Point::new(dx, dy));
+                                    }
+                                }
+                                // Write direction (TScrollBar::setParams driven by
+                                // TScroller::setLimit/scrollTo): fill each `None`
+                                // field from the bar's live value, then set_params
+                                // (which clamps and may re-broadcast CHANGED — fine,
+                                // no loop: the read-sync writes nothing back). `group`
+                                // and `ctx` are disjoint borrows here.
+                                Deferred::ScrollBarSetParams {
+                                    id,
+                                    value,
+                                    min,
+                                    max,
+                                    page_step,
+                                    arrow_step,
+                                } => {
+                                    use crate::widgets::ScrollBar;
+                                    if let Some(sb) = group
+                                        .find_mut(id)
+                                        .and_then(|view| view.as_any_mut())
+                                        .and_then(|a| a.downcast_mut::<ScrollBar>())
+                                    {
+                                        let v = value.unwrap_or(sb.value);
+                                        let lo = min.unwrap_or(sb.min_value);
+                                        let hi = max.unwrap_or(sb.max_value);
+                                        let pg = page_step.unwrap_or(sb.page_step);
+                                        let ar = arrow_step.unwrap_or(sb.arrow_step);
+                                        sb.set_params(v, lo, hi, pg, ar, &mut ctx);
+                                    }
+                                }
+                                // Visibility direction (TScroller::showSBar →
+                                // show/hide): set visible directly (no propagating
+                                // StateFlag::Visible; the painter skips !visible).
+                                Deferred::SetVisible(id, visible) => {
+                                    if let Some(view) = group.find_mut(id) {
+                                        view.state_mut().state.visible = visible;
+                                    }
+                                }
                             }
                         }
                     }
@@ -812,6 +880,17 @@ impl Program {
 // ---------------------------------------------------------------------------
 // program-level handle_event — ports TProgram::handleEvent (free fn, D9 borrows)
 // ---------------------------------------------------------------------------
+
+/// Extract the `i32` out of a [`FieldValue::Int`](crate::data::FieldValue::Int),
+/// or `None` for any other variant. Used by the row-27 `TScroller` read-broker to
+/// read a scrollbar's `value` through the generic [`View::value`](crate::view::View::value)
+/// (the successor to C++ `hScrollBar->value`).
+fn field_int(v: crate::data::FieldValue) -> Option<i32> {
+    match v {
+        crate::data::FieldValue::Int(n) => Some(n),
+        _ => None,
+    }
+}
 
 /// `TProgram::eventWaitTimeout` — `min(20 ms, time_until_next_timer)`. With no
 /// timer it is just the 20 ms frame tick. Returned for `poll_event`; headless
@@ -2151,6 +2230,318 @@ mod tests {
         assert!(
             win_state(&mut program, id).state.dragging,
             "second drag set sfDragging"
+        );
+    }
+
+    // -- row 27: TScroller cross-view broker (pump-side apply) ----------------
+    //
+    // These drive the broker end-to-end through `pump_once`: the scroller and its
+    // two bars are inserted into the ROOT group (so the pump's `group.find_mut`
+    // resolves all three), and the deferred `SyncScrollerDelta` /
+    // `ScrollBarSetParams` / `SetVisible` ops are applied by the real apply loop.
+
+    use crate::widgets::{ScrollBar, Scroller};
+
+    /// Insert an h-bar, a v-bar, and a scroller into the program's root group.
+    /// Returns `(h_id, v_id, scroller_id)`. The scroller is not made current — the
+    /// tests address it / the bars by id directly.
+    fn insert_scroller(program: &mut Program) -> (ViewId, ViewId, ViewId) {
+        let g = program.group_mut();
+        // Horizontal bar 20×1, vertical bar 1×10.
+        let h = g.insert(Box::new(ScrollBar::new(Rect::new(0, 24, 20, 25))));
+        let v = g.insert(Box::new(ScrollBar::new(Rect::new(79, 0, 80, 10))));
+        // Scroller 10×5.
+        let s = g.insert(Box::new(Scroller::new(
+            Rect::new(0, 0, 10, 5),
+            Some(h),
+            Some(v),
+        )));
+        program.out_events.clear();
+        (h, v, s)
+    }
+
+    fn scroller_delta(program: &mut Program, id: ViewId) -> Point {
+        program
+            .group_mut()
+            .find_mut(id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<Scroller>())
+            .map(|s| s.delta)
+            .expect("scroller resolves")
+    }
+
+    fn bar_params(program: &mut Program, id: ViewId) -> (i32, i32, i32, i32, i32) {
+        program
+            .group_mut()
+            .find_mut(id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<ScrollBar>())
+            .map(|b| (b.value, b.min_value, b.max_value, b.page_step, b.arrow_step))
+            .expect("scrollbar resolves")
+    }
+
+    fn set_bar_value(program: &mut Program, id: ViewId, value: i32) {
+        // Give the bar a real range first, then set its value (through the pump's
+        // own deferred channel would be circular; set directly for setup).
+        let g = program.group_mut();
+        let b = g
+            .find_mut(id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<ScrollBar>())
+            .expect("scrollbar resolves");
+        b.min_value = 0;
+        b.max_value = 100;
+        b.value = value;
+    }
+
+    /// Read broker (#2): a `cmScrollBarChanged` broadcast whose `source` is the
+    /// scroller's h-bar makes the pump read that bar's `value` and update the
+    /// scroller's `delta` — and a broadcast from a NON-bar source is ignored.
+    #[test]
+    fn scroller_read_broker_syncs_delta_through_pump() {
+        let (mut program, _h2, _c) = program_with_desktop(80, 25);
+        let (h, v, s) = insert_scroller(&mut program);
+
+        // Pre-set the H bar's value (the broker reads `value` off the resolved bar).
+        set_bar_value(&mut program, h, 7);
+        // V bar stays value 0.
+        set_bar_value(&mut program, v, 0);
+
+        assert_eq!(scroller_delta(&mut program, s), Point::new(0, 0));
+
+        // Inject the CHANGED broadcast sourced by the H bar and pump once: the
+        // broadcast phase delivers it to the scroller (which queues
+        // SyncScrollerDelta), then the apply loop reads the bars and pushes the
+        // delta into the scroller.
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::SCROLL_BAR_CHANGED,
+            source: Some(h),
+        });
+        program.pump_once();
+        assert_eq!(
+            scroller_delta(&mut program, s),
+            Point::new(7, 0),
+            "delta.x mirrors the H bar's value; delta.y mirrors the V bar (0)"
+        );
+
+        // Now move the V bar and fire a CHANGED sourced by V.
+        set_bar_value(&mut program, v, 3);
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::SCROLL_BAR_CHANGED,
+            source: Some(v),
+        });
+        program.pump_once();
+        assert_eq!(scroller_delta(&mut program, s), Point::new(7, 3));
+
+        // Negative case: a CHANGED broadcast from a non-bar source (the scroller's
+        // own id) must NOT change the delta (the source filter bites). Move a bar
+        // first so a *would-be* sync would be observable.
+        set_bar_value(&mut program, h, 42);
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::SCROLL_BAR_CHANGED,
+            source: Some(s),
+        });
+        program.pump_once();
+        assert_eq!(
+            scroller_delta(&mut program, s),
+            Point::new(7, 3),
+            "broadcast from a non-bar source must leave delta unchanged"
+        );
+    }
+
+    /// Write broker (#3): `Scroller::set_limit` queues `ScrollBarSetParams`, and the
+    /// pump applies them — setting each bar's range/page while PRESERVING its value
+    /// and arrow step.
+    #[test]
+    fn scroller_set_limit_write_broker_through_pump() {
+        let (mut program, _h, _c) = program_with_desktop(80, 25);
+        let (h, v, s) = insert_scroller(&mut program);
+
+        // Give the bars distinct live value + arrow_step so "preserve" is testable.
+        {
+            let g = program.group_mut();
+            for id in [h, v] {
+                let b = g
+                    .find_mut(id)
+                    .and_then(|x| x.as_any_mut())
+                    .and_then(|a| a.downcast_mut::<ScrollBar>())
+                    .unwrap();
+                b.min_value = 0;
+                b.max_value = 1000; // wide enough that value 4 stays in range
+                b.value = 4;
+                b.arrow_step = 9;
+            }
+        }
+
+        // Drive set_limit through a dispatch: queue the broker request exactly as a
+        // subclass would from handle_event, alongside a benign broadcast to reach the
+        // apply loop. We call set_limit via a temporary Context-bearing path: push the
+        // deferred ops by reaching the scroller and invoking set_limit with a Context.
+        // Simplest: queue them directly the way the scroller would, by calling
+        // set_limit on the resolved scroller against a throwaway Context whose
+        // `deferred` is then merged — instead, drive it the production way:
+        {
+            // Resolve the scroller and call set_limit with a real Context that writes
+            // into the program's deferred queue, then pump to apply.
+            let Program {
+                group,
+                out_events,
+                timers,
+                deferred,
+                ..
+            } = &mut program;
+            let mut ctx = Context::new(out_events, timers, 0, deferred);
+            let sc = group
+                .find_mut(s)
+                .and_then(|x| x.as_any_mut())
+                .and_then(|a| a.downcast_mut::<Scroller>())
+                .unwrap();
+            sc.set_limit(100, 50, &mut ctx); // size 10×5
+        }
+        // A benign broadcast drives a dispatch so the apply loop runs.
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.pump_once();
+
+        // H bar: value 4 preserved, min 0, max 100-10=90, page_step 10-1=9,
+        //        arrow_step 9 preserved.
+        let (hv, hmin, hmax, hpg, har) = bar_params(&mut program, h);
+        assert_eq!(hv, 4, "H value preserved");
+        assert_eq!(hmin, 0);
+        assert_eq!(hmax, 90, "H max = x - size.x");
+        assert_eq!(hpg, 9, "H page_step = size.x - 1");
+        assert_eq!(har, 9, "H arrow_step preserved");
+
+        // V bar: max 50-5=45, page_step 5-1=4.
+        let (vv, _vmin, vmax, vpg, var) = bar_params(&mut program, v);
+        assert_eq!(vv, 4, "V value preserved");
+        assert_eq!(vmax, 45, "V max = y - size.y");
+        assert_eq!(vpg, 4, "V page_step = size.y - 1");
+        assert_eq!(var, 9, "V arrow_step preserved");
+    }
+
+    /// Write broker (#4): `Scroller::scroll_to` sets each bar's value (clamped to
+    /// the live range), preserving range and steps.
+    #[test]
+    fn scroller_scroll_to_write_broker_through_pump() {
+        let (mut program, _h, _c) = program_with_desktop(80, 25);
+        let (h, v, s) = insert_scroller(&mut program);
+
+        // Bars with range [0, 8] so scroll_to(10, 5) clamps the H value to 8.
+        {
+            let g = program.group_mut();
+            for id in [h, v] {
+                let b = g
+                    .find_mut(id)
+                    .and_then(|x| x.as_any_mut())
+                    .and_then(|a| a.downcast_mut::<ScrollBar>())
+                    .unwrap();
+                b.min_value = 0;
+                b.max_value = 8;
+                b.value = 0;
+            }
+        }
+
+        {
+            let Program {
+                group,
+                out_events,
+                timers,
+                deferred,
+                ..
+            } = &mut program;
+            let mut ctx = Context::new(out_events, timers, 0, deferred);
+            let sc = group
+                .find_mut(s)
+                .and_then(|x| x.as_any_mut())
+                .and_then(|a| a.downcast_mut::<Scroller>())
+                .unwrap();
+            sc.scroll_to(10, 5, &mut ctx);
+        }
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.pump_once();
+
+        let (hv, _, hmax, _, _) = bar_params(&mut program, h);
+        assert_eq!(hmax, 8, "H range preserved");
+        assert_eq!(hv, 8, "H value clamped to max (scroll_to 10 > 8)");
+        let (vv, _, _, _, _) = bar_params(&mut program, v);
+        assert_eq!(vv, 5, "V value set to 5 (in range)");
+    }
+
+    /// Visibility broker (#5): selecting/deselecting the scroller shows/hides both
+    /// bars through the deferred `SetVisible` ops applied by the pump.
+    #[test]
+    fn scroller_set_state_shows_and_hides_bars_through_pump() {
+        let (mut program, _h, _c) = program_with_desktop(80, 25);
+        let (h, v, s) = insert_scroller(&mut program);
+
+        let visible = |program: &mut Program, id: ViewId| {
+            program
+                .group_mut()
+                .find_mut(id)
+                .map(|x| x.state().state.visible)
+                .unwrap()
+        };
+
+        // Drive set_state(Selected, true) through a dispatch + apply.
+        {
+            let Program {
+                group,
+                out_events,
+                timers,
+                deferred,
+                ..
+            } = &mut program;
+            let mut ctx = Context::new(out_events, timers, 0, deferred);
+            if let Some(sc) = group.find_mut(s) {
+                sc.set_state(crate::view::StateFlag::Selected, true, &mut ctx);
+            }
+        }
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.pump_once();
+        assert!(
+            visible(&mut program, h),
+            "H bar shown when scroller selected"
+        );
+        assert!(
+            visible(&mut program, v),
+            "V bar shown when scroller selected"
+        );
+
+        // Deselect → both hidden.
+        {
+            let Program {
+                group,
+                out_events,
+                timers,
+                deferred,
+                ..
+            } = &mut program;
+            let mut ctx = Context::new(out_events, timers, 0, deferred);
+            if let Some(sc) = group.find_mut(s) {
+                sc.set_state(crate::view::StateFlag::Selected, false, &mut ctx);
+            }
+        }
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.pump_once();
+        assert!(
+            !visible(&mut program, h),
+            "H bar hidden when scroller deselected"
+        );
+        assert!(
+            !visible(&mut program, v),
+            "V bar hidden when scroller deselected"
         );
     }
 }

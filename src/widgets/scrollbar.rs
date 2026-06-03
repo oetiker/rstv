@@ -50,6 +50,7 @@
 //!   `TODO/NOTE(ctrlToArrow)` in [`ScrollBar::handle_event`].
 
 use crate::command::Command;
+use crate::data::FieldValue;
 use crate::event::{Event, Key, MouseWheel};
 use crate::theme::Role;
 use crate::view::{Context, DrawCtx, GrowMode, Options, Rect, View, ViewState};
@@ -360,6 +361,20 @@ impl View for ScrollBar {
 
     fn state_mut(&mut self) -> &mut ViewState {
         &mut self.state
+    }
+
+    /// `TScrollBar::value` exposed as the D10 transfer currency — the row-27
+    /// `TScroller` read-broker reads this through the trait (the pump resolves the
+    /// bar by id and reads `value`, the successor to C++ `hScrollBar->value`).
+    fn value(&self) -> Option<FieldValue> {
+        Some(FieldValue::Int(self.value))
+    }
+
+    /// Concrete-reach hatch (the sanctioned downcast, same as `TWindow::zoom`'s
+    /// frame push): the pump downcasts to `&mut ScrollBar` to call `set_params`
+    /// when applying a `Deferred::ScrollBarSetParams` from a scroller.
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        Some(self)
     }
 
     /// `TScrollBar::draw` + `drawPos` — paint the scrollbar.

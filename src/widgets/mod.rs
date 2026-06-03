@@ -13,6 +13,7 @@ mod cluster;
 mod indicator;
 mod input_line;
 mod scrollbar;
+mod scroller;
 mod static_text;
 
 pub use button::{Button, ButtonFlags};
@@ -20,4 +21,5 @@ pub use cluster::{CheckBoxes, Cluster, ClusterKind, MultiCheckBoxes, RadioButton
 pub use indicator::Indicator;
 pub use input_line::{InputLine, LimitMode};
 pub use scrollbar::ScrollBar;
+pub use scroller::Scroller;
 pub use static_text::{Label, ParamText, StaticText};

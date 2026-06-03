@@ -1,0 +1,19 @@
+---
+source: src/widgets/scroller.rs
+expression: screen.snapshot()
+---
+size: 8x4
+cursor: hidden
+text:
+|        |
+|        |
+|        |
+|        |
+attr:
+|aaaaaaaa|
+|aaaaaaaa|
+|aaaaaaaa|
+|aaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(8) bg=BIOS(2)

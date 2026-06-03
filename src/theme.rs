@@ -124,10 +124,15 @@ pub enum Role {
     InputSelected,
     /// `TInputLine` scroll arrows — `cpInputLine` idx 4 (`0x15`).
     InputArrow,
+    /// `TScroller` content fill, normal — `cpScroller "\x06\x07"` idx 1 (`0x06`),
+    /// the app-direct color `cpAppColor[6] = 0x28` (fg 8 on bg 2). **Provisional**;
+    /// a scroller inside a window remaps via the palette chain.
+    /// `cpScroller` idx 2 (`ScrollerSelected`) is deferred to `TEditor` row 66.
+    ScrollerNormal,
 }
 
 /// Number of [`Role`] variants — the fixed length of [`Theme`]'s style array.
-const ROLE_COUNT: usize = 42;
+const ROLE_COUNT: usize = 43;
 
 impl Role {
     /// Total mapping of each variant to its index into the style array.
@@ -178,6 +183,7 @@ impl Role {
             Role::InputNormal => 39,
             Role::InputSelected => 40,
             Role::InputArrow => 41,
+            Role::ScrollerNormal => 42,
         }
     }
 }
@@ -490,6 +496,14 @@ impl Theme {
         set(&mut styles, Role::InputSelected, 0xF, 0x2); // white on green
         set(&mut styles, Role::InputArrow, 0xE, 0x3); // yellow on cyan
 
+        // Scroller content fill (row 27). Provisional — the *app-direct* color
+        // `cpScroller "\x06\x07"` idx 1 resolves to `cpAppColor[6] = 0x28` (BIOS
+        // byte `bg<<4 | fg`). A scroller inside a window remaps via the palette
+        // chain, so this realigns with the deferred window-scheme / gray theming
+        // (`TODO(row 34 gray theming / window-scheme remap)`).
+        // `ScrollerSelected` (idx 2 = `0x24`) is deferred to `TEditor` row 66.
+        set(&mut styles, Role::ScrollerNormal, 0x8, 0x2); // darkgray on green (0x28)
+
         Theme {
             styles,
             glyphs: Glyphs::default(),
@@ -561,6 +575,7 @@ mod tests {
         Role::InputNormal,
         Role::InputSelected,
         Role::InputArrow,
+        Role::ScrollerNormal,
     ];
 
     #[test]
