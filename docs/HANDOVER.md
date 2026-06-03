@@ -1,4 +1,4 @@
-# Session handover — Row 48 `TListBox` DONE. Next (per PORT-ORDER): `TApplication` 32 → Phase 4
+# Session handover — Row 32 `TApplication` DONE. Next (per PORT-ORDER): Phase 4 (menus 46+ / status 47,53)
 
 > Living handover for the **next** rstv session. Read this, then
 > [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md) (orientation /
@@ -15,24 +15,72 @@
 
 | commit | what |
 |--------|------|
-| `543b2c8` | **TScroller (27)** — cross-view scrollbar broker (FOUNDATION) |
 | `c1ad789` | **TListViewer (28)** — list base (trait) + write-back broker (FOUNDATION) |
-| `fc66637` | **TListBox (48)** — first concrete `TListViewer` (MECHANICAL) ← THIS session |
+| `fc66637` | **TListBox (48)** — first concrete `TListViewer` (MECHANICAL) |
+| `3e6645f` | **TApplication (32)** — thin D2 wrapper over `Program` (MECHANICAL) ← THIS session |
 
-**Build state:** 491 lib + 3 integration + 2 doctests green; `cargo clippy
+**Build state:** 494 lib + 3 integration + 2 doctests green; `cargo clippy
 --all-targets -- -D warnings` and `cargo fmt --check` clean. Working tree clean
 (after the docs commit that pairs with this handover update).
 (Cargo artifacts land in `/home/oetiker/scratch/cargo-target` — set
 `CARGO_TARGET_DIR`.)
 
-**Phase 2 COMPLETE. Batch B (Phase-3 leaves) COMPLETE.** Phase-1 row 32 +
-Phase-4 (46+) + the remaining list/dialog leaf rows remain. **Row 48 `TListBox`
-DONE** this session (MECHANICAL; the first concrete `TListViewer` — see below).
-Next incomplete in PORT-ORDER sequence: **row 32 `TApplication`** (MECHANICAL,
-thin wrapper over `TProgram`), then Phase 4 (menus/status). Batch C concrete
-validators 58–62 are an available parallel fan-out.
+**Phase 2 COMPLETE. Batch B (Phase-3 leaves) COMPLETE. Phase-1 row 32 COMPLETE.**
+**Row 32 `TApplication` DONE** this session (MECHANICAL, thin wrapper over
+`Program` — see below). Phase-4 (46+) + the remaining list/dialog leaf rows
+remain. Next incomplete in PORT-ORDER sequence: **Phase 4** (menus 46/49/50/51/52,
+status 47/53). Batch C concrete validators 58–62 are an available parallel fan-out.
 
-## What landed THIS session — Row 48 `TListBox` (`fc66637`, MECHANICAL)
+> **Repo note (this session):** the working checkout was parked on an unmerged
+> side branch `feat/delegate-macro` (scaffolds a `tvision-macros` proc-macro
+> crate — the deliberately-revisited row-48 delegation-macro idea). Row 32 was
+> intentionally branched from **`main`** (independent of the macro WIP, user-
+> confirmed) and `main` fast-forwarded to it. `feat/delegate-macro` is untouched.
+> Worktrees live under `/scratch/oetiker/claude-worktrees/<project>-<branch>`
+> (per global CLAUDE.md) — the Agent tool's `isolation:"worktree"` puts them in
+> the wrong place; create them manually + dispatch a non-isolated subagent.
+
+## What landed THIS session — Row 32 `TApplication` (`3e6645f`, MECHANICAL)
+The thin D2 embed wrapper over `Program` (row 31): `Application { program: Program }`,
+the type a real app constructs. **Genuinely thin by dependency order**
+(advisor-confirmed) — all of `TApplication`'s substance is deferred, so the row is
+the type + one real body + faithful breadcrumbs, deliberately NOT padded. Built
+main-thread/Opus-orchestrated: tight brief (`docs/briefs/row32-tapplication.md`) →
+Sonnet implementer (in a `/scratch` worktree) → spec review (fresh C++-adversarial
+agent) → fixes → integrate.
+
+- **`Application`** forwards `run`/`pump_once`/`exec_view`/`desktop`/`end_modal`/
+  `end_state`/`{enable,disable,command_enabled}_command` + `program()`/`program_mut()`
+  escape hatches — hand-written one-liners, **NO delegation macro** (the reverted
+  row-48 creep; the macro is now its own deliberate branch `feat/delegate-macro`).
+- **`get_tile_rect()` is the one real body** → new **`Program::get_tile_rect`**
+  (the desktop child's extent = `deskTop->getExtent()`, local-origin `(0,0,w,h)`,
+  `None` if no desktop; `&mut self` because `Group::find_mut` is `&mut`). Placed on
+  `Program` (not `Application`) because `Application` can't reach the private `group`,
+  and the future command handler — also in `Program` — reuses it.
+- **Deferred (NO dead stubs — omit-until-consumer, the row-35/48 rule):**
+  `tile`/`cascade` (need `Desktop::tile`/`cascade` geometry [`mostEqualDivisors`/
+  `iSqr`/`calcTileRect`/`dividerLoc`/`doCascade`, `tdesktop.cpp`] + a menu to emit
+  cmTile/cmCascade + a way to test → Phase 4); `dosShell`/`suspend`/`resume` (need a
+  backend terminal-suspend seam + SIGTSTP); `initHistory`/`doneHistory` (history
+  subsystem unported); `TAppInit` subsystem init **dropped** (subsumed by the
+  `Backend`/`Renderer` construction path).
+- **Command handling breadcrumbed, not wired:** `TApplication::handleEvent`'s
+  cmTile/cmCascade/cmDosShell are **program-level** → a TODO in `program_handle_event`
+  **after** `group.handle_event` (faithful: C++ runs `TProgram::handleEvent` first),
+  beside the QUIT catch. Blocked on the deferred bodies. The consts
+  `Command::{TILE,CASCADE,DOS_SHELL}` already exist + are enabled in
+  `default_command_set`, but **nothing emits them yet (no menus)** — Phase 4 menus
+  are the first emitters; when they land, wire this breadcrumb + build the desktop
+  geometry together (trigger + body + test in one go).
+- **Review caught + fixed a BLOCKER:** the implementer first added empty
+  `tile`/`cascade`/`dos_shell` methods on `Application` — dead stubs (the planned
+  handler is in `program_handle_event`, which can't reach `Application`); deleted,
+  deferral kept in docs + the breadcrumb. Plus 2 MINORs fixed: breadcrumb moved
+  post-dispatch; the `get_tile_rect` test made discriminating (inset 80×20 desktop on
+  an 80×25 backend pins desktop-extent vs screen-extent — a screen-rect impl fails it).
+
+### Prior session — Row 48 `TListBox` (`fc66637`, MECHANICAL)
 The first **concrete** `TListViewer`, proving the row-28 trait seam end to end.
 Built main-thread/Opus-orchestrated: tight brief
 (`docs/briefs/row48-tlistbox.md`) → Sonnet implementer → full two-stage review
@@ -214,15 +262,16 @@ agents). Brief: `docs/briefs/row35-39-validator-inputline.md`.
 
 Lowest-numbered incomplete rows = the work. Next up:
 
-### Row 32 `TApplication` (MECHANICAL) — the immediate next row
-- **`TApplication` (32, MECHANICAL)** — thin tile/cascade/dosShell wrapper over
-  `TProgram`; independent, slot in anytime. C++ `tapplica.cpp` — `TApplication`
-  is essentially `TProgram` + `initHistory`/`doneHistory` and the static
-  `cascade`/`tile`/`dosShell` helpers. Most of those need the desktop tile/cascade
-  geometry (`TDeskTop::tile`/`cascade`) which may itself be partly deferred —
-  scope it to what `TProgram` + `TDeskTop` already expose, breadcrumb the rest.
+### Row 32 `TApplication` — ✅ DONE this session (`3e6645f`)
+See "What landed THIS session" above. Note for Phase 4: when menus emit
+cmTile/cmCascade/cmDosShell, the deferred bodies land **together** — build
+`Desktop::tile`/`cascade` geometry (`mostEqualDivisors`/`iSqr`/`calcTileRect`/
+`dividerLoc`/`doCascade`, `tdesktop.cpp`) + wire the breadcrumb in
+`program_handle_event` (after `group.handle_event`, beside the QUIT catch, calling
+`desktop.tile/cascade(get_tile_rect())`) + test it with real tileable windows in
+one change. `dosShell` separately needs a backend terminal-suspend seam + SIGTSTP.
 
-### Then, in PORT-ORDER order
+### Phase 4 — the immediate next work, in PORT-ORDER order
 - **Phase 4 — menus + status line** (the path to a fully drivable app):
 
   **Menus:** `TMenuItem`/`TSubMenu`/`TMenu` (46, FOUNDATION — the menu data tree;

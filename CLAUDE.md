@@ -611,6 +611,39 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
     FOUNDATION file; reverted (the macro idea can be revisited deliberately later).
     Brief: `docs/briefs/row48-tlistbox.md`. 491 lib + 3 integration + 2 doctests
     green; clippy/fmt clean.
+  - **Row 32 `TApplication` DONE (`3e6645f`, MECHANICAL)** — module
+    `src/app/application.rs`. The D2 embed wrapper over `Program` (row 31):
+    `Application { program: Program }`, the type a real app constructs. **Genuinely
+    thin by dependency order** (advisor-confirmed): all of `TApplication`'s substance
+    is deferred, so the row is the type + one real body + faithful breadcrumbs, NOT
+    padded. Forwards `run`/`pump_once`/`exec_view`/`desktop`/`end_modal`/`end_state`/
+    `{enable,disable,command_enabled}_command` + `program()`/`program_mut()` escape
+    hatches (hand-written one-liners — **NO delegation macro**, the reverted row-48
+    creep). **`get_tile_rect()` is the one real body** → new **`Program::get_tile_rect`**
+    (the desktop child's extent `deskTop->getExtent()`, local-origin `(0,0,w,h)`,
+    `None` if no desktop; `&mut self` because `Group::find_mut` is `&mut`; placed on
+    `Program` because `Application` can't reach the private `group`, and the future
+    command handler — also in `Program` — reuses it). **Deferred (NO dead stubs —
+    omit-until-consumer, the row-35/48 rule):** `tile`/`cascade` (need
+    `Desktop::tile`/`cascade` geometry [`mostEqualDivisors`/`calcTileRect`/`doCascade`,
+    `tdesktop.cpp`] + a menu to emit cmTile/cmCascade + a way to test → Phase 4);
+    `dosShell`/`suspend`/`resume` (need a backend terminal-suspend seam + SIGTSTP);
+    `initHistory`/`doneHistory` (history subsystem unported); `TAppInit` subsystem
+    init **dropped** (subsumed by the `Backend`/`Renderer` construction path). The
+    command handling (`TApplication::handleEvent`'s cmTile/cmCascade/cmDosShell) is
+    **program-level** → breadcrumbed in `program_handle_event` **after** `group.
+    handle_event` (faithful: C++ runs `TProgram::handleEvent` first), beside the QUIT
+    catch; blocked on the deferred bodies, so not wired live (the consts
+    `Command::{TILE,CASCADE,DOS_SHELL}` already exist + are enabled in
+    `default_command_set`, but nothing emits them — no menus). **First review caught +
+    fixed a BLOCKER:** the implementer added empty `tile`/`cascade`/`dos_shell`
+    methods on `Application` — dead stubs (the planned handler is in
+    `program_handle_event`, which can't reach `Application`); deleted, deferral kept in
+    docs + the program.rs breadcrumb. Also: moved the breadcrumb post-dispatch + made
+    the `get_tile_rect` test discriminating (inset 80×20 desktop on an 80×25 backend
+    pins desktop-extent vs screen-extent). Brief: `docs/briefs/row32-tapplication.md`.
+    Two-stage reviewed (fresh C++-adversarial agent: SPEC-FAIL → fixes → SPEC-PASS).
+    494 lib + 3 integration + 2 doctests green; clippy/fmt clean.
 
 ## Next step
 **Direction = [`docs/PORT-ORDER.md`](docs/PORT-ORDER.md)** — dependency-ordered;
@@ -620,15 +653,15 @@ that *may* run concurrently — an efficiency, not a competing direction. Contin
 subagent-driven (see "How to run the port" above; FOUNDATION → Opus + two-stage
 review, MECHANICAL → Sonnet worktree fan-out).
 
-**Immediate next: row 32 `TApplication`** (MECHANICAL, thin tile/cascade/dosShell
-wrapper over `TProgram`; independent, slot in anytime) → **Phase 4** (menus
-46/49/50/51/52, status 47/53 — the path to a fully drivable app; menus force the
-deferred `Context` command-set query). Row 48 `TListBox` is **DONE** (the first
-concrete `TListViewer` — see Current state). Available parallel fan-out (efficiency,
-not a competing direction): **Batch C concrete validators 58–62** (MECHANICAL,
-`tvalidat.cpp`; 59 `TRangeValidator` resolves the deferred validator `transfer`
-hook + the `cur_pos` re-clamp hazard). Full per-row detail in
-[`docs/HANDOVER.md`](docs/HANDOVER.md).
+**Immediate next: Phase 4** (menus 46/49/50/51/52, status 47/53 — the path to a
+fully drivable app; menus force the deferred `Context` command-set query, and are
+the first emitters of cmTile/cmCascade/cmDosShell — when they land, wire the row-32
+breadcrumb in `program_handle_event` + build `Desktop::tile`/`cascade` geometry).
+Row 32 `TApplication` is **DONE** (`3e6645f`, see Current state); row 48 `TListBox`
+**DONE**. Available parallel fan-out (efficiency, not a competing direction):
+**Batch C concrete validators 58–62** (MECHANICAL, `tvalidat.cpp`; 59
+`TRangeValidator` resolves the deferred validator `transfer` hook + the `cur_pos`
+re-clamp hazard). Full per-row detail in [`docs/HANDOVER.md`](docs/HANDOVER.md).
 
 Phase sequence so far (all ✅ except where noted):
 
@@ -680,9 +713,12 @@ Phase sequence so far (all ✅ except where noted):
 10. ~~**Row 48 `TListBox`**~~ ✅ DONE (`fc66637`, MECHANICAL, see Current state).
     First concrete `TListViewer`: owns a `Vec<String>`, overrides only `get_text`,
     delegates the rest to the row-28 free fns; D10 `value()→Int(focused)` with
-    `set_value` deferred. ← **NEXT: `TApplication` 32**, then **Phase 4** (menus
-    46/49/50/51/52, status 47/53).
-11. **Batches C–E fan out** (concrete validators 58–62, dialog families): the bulk
+    `set_value` deferred.
+11. ~~**Row 32 `TApplication`**~~ ✅ DONE (`3e6645f`, MECHANICAL, see Current state).
+    Thin D2 embed over `Program`; `get_tile_rect` the one real body, tile/cascade/
+    dosShell/history deferred (no dead stubs). ← **NEXT: Phase 4** (menus
+    46/49/50/51/52, status 47/53 — first emitters of cmTile/cmCascade/cmDosShell).
+12. **Batches C–E fan out** (concrete validators 58–62, dialog families): the bulk
     `MECHANICAL` rows; parallel worktree implementer+reviewer trios, commit at batch
     boundaries — runnable concurrently alongside the in-sequence FOUNDATION work.
 
