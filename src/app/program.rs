@@ -825,6 +825,39 @@ impl Program {
                                         view.state_mut().state.visible = visible;
                                     }
                                 }
+                                // -- row 28: TListViewer read-sync broker -------
+                                //
+                                // Like SyncScrollerDelta, but the list base is a
+                                // TRAIT (subclasses reuse its draw + override
+                                // get_text/is_selected), so `dyn View → dyn
+                                // ListViewer` cannot be downcast. Instead we read
+                                // each bar's `value` (each in its own find_mut so
+                                // only one &mut is live) and call back through the
+                                // defaulted View::apply_list_scroll trait method.
+                                //
+                                // This read-sync WRITES BACK (apply_list_scroll →
+                                // focus_item_num → focusItem → v-bar setValue), so it
+                                // could re-enter — but ScrollBar::set_params is
+                                // change-guarded (re-broadcasts only on an actual
+                                // value change), so the write-back of the already-
+                                // current value is a silent no-op and the cycle goes
+                                // quiet. `ctx` is live here (same as the
+                                // ScrollBarSetParams arm), so the write-back's
+                                // request_scroll_bar_params lands in `deferred` for
+                                // the NEXT pump.
+                                Deferred::SyncListViewer { list, h, v } => {
+                                    let hv = h
+                                        .and_then(|id| group.find_mut(id))
+                                        .and_then(|view| view.value())
+                                        .and_then(field_int);
+                                    let vv = v
+                                        .and_then(|id| group.find_mut(id))
+                                        .and_then(|view| view.value())
+                                        .and_then(field_int);
+                                    if let Some(view) = group.find_mut(list) {
+                                        view.apply_list_scroll(hv, vv, &mut ctx);
+                                    }
+                                }
                             }
                         }
                     }
@@ -2542,6 +2575,321 @@ mod tests {
         assert!(
             !visible(&mut program, v),
             "V bar hidden when scroller deselected"
+        );
+    }
+
+    // -- row 28: TListViewer read-sync broker + the TERMINATION property -------
+    //
+    // The list-viewer read-sync WRITES BACK (focus_item_num -> focusItem -> a
+    // deferred v-bar setValue(focused)), unlike the scroller. The cycle
+    // (cmScrollBarChanged -> SyncListViewer -> apply_scroll -> setValue ->
+    // possible re-broadcast) terminates ONLY because ScrollBar::set_params is
+    // change-guarded (re-broadcasts SCROLL_BAR_CHANGED solely on an actual value
+    // change). These tests drive it through real pump_once drains and assert the
+    // cycle goes QUIET while focused/top_item settle correctly.
+
+    use crate::widgets::ListViewerState;
+    use crate::widgets::list_viewer;
+
+    /// A minimal concrete `ListViewer` for the pump-level broker tests (the
+    /// program-test analogue of `list_viewer`'s `FakeList`, which is private to
+    /// that module). Delegates the shared logic to the `list_viewer` free fns.
+    struct ProgList {
+        lv: ListViewerState,
+    }
+
+    impl ProgList {
+        fn new(bounds: Rect, num_cols: i32, n: i32, h: Option<ViewId>, v: Option<ViewId>) -> Self {
+            let mut lv = ListViewerState::new(bounds, num_cols, h, v);
+            lv.range = n;
+            ProgList { lv }
+        }
+    }
+
+    impl View for ProgList {
+        fn state(&self) -> &ViewState {
+            &self.lv.state
+        }
+        fn state_mut(&mut self) -> &mut ViewState {
+            &mut self.lv.state
+        }
+        fn draw(&mut self, ctx: &mut DrawCtx) {
+            list_viewer::draw(self, ctx);
+        }
+        fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
+            list_viewer::handle_event(self, ev, ctx);
+        }
+        fn apply_list_scroll(&mut self, h: Option<i32>, v: Option<i32>, ctx: &mut Context) {
+            list_viewer::apply_scroll(self, h, v, ctx);
+        }
+        fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+            Some(self)
+        }
+    }
+
+    impl list_viewer::ListViewer for ProgList {
+        fn lv(&self) -> &ListViewerState {
+            &self.lv
+        }
+        fn lv_mut(&mut self) -> &mut ListViewerState {
+            &mut self.lv
+        }
+        fn get_text(&self, item: i32) -> String {
+            format!("row{item}")
+        }
+    }
+
+    /// Insert an h-bar, a v-bar (with a real range), and a `ProgList` into the
+    /// program's root group. Returns `(h_id, v_id, list_id)`.
+    fn insert_list(program: &mut Program, n: i32) -> (ViewId, ViewId, ViewId) {
+        let (h, v) = {
+            let g = program.group_mut();
+            let h = g.insert(Box::new(ScrollBar::new(Rect::new(0, 24, 20, 25))));
+            let v = g.insert(Box::new(ScrollBar::new(Rect::new(79, 0, 80, 10))));
+            (h, v)
+        };
+        // Give the v-bar a real range [0, n-1] so its value tracks `focused`.
+        {
+            let g = program.group_mut();
+            let b = g
+                .find_mut(v)
+                .and_then(|x| x.as_any_mut())
+                .and_then(|a| a.downcast_mut::<ScrollBar>())
+                .unwrap();
+            b.min_value = 0;
+            b.max_value = n - 1;
+            b.value = 0;
+        }
+        let list = program.group_mut().insert(Box::new(ProgList::new(
+            Rect::new(0, 0, 10, 5),
+            1,
+            n,
+            Some(h),
+            Some(v),
+        )));
+        program.out_events.clear();
+        program.deferred.clear();
+        (h, v, list)
+    }
+
+    fn list_focus_top(program: &mut Program, id: ViewId) -> (i32, i32) {
+        program
+            .group_mut()
+            .find_mut(id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<ProgList>())
+            .map(|l| (l.lv.focused, l.lv.top_item))
+            .expect("list resolves")
+    }
+
+    fn bar_value(program: &mut Program, id: ViewId) -> i32 {
+        program
+            .group_mut()
+            .find_mut(id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<ScrollBar>())
+            .map(|b| b.value)
+            .expect("bar resolves")
+    }
+
+    /// A benign broadcast that drives a dispatch (so the pump reaches its
+    /// deferred-apply loop) without itself triggering any list/bar reaction — the
+    /// faithful stand-in for "the next event after a scroll". Each pass we re-inject
+    /// one and then assert nothing of OURS (SCROLL_BAR_CHANGED / SyncListViewer)
+    /// re-appears: that is the cycle being QUIET.
+    fn noop_broadcast() -> Event {
+        Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        }
+    }
+
+    /// THE TERMINATION TEST (brief D-D): moving the v-bar to a new value and
+    /// firing a `cmScrollBarChanged` drives the read-sync that WRITES BACK
+    /// `setValue(focused)`. Because the write-back equals the bar's now-current
+    /// value, `set_params`'s change-guard suppresses the re-broadcast, so the
+    /// cycle goes QUIET.
+    ///
+    /// Each subsequent pump is driven by a benign broadcast (the
+    /// deferred-apply loop only runs on an event-dispatch — a deferred write-back
+    /// is applied by the *next* dispatch, exactly as in production). We assert that
+    /// across many such dispatches NO `SCROLL_BAR_CHANGED` is ever produced by the
+    /// write-back and NO `SyncListViewer` is re-queued, while focused/top_item
+    /// settle to the v-bar's value.
+    ///
+    /// Bite-check: were `ScrollBar::set_params` NOT change-guarded, applying the
+    /// write-back `setValue(8)` would re-broadcast SCROLL_BAR_CHANGED (even with an
+    /// unchanged value), the broadcast phase would re-queue SyncListViewer, whose
+    /// apply would write back again — forever. The quiet-pump assertions below
+    /// would then fire on the first re-broadcast. The guard is the fixed point.
+    #[test]
+    fn list_viewer_vbar_sync_write_back_terminates() {
+        let (mut program, _h2, _c) = program_with_desktop(80, 25);
+        let (_h, v, list) = insert_list(&mut program, 20);
+
+        // Move the v-bar to value 8 (in range [0,19]) and fire CHANGED sourced by
+        // it — exactly what TScrollBar::handleEvent would do on a user scroll.
+        {
+            let g = program.group_mut();
+            let b = g
+                .find_mut(v)
+                .and_then(|x| x.as_any_mut())
+                .and_then(|a| a.downcast_mut::<ScrollBar>())
+                .unwrap();
+            b.value = 8;
+        }
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::SCROLL_BAR_CHANGED,
+            source: Some(v),
+        });
+
+        // Pump #1: broadcast phase delivers CHANGED -> list queues SyncListViewer;
+        // apply loop reads the bars and runs apply_scroll -> focus_item_num(8) ->
+        // focus_item -> deferred v-bar setValue(8). That setValue lands in
+        // `deferred` for the NEXT dispatch.
+        program.pump_once();
+        let (f1, t1) = list_focus_top(&mut program, list);
+        assert_eq!(f1, 8, "focused tracked the v-bar value");
+        // size.y=5, numCols=1: focusItem(8) with topItem 0: 8 >= 0+5 ->
+        // topItem = 8 - 5 + 1 = 4.
+        assert_eq!(t1, 4, "top_item adjusted to keep item 8 visible");
+
+        // Now drive dispatches with benign broadcasts. Pump #2's dispatch applies
+        // the deferred setValue(8); the bar's value is ALREADY 8, so set_params's
+        // change-guard suppresses the re-broadcast: no new SCROLL_BAR_CHANGED. From
+        // there it must stay quiet across many dispatches.
+        for pass in 0..6 {
+            program.out_events.push_back(noop_broadcast());
+            program.pump_once();
+            // After the dispatch, the only things in the queues must be unrelated:
+            // no SCROLL_BAR_CHANGED re-broadcast, no SyncListViewer re-queue.
+            assert!(
+                !program.out_events.iter().any(|e| matches!(
+                    e,
+                    Event::Broadcast { command, .. } if *command == Command::SCROLL_BAR_CHANGED
+                )),
+                "pass {pass}: no re-broadcast (the change-guard made the cycle quiet)"
+            );
+            assert!(
+                !program
+                    .deferred
+                    .iter()
+                    .any(|d| matches!(d, Deferred::SyncListViewer { .. })),
+                "pass {pass}: no SyncListViewer re-queued (cycle terminated)"
+            );
+            assert_eq!(bar_value(&mut program, v), 8, "pass {pass}: v-bar value 8");
+            let (f, t) = list_focus_top(&mut program, list);
+            assert_eq!((f, t), (8, 4), "pass {pass}: focused/top_item stable");
+        }
+    }
+
+    /// After a clamp (v-bar value beyond the LIST range) the brief promises "one
+    /// extra round, then quiescent". Drive the v-bar to a value past the list
+    /// range; the read-sync clamps `focused` to range-1 and writes THAT back (a
+    /// real change → exactly one corrective broadcast), after which it is quiet.
+    #[test]
+    fn list_viewer_vbar_sync_clamps_then_terminates() {
+        let (mut program, _h2, _c) = program_with_desktop(80, 25);
+        let (_h, v, list) = insert_list(&mut program, 20);
+
+        // Widen the v-bar range so it can HOLD a value (99) past the LIST range
+        // (20) — the clamp happens inside focus_item_num, not the bar.
+        {
+            let g = program.group_mut();
+            let b = g
+                .find_mut(v)
+                .and_then(|x| x.as_any_mut())
+                .and_then(|a| a.downcast_mut::<ScrollBar>())
+                .unwrap();
+            b.max_value = 999;
+            b.value = 99;
+        }
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::SCROLL_BAR_CHANGED,
+            source: Some(v),
+        });
+
+        // Drive dispatches (each via a benign broadcast so the deferred write-back
+        // gets applied). The clamp + write-back of range-1 (19) settles within a
+        // few corrective rounds, then quiesces.
+        for _ in 0..8 {
+            program.out_events.push_back(noop_broadcast());
+            program.pump_once();
+        }
+        let (f, _t) = list_focus_top(&mut program, list);
+        assert_eq!(f, 19, "focused clamped to range-1 = 19");
+        assert_eq!(
+            bar_value(&mut program, v),
+            19,
+            "v-bar value corrected to 19 (the clamp written back)"
+        );
+        // Quiet now: more dispatches produce no further SyncListViewer.
+        for pass in 0..4 {
+            program.out_events.push_back(noop_broadcast());
+            program.pump_once();
+            assert!(
+                !program
+                    .deferred
+                    .iter()
+                    .any(|d| matches!(d, Deferred::SyncListViewer { .. })),
+                "pass {pass}: quiescent after the corrective round"
+            );
+            assert_eq!(
+                bar_value(&mut program, v),
+                19,
+                "pass {pass}: v-bar value stable at 19"
+            );
+        }
+    }
+
+    /// The read broker also refreshes the cached `indent` from the h-bar (the
+    /// draw-uses-cached-h-bar-value seam), and a CHANGED from a NON-bar source is
+    /// ignored (the source filter, like the scroller).
+    #[test]
+    fn list_viewer_hbar_sync_updates_indent_and_filters_foreign_source() {
+        let (mut program, _h2, _c) = program_with_desktop(80, 25);
+        let (h, _v, list) = insert_list(&mut program, 20);
+
+        // Pre-set the h-bar value; fire CHANGED sourced by it.
+        {
+            let g = program.group_mut();
+            let b = g
+                .find_mut(h)
+                .and_then(|x| x.as_any_mut())
+                .and_then(|a| a.downcast_mut::<ScrollBar>())
+                .unwrap();
+            b.min_value = 0;
+            b.max_value = 50;
+            b.value = 6;
+        }
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::SCROLL_BAR_CHANGED,
+            source: Some(h),
+        });
+        program.pump_once();
+        let indent = program
+            .group_mut()
+            .find_mut(list)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<ProgList>())
+            .map(|l| l.lv.indent)
+            .unwrap();
+        assert_eq!(indent, 6, "h-bar value cached into indent by the read-sync");
+
+        // A CHANGED from a foreign source (the list's own id) must be ignored.
+        program.deferred.clear();
+        program.out_events.clear();
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::SCROLL_BAR_CHANGED,
+            source: Some(list),
+        });
+        program.pump_once();
+        assert!(
+            !program
+                .deferred
+                .iter()
+                .any(|d| matches!(d, Deferred::SyncListViewer { .. })),
+            "foreign-source broadcast ignored (source filter bites)"
         );
     }
 }

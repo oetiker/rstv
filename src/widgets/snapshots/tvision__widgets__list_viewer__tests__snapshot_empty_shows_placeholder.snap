@@ -1,0 +1,17 @@
+---
+source: src/widgets/list_viewer.rs
+expression: "render(&mut l, 12, 3)"
+---
+size: 12x3
+cursor: hidden
+text:
+| <empty>    |
+|            |
+|            |
+attr:
+|aaaaaaaaaaaa|
+|aaaaaaaaaaaa|
+|aaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(7) bg=BIOS(1)

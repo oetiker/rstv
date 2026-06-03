@@ -47,14 +47,19 @@ pub enum Role {
     Disabled,
     /// A pressed control (e.g. a button mid-click).
     Pressed,
-    /// A normal (unselected, unfocused) list item.
-    ListNormal,
-    /// A focused list (its cursor item, list not selected).
+    /// `cpListViewer` idx 1 (`getColor(1)`) — a normal item in an **active**
+    /// (selected+active) list. Also the `<empty>` / focusedColor-unused fill.
+    ListNormalActive,
+    /// `cpListViewer` idx 2 (`getColor(2)`) — a normal item in an **inactive**
+    /// (not selected+active) list.
+    ListNormalInactive,
+    /// `cpListViewer` idx 3 (`getColor(3)`) — the focused (cursor) item of an
+    /// active list.
     ListFocused,
-    /// A selected list item in an unfocused list.
+    /// `cpListViewer` idx 4 (`getColor(4)`) — a selected item (`isSelected`).
     ListSelected,
-    /// The selected item in a focused list.
-    ListSelectedFocused,
+    /// `cpListViewer` idx 5 (`getColor(5)`) — the inter-column divider `│`.
+    ListDivider,
     /// Error feedback.
     Error,
     /// Warning feedback.
@@ -132,7 +137,7 @@ pub enum Role {
 }
 
 /// Number of [`Role`] variants — the fixed length of [`Theme`]'s style array.
-const ROLE_COUNT: usize = 43;
+const ROLE_COUNT: usize = 44;
 
 impl Role {
     /// Total mapping of each variant to its index into the style array.
@@ -152,38 +157,39 @@ impl Role {
             Role::Focused => 8,
             Role::Disabled => 9,
             Role::Pressed => 10,
-            Role::ListNormal => 11,
-            Role::ListFocused => 12,
-            Role::ListSelected => 13,
-            Role::ListSelectedFocused => 14,
-            Role::Error => 15,
-            Role::Warning => 16,
-            Role::Info => 17,
-            Role::Success => 18,
-            Role::StaticText => 19,
-            Role::ClusterNormal => 20,
-            Role::ClusterSelected => 21,
-            Role::ClusterNormalShortcut => 22,
-            Role::ClusterSelectedShortcut => 23,
-            Role::ClusterDisabled => 24,
-            Role::IndicatorNormal => 25,
-            Role::IndicatorDragging => 26,
-            Role::ButtonNormal => 27,
-            Role::ButtonDefault => 28,
-            Role::ButtonSelected => 29,
-            Role::ButtonDisabled => 30,
-            Role::ButtonNormalShortcut => 31,
-            Role::ButtonDefaultShortcut => 32,
-            Role::ButtonSelectedShortcut => 33,
-            Role::ButtonShadow => 34,
-            Role::LabelNormal => 35,
-            Role::LabelLight => 36,
-            Role::LabelNormalShortcut => 37,
-            Role::LabelLightShortcut => 38,
-            Role::InputNormal => 39,
-            Role::InputSelected => 40,
-            Role::InputArrow => 41,
-            Role::ScrollerNormal => 42,
+            Role::ListNormalActive => 11,
+            Role::ListNormalInactive => 12,
+            Role::ListFocused => 13,
+            Role::ListSelected => 14,
+            Role::ListDivider => 15,
+            Role::Error => 16,
+            Role::Warning => 17,
+            Role::Info => 18,
+            Role::Success => 19,
+            Role::StaticText => 20,
+            Role::ClusterNormal => 21,
+            Role::ClusterSelected => 22,
+            Role::ClusterNormalShortcut => 23,
+            Role::ClusterSelectedShortcut => 24,
+            Role::ClusterDisabled => 25,
+            Role::IndicatorNormal => 26,
+            Role::IndicatorDragging => 27,
+            Role::ButtonNormal => 28,
+            Role::ButtonDefault => 29,
+            Role::ButtonSelected => 30,
+            Role::ButtonDisabled => 31,
+            Role::ButtonNormalShortcut => 32,
+            Role::ButtonDefaultShortcut => 33,
+            Role::ButtonSelectedShortcut => 34,
+            Role::ButtonShadow => 35,
+            Role::LabelNormal => 36,
+            Role::LabelLight => 37,
+            Role::LabelNormalShortcut => 38,
+            Role::LabelLightShortcut => 39,
+            Role::InputNormal => 40,
+            Role::InputSelected => 41,
+            Role::InputArrow => 42,
+            Role::ScrollerNormal => 43,
         }
     }
 }
@@ -429,11 +435,15 @@ impl Theme {
         set(&mut styles, Role::Disabled, 0x8, 0x1); // darkgray on blue
         set(&mut styles, Role::Pressed, 0xF, 0x2); // white on green
 
-        // List matrix.
-        set(&mut styles, Role::ListNormal, 0x7, 0x1); // lightgray on blue
-        set(&mut styles, Role::ListFocused, 0xF, 0x1); // white on blue
-        set(&mut styles, Role::ListSelected, 0x0, 0x3); // black on cyan
-        set(&mut styles, Role::ListSelectedFocused, 0xF, 0x2); // white on green
+        // List matrix (cpListViewer idx 1..5). Provisional colors — the C++
+        // cpListViewer maps into the owning window/dialog's gray scheme; the
+        // window-scheme remap lands with TListBox (row 48) / the window palettes.
+        // TODO(window-scheme remap): derive these from the owning view's scheme.
+        set(&mut styles, Role::ListNormalActive, 0x7, 0x1); // idx 1: lightgray on blue
+        set(&mut styles, Role::ListNormalInactive, 0x8, 0x1); // idx 2: darkgray on blue
+        set(&mut styles, Role::ListFocused, 0xF, 0x1); // idx 3: white on blue
+        set(&mut styles, Role::ListSelected, 0x0, 0x3); // idx 4: black on cyan
+        set(&mut styles, Role::ListDivider, 0x7, 0x1); // idx 5: lightgray on blue
 
         // Feedback family.
         set(&mut styles, Role::Error, 0xF, 0x4); // white on red
@@ -544,10 +554,11 @@ mod tests {
         Role::Focused,
         Role::Disabled,
         Role::Pressed,
-        Role::ListNormal,
+        Role::ListNormalActive,
+        Role::ListNormalInactive,
         Role::ListFocused,
         Role::ListSelected,
-        Role::ListSelectedFocused,
+        Role::ListDivider,
         Role::Error,
         Role::Warning,
         Role::Info,

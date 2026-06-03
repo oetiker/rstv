@@ -757,6 +757,20 @@ pub trait View {
         false
     }
 
+    /// The `TListViewer` read-sync broker hook (row 28). Defaulted no-op;
+    /// concrete list widgets override to delegate to
+    /// [`list_viewer::apply_scroll`](crate::widgets::list_viewer::apply_scroll).
+    /// The pump passes the freshly-read h/v scrollbar values (`None` if the bar
+    /// is absent), resolved through [`View::value`].
+    ///
+    /// This parallels the row-27 [`Deferred::SyncScrollerDelta`](crate::view::Deferred::SyncScrollerDelta)
+    /// read-sync, but goes through a trait method instead of a hard downcast to a
+    /// concrete struct: `TListViewer` is a *trait* (subclasses reuse its `draw`
+    /// and override `get_text`/`is_selected`), so a `dyn View → dyn ListViewer`
+    /// downcast is impossible. The two read-sync mechanisms could later unify;
+    /// out of scope for row 28.
+    fn apply_list_scroll(&mut self, _h: Option<i32>, _v: Option<i32>, _ctx: &mut Context) {}
+
     /// Downcast hook for the rare owner→child push that needs the concrete type
     /// (e.g. `TWindow::zoom` pushing `set_zoomed` to its `TFrame`). Base returns
     /// `None`; only views that must be reached concretely override it. (`Any`

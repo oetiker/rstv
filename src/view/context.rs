@@ -132,6 +132,36 @@ pub enum Deferred {
     /// no propagating `StateFlag::Visible` (D8 dropped `sfVisible`'s side effects),
     /// so visibility is set directly on the [`ViewState`](crate::view::ViewState).
     SetVisible(ViewId, bool),
+
+    // -- row 28: the TListViewer cross-view scrollbar read-sync (D3) ----------
+    /// **Read direction for `TListViewer`** (the `cmScrollBarChanged` handler).
+    /// Resolve the `h`/`v` scrollbars, read each `value`
+    /// (via [`View::value`](crate::view::View::value) →
+    /// [`FieldValue::Int`](crate::data::FieldValue::Int)), then call
+    /// [`View::apply_list_scroll`](crate::view::View::apply_list_scroll) on the
+    /// `list` view (the trait method — NOT a downcast: `ListViewer` is a trait, so
+    /// `dyn View → dyn ListViewer` cannot be downcast, unlike the row-27 scroller).
+    ///
+    /// **Termination (the centerpiece property):** unlike
+    /// [`SyncScrollerDelta`](Self::SyncScrollerDelta), this read-sync **writes
+    /// back** — `apply_list_scroll`'s `focus_item_num` calls `focusItem`, which
+    /// requests a `setValue(focused)` on the v-bar (another
+    /// [`ScrollBarSetParams`](Self::ScrollBarSetParams)). That terminates because
+    /// [`ScrollBar::set_params`](crate::widgets::ScrollBar::set_params) is
+    /// **change-guarded**: it re-broadcasts `cmScrollBarChanged` only on an actual
+    /// value change, so writing back the already-current value is a silent no-op
+    /// (steady state: quiescent; after a clamp: one extra round then quiescent).
+    ///
+    /// Touches the **view-tree** family (same as the scroller broker ops), so the
+    /// insertion-order drain stays order-equivalent.
+    SyncListViewer {
+        /// The list view whose `focused`/`top_item`/`indent` to update.
+        list: ViewId,
+        /// The horizontal scrollbar to read `value` from (`None` = no h bar).
+        h: Option<ViewId>,
+        /// The vertical scrollbar to read `value` from (`None` = no v bar).
+        v: Option<ViewId>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -563,6 +593,16 @@ impl<'a> Context<'a> {
     /// sibling scrollbar (which the scroller, a leaf, cannot reach inline, D3).
     pub fn request_set_visible(&mut self, id: ViewId, visible: bool) {
         self.deferred.push(Deferred::SetVisible(id, visible));
+    }
+
+    /// Request the `TListViewer` `list` re-read its scrollbars' values and update
+    /// its `focused`/`top_item`/`indent` — **deferred**
+    /// ([`Deferred::SyncListViewer`]). The list (a leaf, D3) cannot read its
+    /// window-frame sibling bars itself; the pump brokers the read and calls back
+    /// through [`View::apply_list_scroll`](crate::view::View::apply_list_scroll).
+    /// `h`/`v` are the bar [`ViewId`]s (`None` = no bar).
+    pub fn request_sync_list_viewer(&mut self, list: ViewId, h: Option<ViewId>, v: Option<ViewId>) {
+        self.deferred.push(Deferred::SyncListViewer { list, h, v });
     }
 
     /// The clock value sampled for this dispatch pass.

@@ -1,0 +1,21 @@
+---
+source: src/widgets/list_viewer.rs
+expression: "render(&mut l, 12, 4)"
+---
+size: 12x4
+cursor: hidden
+text:
+| item0      |
+| item1      |
+| item2      |
+|            |
+attr:
+|aaaaaaaaaaaa|
+|bbbbbbbbbbbb|
+|cccccccccccc|
+|aaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(7) bg=BIOS(1)
+  b fg=BIOS(15) bg=BIOS(1)
+  c fg=BIOS(0) bg=BIOS(3)
