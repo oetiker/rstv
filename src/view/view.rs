@@ -794,6 +794,24 @@ pub trait View {
     /// whole-tree redraw (D8) the next pump repaints unconditionally.
     fn update_menu_commands(&mut self, _cs: &CommandSet) {}
 
+    /// The `TMenuView` highlight write-back hook (rows 50–52). Defaulted no-op;
+    /// menu views ([`MenuBar`](crate::menu::MenuBar) /
+    /// [`MenuBox`](crate::menu::MenuBox)) override to set their
+    /// [`MenuViewState::current`](crate::menu::MenuViewState) — the **write-only
+    /// display cache** the `draw` reads to pick the selected colour.
+    ///
+    /// While a menu session is active the
+    /// [`MenuSession`](crate::menu::MenuSession) capture handler owns the
+    /// `execute()` state machine (Clean Architecture A); the boxes are never
+    /// focused and run no event logic. When the session changes a level's
+    /// `current` it requests
+    /// [`Deferred::SetMenuCurrent`](crate::view::Deferred::SetMenuCurrent) by the
+    /// box/bar id, and the pump calls back here at apply time. A trait method (not
+    /// a `MenuBar`/`MenuBox` downcast) keeps the broker uniform across the two
+    /// concrete menu views, exactly like
+    /// [`update_menu_commands`](View::update_menu_commands).
+    fn set_menu_current(&mut self, _current: Option<usize>) {}
+
     /// Downcast hook for the rare owner→child push that needs the concrete type
     /// (e.g. `TWindow::zoom` pushing `set_zoomed` to its `TFrame`). Base returns
     /// `None`; only views that must be reached concretely override it. (`Any`

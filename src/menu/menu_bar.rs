@@ -151,6 +151,28 @@ impl View for MenuBar {
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         menu_view::handle_event(&self.mv, ev, ctx);
     }
+
+    /// Write the session-owned highlight cache (`TMenuView::current`) — the
+    /// pump's [`Deferred::SetMenuCurrent`](crate::view::Deferred::SetMenuCurrent)
+    /// broker target. The bar is never focused while a menu session is active
+    /// (Clean Architecture A); this is the only path that moves its highlight.
+    fn set_menu_current(&mut self, current: Option<usize>) {
+        self.mv.current = current;
+    }
+
+    /// Expose the concrete bar so the pump / tests can introspect its
+    /// [`MenuViewState`] (the highlight cache the session drives).
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        Some(self)
+    }
+}
+
+impl MenuBar {
+    /// Read the bar's current highlight index (test/inspection hook for the
+    /// session-driven highlight cache).
+    pub fn current(&self) -> Option<usize> {
+        self.mv.current
+    }
 }
 
 /// The display label of a named menu item. Never called on a [`Separator`], which

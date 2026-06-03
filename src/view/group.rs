@@ -190,6 +190,43 @@ impl Group {
         id
     }
 
+    /// Insert `view` on top of the group stamping a **caller-supplied** [`ViewId`]
+    /// instead of minting a fresh one — the pre-minted-id sibling of
+    /// [`insert`](Self::insert).
+    ///
+    /// The menu modal layer (rows 50–52) pre-mints each open box's [`ViewId`] from
+    /// the global counter ([`ViewId::next`]) *before* requesting the box be opened,
+    /// so the [`MenuSession`](crate::menu::MenuSession) capture handler already
+    /// knows every box id with no insert-time callback/downcast. The pump then
+    /// builds the [`MenuBox`](crate::menu::MenuBox) and inserts it here, stamping
+    /// the id the session already holds. Otherwise identical to `insert`
+    /// (centering applies; `current` is **not** touched — a menu box is never
+    /// focused, the session owns every event, Clean Architecture A).
+    ///
+    /// The caller is responsible for the id being globally unique (a `ViewId::next`
+    /// value is, by construction); reusing a live id would make `find_mut` resolve
+    /// the wrong child.
+    pub fn insert_with_id(&mut self, mut view: Box<dyn View>, id: ViewId) {
+        // ofCenterX/ofCenterY centering (insertBefore) — same as `insert`.
+        let opts = view.state().options;
+        if opts.center_x || opts.center_y {
+            let mut bounds = view.state().get_bounds();
+            let size = view.state().size;
+            if opts.center_x {
+                let ox = (self.st.size.x - size.x) / 2;
+                bounds.r#move(ox - bounds.a.x, 0);
+            }
+            if opts.center_y {
+                let oy = (self.st.size.y - size.y) / 2;
+                bounds.r#move(0, oy - bounds.a.y);
+            }
+            view.state_mut().set_bounds(bounds);
+        }
+
+        view.state_mut().id = Some(id); // stamp the caller-supplied handle
+        self.children.push(Child { id, view });
+    }
+
     /// Remove the child named by `id` (no-op if it is not a child). Ports
     /// `TGroup::remove` → `removeView`: if the removed child was `current`, the
     /// group resets `current` to another selectable child afterward.

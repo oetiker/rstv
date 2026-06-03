@@ -278,6 +278,29 @@ impl View for MenuBox {
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         menu_view::handle_event(&self.mv, ev, ctx);
     }
+
+    /// Write the session-owned highlight cache (`TMenuView::current`) — the
+    /// pump's [`Deferred::SetMenuCurrent`](crate::view::Deferred::SetMenuCurrent)
+    /// broker target. A box is never focused (Clean Architecture A); the
+    /// [`MenuSession`](crate::menu::MenuSession) drives its highlight through here.
+    fn set_menu_current(&mut self, current: Option<usize>) {
+        self.mv.current = current;
+    }
+
+    /// Expose the concrete box so the pump / tests can introspect its
+    /// [`MenuViewState`] (the highlight cache the session drives). Mirrors the
+    /// scroller/list broker downcast precedent.
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        Some(self)
+    }
+}
+
+impl MenuBox {
+    /// Read the box's current highlight index (test/inspection hook for the
+    /// session-driven highlight cache).
+    pub fn current(&self) -> Option<usize> {
+        self.mv.current
+    }
 }
 
 #[cfg(test)]

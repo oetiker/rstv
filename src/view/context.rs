@@ -182,6 +182,43 @@ pub enum Deferred {
     /// Touches the **view-tree** family (same as the scroller/list broker ops), so
     /// the insertion-order drain stays order-equivalent.
     UpdateMenu(ViewId),
+
+    // -- rows 50-52: the TMenuView modal layer (MenuSession, D3/D9) ------------
+    /// **Open a menu box** — the deferred realization of `execute()`'s submenu
+    /// open (`tmnuview.cpp:382`, `topMenu()->newSubView(r, current->subMenu)` →
+    /// `owner->execView(target)`). The [`MenuSession`](crate::menu::MenuSession)
+    /// capture handler **pre-mints** `id` from [`ViewId::next`](crate::view::ViewId)
+    /// so it already knows the box id with no insert-time callback; the pump
+    /// builds a [`MenuBox`](crate::menu::MenuBox) from `menu` over `bounds` and
+    /// [`Group::insert_with_id`](crate::view::Group::insert_with_id)s it into the
+    /// root group, stamping that id. **No focus move** — the box is never current
+    /// (Clean Architecture A; the session owns every event). `menu` is a clone of
+    /// the submenu subtree (clone-at-open is faithful — `execute()` has no
+    /// evBroadcast case, so `disabled` is frozen for the box's lifetime).
+    ///
+    /// Touches the **view-tree** family (same as `Close`/the broker ops), so the
+    /// insertion-order drain stays order-equivalent. The activation site queues
+    /// the [`PushCapture`](Self::PushCapture) of the session AND the first
+    /// `OpenMenuBox` in the same batch (no dead first event).
+    OpenMenuBox {
+        /// The pre-minted id the box will be stamped with.
+        id: ViewId,
+        /// The (cloned) submenu subtree the box presents.
+        menu: crate::menu::Menu,
+        /// The box bounds in the root group's frame.
+        bounds: Rect,
+    },
+    /// **Set a menu view's highlight cache** (`TMenuView::current` ← index). The
+    /// pump resolves `id` and calls
+    /// [`View::set_menu_current`](crate::view::View::set_menu_current) (a trait
+    /// method, mirroring the `update_menu_commands` broker — no downcast). This is
+    /// the write-only display cache the bar/box `draw` reads to pick the selected
+    /// colour; the [`MenuSession`](crate::menu::MenuSession) owns the authoritative
+    /// `current` and pushes it here whenever navigation moves the highlight.
+    ///
+    /// Touches the **view-tree** family, so the insertion-order drain stays
+    /// order-equivalent.
+    SetMenuCurrent(ViewId, Option<usize>),
 }
 
 // ---------------------------------------------------------------------------
@@ -633,6 +670,37 @@ impl<'a> Context<'a> {
     /// `TMenuView`'s `cmCommandSetChanged` handler requests this by its own id.
     pub fn request_update_menu(&mut self, id: ViewId) {
         self.deferred.push(Deferred::UpdateMenu(id));
+    }
+
+    /// Request a [`MenuBox`](crate::menu::MenuBox) be opened over `bounds`
+    /// presenting `menu`, stamped with the pre-minted `id` — **deferred**
+    /// ([`Deferred::OpenMenuBox`]). The [`MenuSession`](crate::menu::MenuSession)
+    /// mints `id` itself (so it knows the box id with no callback) and the pump
+    /// builds + inserts the box (no focus move). The submenu-open arm of the
+    /// flattened `execute()`.
+    pub fn request_open_menu_box(&mut self, id: ViewId, menu: crate::menu::Menu, bounds: Rect) {
+        self.deferred
+            .push(Deferred::OpenMenuBox { id, menu, bounds });
+    }
+
+    /// Request the menu view `id` set its highlight cache (`current`) to `current`
+    /// — **deferred** ([`Deferred::SetMenuCurrent`]). The pump calls back through
+    /// [`View::set_menu_current`](crate::view::View::set_menu_current). The
+    /// session owns the authoritative `current` and pushes it to the view for
+    /// `draw`.
+    pub fn request_set_menu_current(&mut self, id: ViewId, current: Option<usize>) {
+        self.deferred.push(Deferred::SetMenuCurrent(id, current));
+    }
+
+    /// Re-queue a **raw event** into the loop's event queue — the raw-event
+    /// sibling of [`post`](Self::post) (which only ever queues an
+    /// `Event::Command`). Ports `execute()`'s `putEvent(e)`
+    /// (`tmnuview.cpp:375/405`): the menu session re-posts the triggering event so
+    /// the next pump re-delivers it (e.g. an outside click that should reach the
+    /// view recovering focus, or — stage 2 — a mouse event on submenu-open). Lands
+    /// in `out_events`, drained before the backend is polled.
+    pub fn put_event(&mut self, ev: Event) {
+        self.out_events.push_back(ev);
     }
 
     /// The clock value sampled for this dispatch pass.

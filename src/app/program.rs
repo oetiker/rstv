@@ -885,6 +885,29 @@ impl Program {
                                         v.update_menu_commands(command_set);
                                     }
                                 }
+                                // -- rows 50-52: the TMenuView modal layer ------
+                                //
+                                // OpenMenuBox: build a MenuBox from the (cloned)
+                                // submenu over `bounds` and insert it into the
+                                // ROOT group with the session's pre-minted id (no
+                                // focus move — a box is never current, Clean
+                                // Architecture A). `bounds` is already the
+                                // box-sized rect (menu_box_rect ran at the session;
+                                // MenuBox::new re-clamps inside its own bounds, a
+                                // no-op for an already-fitted rect since b == a+w/h).
+                                Deferred::OpenMenuBox { id, menu, bounds } => {
+                                    use crate::menu::MenuBox;
+                                    group.insert_with_id(Box::new(MenuBox::new(bounds, menu)), id);
+                                }
+                                // SetMenuCurrent: write the session-owned highlight
+                                // cache into the bar/box view for `draw` (the
+                                // set_menu_current trait hook — no downcast, like
+                                // update_menu_commands).
+                                Deferred::SetMenuCurrent(id, current) => {
+                                    if let Some(v) = group.find_mut(id) {
+                                        v.set_menu_current(current);
+                                    }
+                                }
                             }
                         }
                     }
@@ -3102,5 +3125,474 @@ mod tests {
                 .any(|e| matches!(e, Event::Command(c) if *c == cmd)),
             "a regrayed-disabled item's accelerator posts nothing (cached-disabled filter)"
         );
+    }
+
+    // -- rows 50-52: the TMenuView modal layer (MenuSession), end-to-end -------
+
+    use crate::command::Command as Cmd;
+    use crate::menu::{Menu, MenuBar, MenuBox, alt};
+
+    /// The canonical test bar: File ▸ {Open(cmOpen, accel F3), More ▸
+    /// {Refresh(cmRefresh)}}, Edit ▸ {Cut(cmCut)}. Open is File's default
+    /// (index 0); More is index 1. Open carries an F3 accelerator (`keyCode`) so
+    /// the hotKey-while-open path (`topMenu()->hotKey`) is reachable.
+    fn modal_menu() -> Menu {
+        Menu::builder()
+            .submenu("~F~ile", alt('f'), |m| {
+                m.command_key("~O~pen", Cmd::OPEN, KeyEvent::from(Key::F(3)), "F3")
+                    .submenu("~M~ore", alt('m'), |s| {
+                        s.command("~R~efresh", Cmd::custom("test.refresh"))
+                    })
+            })
+            .submenu("~E~dit", alt('e'), |m| m.command("~C~ut", Cmd::CUT))
+            .build()
+    }
+
+    /// A program with a desktop AND a real `MenuBar` inserted into the root group.
+    /// Returns the program, the bar id, and the child count *before* any menu box
+    /// is opened (the baseline a closed session must return to).
+    fn program_with_menu_bar(w: u16, h: u16) -> (Program, crate::view::ViewId, usize) {
+        let (mut program, _handle, _clock) = program_with_desktop(w, h);
+        let bar_id = program.group_mut().insert(Box::new(MenuBar::new(
+            Rect::new(0, 0, w as i32, 1),
+            modal_menu(),
+        )));
+        program.out_events.clear();
+        let baseline = program.group_mut().len();
+        (program, bar_id, baseline)
+    }
+
+    /// The topmost `MenuBox` child's highlight `current`, or `None` if no box is
+    /// open. The session inserts boxes on top, so the *last* box child is the
+    /// active level.
+    fn top_box_current(program: &mut Program) -> Option<Option<usize>> {
+        let n = program.group_mut().len();
+        for idx in (0..n).rev() {
+            let st = program.group_mut().child_state_mut(idx);
+            let id = st.id();
+            if let Some(id) = id
+                && let Some(b) = program
+                    .group_mut()
+                    .find_mut(id)
+                    .and_then(|v| v.as_any_mut())
+                    .and_then(|a| a.downcast_mut::<MenuBox>())
+            {
+                return Some(b.current());
+            }
+        }
+        None
+    }
+
+    /// The bar's highlight `current`.
+    fn bar_current(program: &mut Program, bar_id: crate::view::ViewId) -> Option<usize> {
+        program
+            .group_mut()
+            .find_mut(bar_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<MenuBar>())
+            .and_then(|b| b.current())
+    }
+
+    /// Drive `cmMenu` then `kbDown` to OPEN File's dropdown (cmMenu alone only
+    /// highlights — Blocker 1). After: one box open, File box highlighting Open.
+    fn open_file_box(program: &mut Program) {
+        program.out_events.push_back(Event::Command(Cmd::MENU));
+        program.pump_once(); // highlight File, NO box
+        program.out_events.push_back(key(Key::Down));
+        program.pump_once(); // bar kbDown → autoSelect → open File box
+    }
+
+    /// cmMenu (F10) highlights the default title but opens NO dropdown, and leaves
+    /// the session armed (`tmnuview.cpp:193,343-350,368` — the re-posted cmMenu
+    /// hits the `evCommand cmMenu` arm, autoSelect stays False, the open-gate is
+    /// false). Then a kbDown opens File's box (proving the session is live).
+    ///
+    /// BITE: restore the old "open the box on cmMenu" behavior (gate `open_submenu`
+    /// on `initial` not `open_index`) → after the first pump `group.len()` is
+    /// `baseline + 1`, failing the "no box" assert.
+    #[test]
+    fn f10_highlights_default_without_opening_box() {
+        let (mut program, bar_id, baseline) = program_with_menu_bar(40, 12);
+
+        program.out_events.push_back(Event::Command(Cmd::MENU));
+        program.pump_once();
+
+        assert_eq!(
+            program.group_mut().len(),
+            baseline,
+            "F10 opens NO dropdown (only highlights)"
+        );
+        assert_eq!(
+            program.capture_len(),
+            1,
+            "the MenuSession is armed on the capture stack"
+        );
+        assert_eq!(
+            bar_current(&mut program, bar_id),
+            Some(0),
+            "F10 highlights the default title (File)"
+        );
+        assert!(
+            !program
+                .out_events
+                .iter()
+                .any(|e| matches!(e, Event::Command(_))),
+            "F10 posts no command"
+        );
+
+        // A subsequent kbDown opens File's box — proves the session is live.
+        program.out_events.push_back(key(Key::Down));
+        program.pump_once();
+        assert_eq!(
+            program.group_mut().len(),
+            baseline + 1,
+            "kbDown after F10 opens File's dropdown"
+        );
+        assert_eq!(
+            top_box_current(&mut program),
+            Some(Some(0)),
+            "File box highlights its default (Open)"
+        );
+    }
+
+    /// kbDown moves the open box's highlight (Open idx 0 → More idx 1).
+    ///
+    /// BITE: a `nextItem` that does not advance (or wraps wrong) leaves `current`
+    /// at 0. Asserting exactly 1 pins the move.
+    #[test]
+    fn arrow_down_moves_box_highlight() {
+        let (mut program, _bar_id, _baseline) = program_with_menu_bar(40, 12);
+        open_file_box(&mut program);
+        assert_eq!(
+            top_box_current(&mut program),
+            Some(Some(0)),
+            "File box starts on Open"
+        );
+
+        program.out_events.push_back(key(Key::Down));
+        program.pump_once();
+        assert_eq!(
+            top_box_current(&mut program),
+            Some(Some(1)),
+            "kbDown moved File box highlight Open(0) → More(1)"
+        );
+    }
+
+    /// kbEnter on a submenu item (More) opens a NESTED box (the submenu recursion).
+    /// After: two boxes open, the nested box highlighting its default (Refresh).
+    ///
+    /// BITE: if submenu-open did not push a level / queue OpenMenuBox, the group
+    /// would not gain a second box.
+    #[test]
+    fn enter_on_submenu_item_opens_nested_box() {
+        let (mut program, _bar_id, baseline) = program_with_menu_bar(40, 12);
+        open_file_box(&mut program); // File box (baseline + 1), on Open
+        program.out_events.push_back(key(Key::Down));
+        program.pump_once(); // highlight More (idx 1)
+        assert_eq!(
+            top_box_current(&mut program),
+            Some(Some(1)),
+            "More highlighted"
+        );
+        assert_eq!(program.group_mut().len(), baseline + 1, "still one box");
+
+        program.out_events.push_back(key(Key::Enter));
+        program.pump_once(); // Enter on More → open nested box
+
+        assert_eq!(
+            program.group_mut().len(),
+            baseline + 2,
+            "Enter on the More submenu opened a nested box"
+        );
+        assert_eq!(
+            top_box_current(&mut program),
+            Some(Some(0)),
+            "nested box highlights its default (Refresh)"
+        );
+    }
+
+    /// kbEnter on a command item posts that command AND closes ALL boxes (group
+    /// back to baseline) — the command-select path.
+    ///
+    /// BITE: if the command-select arm did not `end_session_with`, the boxes would
+    /// stay open (len > baseline) and no command would post.
+    #[test]
+    fn enter_on_command_posts_and_closes() {
+        let (mut program, _bar_id, baseline) = program_with_menu_bar(40, 12);
+        open_file_box(&mut program); // File box, highlight Open (idx 0)
+        assert_eq!(
+            top_box_current(&mut program),
+            Some(Some(0)),
+            "Open highlighted"
+        );
+
+        program.out_events.push_back(key(Key::Enter));
+        program.pump_once(); // Enter on Open → post cmOpen + close
+
+        assert_eq!(
+            program.group_mut().len(),
+            baseline,
+            "selecting a command closed all menu boxes (back to baseline)"
+        );
+        assert_eq!(program.capture_len(), 0, "the session popped itself");
+        assert!(
+            program
+                .out_events
+                .iter()
+                .any(|e| matches!(e, Event::Command(c) if *c == Cmd::OPEN)),
+            "Enter on Open posted cmOpen"
+        );
+    }
+
+    /// ONE kbEsc from a FIRST-level dropdown closes the WHOLE menu (box + session)
+    /// without posting — `tmnuview.cpp:308-312`: at a 1st-level box `clearEvent`
+    /// does NOT run (parent is the bar, size.y == 1), so the Esc is re-applied up
+    /// to the bar, whose Esc (parentMenu == 0) clears + returns → menu closes.
+    ///
+    /// BITE: drop the not-cleared re-apply (treat the box Esc as cleared) → after
+    /// one Esc the bar level survives (capture_len == 1, no bar-highlight clear),
+    /// failing the asserts. Equivalently, restore the old two-Esc test.
+    #[test]
+    fn one_esc_from_first_level_closes_whole_menu() {
+        let (mut program, bar_id, baseline) = program_with_menu_bar(40, 12);
+        open_file_box(&mut program); // File box open
+        assert_eq!(program.group_mut().len(), baseline + 1, "box open");
+
+        program.out_events.push_back(key(Key::Esc));
+        program.pump_once(); // ONE Esc → box closes AND session ends
+
+        assert_eq!(
+            program.group_mut().len(),
+            baseline,
+            "one Esc closed the dropdown (back to baseline)"
+        );
+        assert_eq!(program.capture_len(), 0, "one Esc popped the whole session");
+        assert_eq!(
+            bar_current(&mut program, bar_id),
+            None,
+            "bar highlight cleared"
+        );
+        assert!(
+            !program
+                .out_events
+                .iter()
+                .any(|e| matches!(e, Event::Command(_))),
+            "Esc posts no command"
+        );
+    }
+
+    /// ONE kbEsc from a SECOND-level box closes ONLY that inner box; the session
+    /// and the first-level box stay open — the C++ `clearEvent` asymmetry
+    /// (`tmnuview.cpp:310`: a 2nd-level box's parent is a box, size.y != 1, so the
+    /// Esc IS cleared and does not propagate). This pins the asymmetry against
+    /// `one_esc_from_first_level_closes_whole_menu`.
+    ///
+    /// BITE: drop the `esc_clear_event` guard (always re-apply) → the inner Esc
+    /// would unwind to the bar and close everything (len == baseline,
+    /// capture_len == 0), failing "session still open".
+    #[test]
+    fn one_esc_from_second_level_closes_only_inner_box() {
+        let (mut program, _bar_id, baseline) = program_with_menu_bar(40, 12);
+        open_file_box(&mut program); // File box (baseline + 1), on Open
+        program.out_events.push_back(key(Key::Down));
+        program.pump_once(); // highlight More
+        program.out_events.push_back(key(Key::Enter));
+        program.pump_once(); // open the More box (baseline + 2)
+        assert_eq!(program.group_mut().len(), baseline + 2, "two boxes open");
+
+        program.out_events.push_back(key(Key::Esc));
+        program.pump_once(); // Esc at the 2nd-level box → close ONLY it
+
+        assert_eq!(
+            program.group_mut().len(),
+            baseline + 1,
+            "Esc closed only the inner box; the File box stays open"
+        );
+        assert_eq!(
+            program.capture_len(),
+            1,
+            "the session is still active (not popped)"
+        );
+        assert_eq!(
+            top_box_current(&mut program),
+            Some(Some(1)),
+            "the now-top box is File, still highlighting More"
+        );
+    }
+
+    /// kbRight from an open first-level dropdown unwinds to the bar, walks to the
+    /// adjacent title, and RE-OPENS its dropdown — `tmnuview.cpp:287-293` (box
+    /// returns, not cleared) + the persisted bar `autoSelect` re-opening the
+    /// neighbour (Blocker 3). F10 → kbDown (File box) → kbRight → Edit box.
+    ///
+    /// BITE: make kbRight on a box "just close the box" (cleared, no re-apply) →
+    /// after kbRight no box is open and the bar did not advance, failing the
+    /// "Edit box open" + "bar == Edit" asserts. Equivalently, drop the per-level
+    /// `auto_select` (the bar would walk but NOT re-open).
+    #[test]
+    fn right_from_dropdown_walks_bar_and_reopens_neighbour() {
+        let (mut program, bar_id, baseline) = program_with_menu_bar(40, 12);
+        open_file_box(&mut program); // File box open, bar on File (0)
+        assert_eq!(bar_current(&mut program, bar_id), Some(0), "bar on File");
+
+        program.out_events.push_back(key(Key::Right));
+        program.pump_once(); // box returns → bar trackKey → re-open Edit box
+
+        assert_eq!(
+            bar_current(&mut program, bar_id),
+            Some(1),
+            "kbRight walked the bar File → Edit"
+        );
+        assert_eq!(
+            program.group_mut().len(),
+            baseline + 1,
+            "exactly one box open (File closed, Edit opened)"
+        );
+        assert_eq!(
+            top_box_current(&mut program),
+            Some(Some(0)),
+            "the open box is Edit's, highlighting its default (Cut)"
+        );
+    }
+
+    /// F10 then kbRight (NO dropdown yet, bar `autoSelect == False`) moves the bar
+    /// title WITHOUT opening a box — the open-gate needs `autoSelect`, which cmMenu
+    /// leaves False (Blocker 1/3 interplay).
+    ///
+    /// BITE: if cmMenu set autoSelect True (or activation opened a box), kbRight
+    /// would open Edit's box → `group.len()` would be `baseline + 1`, failing.
+    #[test]
+    fn f10_then_right_moves_title_without_opening_box() {
+        let (mut program, bar_id, baseline) = program_with_menu_bar(40, 12);
+        program.out_events.push_back(Event::Command(Cmd::MENU));
+        program.pump_once(); // F10: highlight File, no box, autoSelect False
+
+        program.out_events.push_back(key(Key::Right));
+        program.pump_once();
+
+        assert_eq!(
+            bar_current(&mut program, bar_id),
+            Some(1),
+            "kbRight walked the bar File → Edit"
+        );
+        assert_eq!(
+            program.group_mut().len(),
+            baseline,
+            "no box opened (autoSelect False after F10)"
+        );
+    }
+
+    /// Alt-shortcut activation: Alt+E opens the session at Edit (idx 1), with Edit's
+    /// box open highlighting its default (Cut). Proves `findAltShortcut` activation
+    /// opens the matched title's box directly (autoSelect True).
+    ///
+    /// BITE: if alt-shortcut activation opened at the menu default (File) instead
+    /// of the matched item, the bar would highlight 0, not 1.
+    #[test]
+    fn alt_shortcut_opens_at_matched_item() {
+        let (mut program, bar_id, baseline) = program_with_menu_bar(40, 12);
+
+        program.out_events.push_back(alt_digit_letter('e'));
+        program.pump_once();
+
+        assert_eq!(
+            bar_current(&mut program, bar_id),
+            Some(1),
+            "Alt+E highlights Edit (idx 1)"
+        );
+        assert_eq!(
+            program.group_mut().len(),
+            baseline + 1,
+            "Alt+E opened the Edit box"
+        );
+        assert_eq!(
+            top_box_current(&mut program),
+            Some(Some(0)),
+            "Edit box highlights its default (Cut)"
+        );
+    }
+
+    /// A hotKey accelerator (F3 = Open) pressed while a dropdown is OPEN closes the
+    /// WHOLE menu and posts the command at ANY depth — `tmnuview.cpp:392`: a
+    /// `result` propagates up through every nested execView. Open File's box, then
+    /// press F3; cmOpen must post AND the session must end.
+    ///
+    /// BITE: handle the hotKey result inside the per-level Return-pop (cleared) →
+    /// one box pops, Consumed returns, the command is dropped and the session stays
+    /// (capture_len == 1, no cmOpen). This is the QUALITY blocker-1 regression.
+    #[test]
+    fn hotkey_accelerator_closes_whole_menu_from_open_box() {
+        let (mut program, _bar_id, baseline) = program_with_menu_bar(40, 12);
+        open_file_box(&mut program); // File box open (baseline + 1)
+        assert_eq!(program.group_mut().len(), baseline + 1, "box open");
+
+        program
+            .out_events
+            .push_back(Event::KeyDown(KeyEvent::from(Key::F(3))));
+        program.pump_once();
+
+        assert_eq!(
+            program.capture_len(),
+            0,
+            "the hotKey result ended the whole session"
+        );
+        assert_eq!(
+            program.group_mut().len(),
+            baseline,
+            "every box closed (back to baseline)"
+        );
+        assert!(
+            program
+                .out_events
+                .iter()
+                .any(|e| matches!(e, Event::Command(c) if *c == Cmd::OPEN)),
+            "F3 (Open's accelerator) posted cmOpen even from a deep box"
+        );
+    }
+
+    /// A non-cmMenu command arriving while the menu is open closes the menu AND is
+    /// re-posted (`tmnuview.cpp:403-405`: `putEvent(e)` when `e.what == evCommand`),
+    /// so it survives for the view after the menu closes. Open the session, post an
+    /// arbitrary command, pump: the menu closes and the command stays in the queue.
+    ///
+    /// BITE: drop the `ctx.put_event` re-post in the non-cmMenu command arm → the
+    /// command is consumed/lost; the "survives" assert fails.
+    #[test]
+    fn foreign_command_closes_menu_and_is_reposted() {
+        let (mut program, _bar_id, baseline) = program_with_menu_bar(40, 12);
+        open_file_box(&mut program); // File box open
+        assert_eq!(program.group_mut().len(), baseline + 1, "box open");
+
+        // cmCut is in the default command set, so it is not dropped at the boundary.
+        program.out_events.push_back(Event::Command(Cmd::CUT));
+        program.pump_once();
+
+        assert_eq!(
+            program.capture_len(),
+            0,
+            "a foreign command closed the whole menu"
+        );
+        assert_eq!(
+            program.group_mut().len(),
+            baseline,
+            "every box closed (back to baseline)"
+        );
+        assert!(
+            program
+                .out_events
+                .iter()
+                .any(|e| matches!(e, Event::Command(c) if *c == Cmd::CUT)),
+            "the foreign command was re-posted (put_event) and survived"
+        );
+    }
+
+    fn alt_digit_letter(c: char) -> Event {
+        Event::KeyDown(KeyEvent::new(
+            Key::Char(c),
+            KeyModifiers {
+                alt: true,
+                ..Default::default()
+            },
+        ))
     }
 }

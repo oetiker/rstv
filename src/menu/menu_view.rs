@@ -284,13 +284,35 @@ pub fn handle_event(mv: &MenuViewState, ev: &mut Event, ctx: &mut Context) {
                 ctx.request_update_menu(id);
             }
         }
-        // C++ evKeyDown. The full C++ branch first tries findAltShortcut →
-        // do_a_select (open the menu at the matched item) and only then falls
-        // back to the hotKey accelerator post. Row 49 ports ONLY the accelerator
-        // post; the alt-shortcut menu-open is an ACTIVATION path (needs the D9
-        // OpenModal + draw) → rows 50–52. So we breadcrumb the precedence and
-        // handle only the keyCode-accelerator here.
+        // C++ evKeyDown (`TMenuView::handleEvent`, tmnuview.cpp:526). The C++ order
+        // is: findAltShortcut → do_a_select (open the menu at the matched item)
+        // FIRST, then fall back to the hotKey accelerator post.
+        //
+        // ACTIVATION (rows 50–52, Step-2 stage 1 — keyboard). Only the **bar**
+        // (`size.y == 1`) activates: a box exists only inside an active session,
+        // which swallows its events on the capture stack, so a box never reaches
+        // here live. The bar runs during group-routed preprocess dispatch
+        // (`ofPreProcess`), so `ctx.owner_size()` is the root group size (C++
+        // `owner->size`) and `mv.state` carries the bar's bounds — what
+        // [`menu_session::activate`] needs.
         Event::KeyDown(k) => {
+            // 1. Bar alt-shortcut → open the session at the matched item.
+            if mv.state.size.y == 1
+                && let Some(bar_id) = mv.state.id()
+                && let Some(idx) = find_alt_shortcut_index(&mv.menu, k)
+            {
+                crate::menu::menu_session::activate(
+                    bar_id,
+                    mv.menu.clone(),
+                    mv.state.get_bounds(),
+                    ctx.owner_size(),
+                    Some(idx),
+                    ctx,
+                );
+                ev.clear();
+                return;
+            }
+            // 2. Otherwise the hotKey accelerator post (row-49 passive path).
             if let Some(cmd) = hot_key(&mv.menu, *k) {
                 // C++ posts evCommand with the matched command and clears the
                 // event. The C++ `commandEnabled(p->command)` re-check is NOT
@@ -306,13 +328,68 @@ pub fn handle_event(mv: &MenuViewState, ev: &mut Event, ctx: &mut Context) {
                 ev.clear();
             }
         }
-        // ACTIVATION branches — deferred to rows 50–52 (need the D9 OpenModal +
-        // draw path). Breadcrumb only: leave the event un-cleared and un-acted.
-        // - evMouseDown            → do_a_select (open the menu under the click)
-        // - evCommand cmMenu       → do_a_select (open from the cmMenu accelerator)
-        // - evKeyDown alt-shortcut → findAltShortcut → do_a_select (above)
+        // evCommand cmMenu (kbF10 → cmMenu): the bar opens the session at the menu
+        // default (`do_a_select`). Bar only (`size.y == 1`).
+        Event::Command(Command::MENU) if mv.state.size.y == 1 => {
+            if let Some(bar_id) = mv.state.id() {
+                crate::menu::menu_session::activate(
+                    bar_id,
+                    mv.menu.clone(),
+                    mv.state.get_bounds(),
+                    ctx.owner_size(),
+                    None, // cmMenu → menu->deflt
+                    ctx,
+                );
+                ev.clear();
+            }
+        }
+        // STAGE-2 breadcrumb: evMouseDown activation (`do_a_select` — open the menu
+        // under the click) is mouse; the session's mouse arms land then. Other
+        // un-handled events are inert (a box's events are owned by the session).
         _ => {}
     }
+}
+
+/// The shared "first **enabled, named** item whose hotkey letter matches `ke`"
+/// walk — the common body of `findItem` (`tmnuview.cpp:420`, plain-letter,
+/// `alt == false`) and the alt-char branch of `findAltShortcut`
+/// (`tmnuview.cpp:436/441`, `alt == true`). Skips separators (C++ `name == 0`)
+/// and disabled items (C++ `!p->disabled`), case-insensitive on the letter after
+/// the first `~` (C++ `equalsIgnoreCase(ch, hotKeyStr(p->name))`).
+///
+/// `alt == true` matches an `Alt`-held key ([`is_alt_hotkey`](crate::event::is_alt_hotkey));
+/// `alt == false` a plain unmodified press ([`is_plain_hotkey`](crate::event::is_plain_hotkey)).
+/// Both predicates self-gate on the modifier, so no extra `alt` check is needed.
+pub(crate) fn matching_item(menu: &Menu, ke: &KeyEvent, alt: bool) -> Option<usize> {
+    for (i, item) in menu.items.iter().enumerate() {
+        let (name, disabled) = match item {
+            MenuItem::Separator => continue,
+            MenuItem::Command { name, disabled, .. } | MenuItem::SubMenu { name, disabled, .. } => {
+                (name.as_str(), *disabled)
+            }
+        };
+        if disabled {
+            continue;
+        }
+        if let Some(letter) = crate::event::hot_key(name) {
+            let hit = if alt {
+                crate::event::is_alt_hotkey(ke, letter)
+            } else {
+                crate::event::is_plain_hotkey(ke, letter)
+            };
+            if hit {
+                return Some(i);
+            }
+        }
+    }
+    None
+}
+
+/// `TMenuView::findAltShortcut` (`tmnuview.cpp:436`), keyboard activation subset:
+/// the index of the first **enabled, named** top-level item whose hotkey letter
+/// matches the `Alt`-held `key`. Used by the bar's activation arm.
+fn find_alt_shortcut_index(menu: &Menu, key: &KeyEvent) -> Option<usize> {
+    matching_item(menu, key, true)
 }
 
 #[cfg(test)]
