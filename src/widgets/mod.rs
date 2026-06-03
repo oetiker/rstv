@@ -8,11 +8,13 @@
 //! [`DrawCtx`]: crate::view::DrawCtx
 //! [`Context`]: crate::view::Context
 
+mod button;
 mod cluster;
 mod indicator;
 mod scrollbar;
 mod static_text;
 
+pub use button::{Button, ButtonFlags};
 pub use cluster::{CheckBoxes, Cluster, ClusterKind, MultiCheckBoxes, RadioButtons};
 pub use indicator::Indicator;
 pub use scrollbar::ScrollBar;

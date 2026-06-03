@@ -1,0 +1,16 @@
+---
+source: src/widgets/button.rs
+expression: render(&mut b)
+---
+size: 10x2
+cursor: hidden
+text:
+|    OK   ▄|
+|  ▀▀▀▀▀▀▀▀|
+attr:
+|abbbbbbbba|
+|aaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(8) bg=BIOS(0)
+  b fg=BIOS(11) bg=BIOS(2)
