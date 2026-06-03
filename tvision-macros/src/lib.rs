@@ -87,7 +87,8 @@ fn expand(args: DelegateArgs, mut item_impl: ItemImpl) -> syn::Result<TokenStrea
     let krate = tvision_path();
     let field = &args.field;
 
-    // SPIKE: only `View::number` is known. (More methods land in a later task.)
+    // SPIKE: only `View::cursor_request` is known (exercises `#krate::Point` resolution).
+    // (More methods land in a later task.)
     if trait_ident != "View" {
         return Err(syn::Error::new(
             Span::call_site(),
@@ -95,8 +96,12 @@ fn expand(args: DelegateArgs, mut item_impl: ItemImpl) -> syn::Result<TokenStrea
         ));
     }
     let candidates: Vec<(&str, TokenStream2)> = vec![(
-        "number",
-        quote! { fn number(&self) -> ::core::option::Option<i16> { self.#field.number() } },
+        "cursor_request",
+        quote! {
+            fn cursor_request(&self) -> ::core::option::Option<#krate::Point> {
+                self.#field.cursor_request()
+            }
+        },
     )];
 
     for (name, tokens) in candidates {
@@ -105,6 +110,5 @@ fn expand(args: DelegateArgs, mut item_impl: ItemImpl) -> syn::Result<TokenStrea
             item_impl.items.push(f);
         }
     }
-    let _ = &krate; // used once the real spec lands
     Ok(quote! { #item_impl })
 }
