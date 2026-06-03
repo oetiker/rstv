@@ -1,3 +1,6 @@
+[workspace]
+members = ["tvision-macros"]
+
 [package]
 name = "tvision"
 version = "0.1.0"
@@ -16,6 +19,7 @@ categories = ["command-line-interface"]
 crossterm = "0.29.0"            # backend module: production terminal I/O behind the Backend trait (D11, row 19)
 unicode-segmentation = "1.13.2" # text module: grapheme clustering (D13, row 8)
 unicode-width = "0.2.2"         # text module: display column widths (D13, row 8)
+tvision-macros = { path = "tvision-macros", version = "0.1.0" }
 
 [dev-dependencies]
 insta = "1.47.2"      # snapshot tests: golden-file verification (D11, row 19)

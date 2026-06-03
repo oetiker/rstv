@@ -63,6 +63,9 @@
 //! | 34 | `TDialog` (`Dialog`, modal `exec_view`) | [`dialog`] | ✅ |
 //! | 27 | `TScroller` (`Scroller`, cross-view broker) | [`widgets`] | ✅ |
 
+// Lets proc-macro-generated `::tvision::Type` paths resolve inside this crate.
+extern crate self as tvision;
+
 pub mod app;
 pub mod backend;
 pub mod capture;
@@ -102,6 +105,7 @@ pub use help::HelpCtx;
 pub use screen::{Buffer, Cell, DrawBuffer};
 pub use theme::{Role, Theme};
 pub use timer::{Clock, ManualClock, SystemClock, TimerId, TimerQueue};
+pub use tvision_macros::delegate;
 pub use validate::Validator;
 pub use view::{
     Context, DragMode, DrawCtx, Group, GrowMode, Options, Point, Rect, SelectMode, State,
