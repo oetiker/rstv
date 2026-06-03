@@ -77,6 +77,7 @@ pub mod dialog;
 pub mod event;
 pub mod frame;
 pub mod help;
+pub mod menu;
 pub mod screen;
 pub mod text;
 pub mod theme;
@@ -102,6 +103,7 @@ pub use event::{
 };
 pub use frame::Frame;
 pub use help::HelpCtx;
+pub use menu::{Menu, MenuBuilder, MenuItem};
 pub use screen::{Buffer, Cell, DrawBuffer};
 pub use theme::{Role, Theme};
 pub use timer::{Clock, ManualClock, SystemClock, TimerId, TimerQueue};

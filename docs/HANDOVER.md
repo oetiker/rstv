@@ -1,4 +1,4 @@
-# Session handover — Row 32 `TApplication` DONE. Next (per PORT-ORDER): Phase 4 (menus 46+ / status 47,53)
+# Session handover — Row 46 `TMenu` data tree DONE (Phase 4 begun). Next (per PORT-ORDER): Row 49 `TMenuView` → 50/51/52, then status line 47/53
 
 > Living handover for the **next** rstv session. Read this, then
 > [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md) (orientation /
@@ -15,32 +15,75 @@
 
 | commit | what |
 |--------|------|
-| `c1ad789` | **TListViewer (28)** — list base (trait) + write-back broker (FOUNDATION) |
+| _(this commit)_ | **TMenu data tree (46)** — `MenuItem`/`Menu`/`MenuBuilder` (FOUNDATION) ← THIS session |
 | `fc66637` | **TListBox (48)** — first concrete `TListViewer` (MECHANICAL) |
-| `3e6645f` | **TApplication (32)** — thin D2 wrapper over `Program` (MECHANICAL) ← THIS session |
+| `3e6645f` | **TApplication (32)** — thin D2 wrapper over `Program` (MECHANICAL) |
+| `47894f0…66ab55f` | **`#[delegate]` proc-macro** — `tvision-macros` crate + workspace, then **adopted** across cluster/Window/Dialog/ParamText/Label/Desktop + the hello example (replaces `cluster_wrapper!`) |
 
-**Build state:** 494 lib + 3 integration + 2 doctests green; `cargo clippy
---all-targets -- -D warnings` and `cargo fmt --check` clean. Working tree clean
-(after the docs commit that pairs with this handover update).
-(Cargo artifacts land in `/home/oetiker/scratch/cargo-target` — set
-`CARGO_TARGET_DIR`.)
+**Build state:** 500 lib (+6 menu) + 5 integration (3 `render_pipeline` + 2
+`delegate_view`) + 2 doctests green; `cargo clippy --workspace --all-targets --
+-D warnings` and `cargo fmt --all --check` clean. **It is a Cargo workspace**
+(`tvision` + `tvision-macros`) — use `--workspace` for test/clippy/fmt. (Cargo
+artifacts land in `/home/oetiker/scratch/cargo-target` — set `CARGO_TARGET_DIR`.)
 
 **Phase 2 COMPLETE. Batch B (Phase-3 leaves) COMPLETE. Phase-1 row 32 COMPLETE.**
-**Row 32 `TApplication` DONE** this session (MECHANICAL, thin wrapper over
-`Program` — see below). Phase-4 (46+) + the remaining list/dialog leaf rows
-remain. Next incomplete in PORT-ORDER sequence: **Phase 4** (menus 46/49/50/51/52,
-status 47/53). Batch C concrete validators 58–62 are an available parallel fan-out.
+**Row 32 `TApplication` DONE** + the **`#[delegate]` macro landed and was adopted
+codebase-wide** (see the two sections below). Phase-4 (46+) + the remaining
+list/dialog leaf rows remain. Next incomplete in PORT-ORDER sequence: **Phase 4**
+(menus 46/49/50/51/52, status 47/53). Batch C concrete validators 58–62 are an
+available parallel fan-out.
 
-> **Repo note (this session):** the working checkout was parked on an unmerged
-> side branch `feat/delegate-macro` (scaffolds a `tvision-macros` proc-macro
-> crate — the deliberately-revisited row-48 delegation-macro idea). Row 32 was
-> intentionally branched from **`main`** (independent of the macro WIP, user-
-> confirmed) and `main` fast-forwarded to it. `feat/delegate-macro` is untouched.
-> Worktrees live under `/scratch/oetiker/claude-worktrees/<project>-<branch>`
-> (per global CLAUDE.md) — the Agent tool's `isolation:"worktree"` puts them in
-> the wrong place; create them manually + dispatch a non-isolated subagent.
+> **Repo note:** the `feat/delegate-macro` work (the deliberately-revisited
+> row-48 delegation-macro idea) **is now MERGED into `main`** — `tvision-macros`
+> is a real workspace member and `#[delegate(to = field)]` is adopted everywhere
+> a D2 embed forwards the `View` trait. Row 32 was branched from `main`
+> (independent of the macro) and integrated first; the macro adoption landed on
+> top of it. **Worktrees:** they live under
+> `/scratch/oetiker/claude-worktrees/<project>-<name>` (global CLAUDE.md). A
+> `WorktreeCreate` hook (`~/.claude/settings.json` → `~/.claude/worktree-create.sh`)
+> now redirects the Agent/Workflow `isolation:"worktree"` worktrees there, so
+> **isolation IS usable** — BUT the hook only activates on a session **restart**
+> (hooks load at startup); until then, isolation lands in the project's
+> `.claude/worktrees/` and you should create the worktree manually at the
+> `/scratch` path + dispatch a non-isolated subagent.
 
-## What landed THIS session — Row 32 `TApplication` (`3e6645f`, MECHANICAL)
+## What landed THIS session — Row 46 `TMenu` data tree (FOUNDATION)
+First Phase-4 row: the **menu data tree** (`TMenuItem`/`TSubMenu`/`TMenu`,
+`menus.h`/`menu.cpp`) — pure data + a builder, **no `View`** (that's row 49).
+`src/menu/mod.rs`, wired into `lib.rs` (`pub use menu::{Menu, MenuBuilder,
+MenuItem}`). Built main-thread/Opus-orchestrated: brief
+(`docs/briefs/row46-menu-data-tree.md`, advisor-vetted design) → Opus implementer
+→ **full two-stage review** (spec then quality, fresh C++-adversarial Opus agents,
+both PASS) → doc-only fixes → integrate.
+
+- **Data model = a 3-variant enum** (`MenuItem::{Separator, Command{…},
+  SubMenu{…}}`), the type-safe translation of the C++ `union { param; subMenu }`
+  discriminated by `name==0`⇒separator / `command==0`⇒submenu / else command.
+  Shared fields (`name`/`key_code`/`help_ctx`/`disabled`) read via or-patterns;
+  **no speculative common sub-struct** (advisor: add it later iff 49–52 want it).
+  `MenuItem::disabled_mut() -> Option<&mut bool>` (None for `Separator`) for the
+  row-49 command-graying loop.
+- **`Menu { items: Vec<MenuItem>, default: Option<usize> }`** — C++ linked list
+  `next` → `Vec`; `deflt` pointer → an **index**. The builder sets `default =
+  Some(0)` on first push (C++ `TMenu(itemList)` head, no separator-skip), `None`
+  when empty; both fields are `pub` and the two-arg C++ `TMenu(itemList, deflt)`
+  allows a non-head default, so `default` is documented as *any valid index*.
+- **`key_code: Option<KeyEvent>`** (None == C++ `kbNoKey`, faithful to the
+  decomposed key model = absence of a key event); **`param: Option<String>`**
+  (None == C++ `param==0`; empty `""` → `None`).
+- **Builder replaces C++ `operator+`** (`MenuBuilder`: `.separator()`,
+  `.command(name,cmd)`, `.command_key(name,cmd,key,param)`,
+  `.submenu(name,key,|m| …)` closure-nested, `.item(MenuItem)` raw escape hatch).
+  Local `fn alt(char) -> KeyEvent` convenience (mirrors `kbAltX`; `key.rs`
+  untouched).
+- **Verification is NOT a snapshot** (pure data, renders nothing): the lead test
+  builds the canonical File/Window menu via the builder and `assert_eq!`s it
+  node-for-node against a hand-built literal tree (a *different* code path, so a
+  builder bug can't pass silently) + 5 edge-case tests. **6 tests, all pass.**
+- **Scope fenced (FOUNDATION-creep guard):** no `View`/draw/event/`execute`/
+  `findItem`/`hotKey`/`getItemRect`/streaming — all rows 49–52.
+
+## Prior session — Row 32 `TApplication` (`3e6645f`, MECHANICAL)
 The thin D2 embed wrapper over `Program` (row 31): `Application { program: Program }`,
 the type a real app constructs. **Genuinely thin by dependency order**
 (advisor-confirmed) — all of `TApplication`'s substance is deferred, so the row is
@@ -51,8 +94,11 @@ agent) → fixes → integrate.
 
 - **`Application`** forwards `run`/`pump_once`/`exec_view`/`desktop`/`end_modal`/
   `end_state`/`{enable,disable,command_enabled}_command` + `program()`/`program_mut()`
-  escape hatches — hand-written one-liners, **NO delegation macro** (the reverted
-  row-48 creep; the macro is now its own deliberate branch `feat/delegate-macro`).
+  escape hatches — hand-written one-liners. **(Note: `#[delegate]` does NOT apply
+  here** even though it later landed and was adopted everywhere — that macro
+  generates the `View`-trait forwarding impl for D2 embeds; `Application` forwards
+  `Program`'s *inherent* loop methods, not the `View` trait, so it stays
+  hand-written. It is correct as-is.)
 - **`get_tile_rect()` is the one real body** → new **`Program::get_tile_rect`**
   (the desktop child's extent = `deskTop->getExtent()`, local-origin `(0,0,w,h)`,
   `None` if no desktop; `&mut self` because `Group::find_mut` is `&mut`). Placed on
@@ -79,6 +125,30 @@ agent) → fixes → integrate.
   deferral kept in docs + the breadcrumb. Plus 2 MINORs fixed: breadcrumb moved
   post-dispatch; the `get_tile_rect` test made discriminating (inset 80×20 desktop on
   an 80×25 backend pins desktop-extent vs screen-extent — a screen-rect impl fails it).
+
+## Also landed — the `#[delegate]` proc-macro (`47894f0`…`66ab55f`)
+The D2 embed-and-delegate pattern (`Wrapper { inner: Inner }` re-implementing the
+whole `View` trait by forwarding to `inner`) was hand-written boilerplate in every
+wrapper (Dialog→Window, the cluster family, etc.). It is now a proc-macro:
+**`#[delegate(to = <field>)]`** in the new **`tvision-macros`** crate (a workspace
+member; the repo root is now a Cargo workspace `["tvision-macros"]`). Applied to a
+struct, it generates the `View`-trait forwarding `impl` to the named field.
+
+- **Adopted codebase-wide**, replacing the hand-rolled forwards and the
+  `cluster_wrapper!` macro: `cluster` (`2a715a0`), `Window` (`c357c3a`, `to=group`),
+  `Dialog` (`e4eaad3`, `to=window`), `ParamText` + `Label` (`be70841`), `Desktop`
+  (`7e90907`, `to=group`), and the `hello` example's `AboutDialog` (`415edb8`,
+  `to=dialog`).
+- **Spec + test:** a "full `View` forwarder spec" with a behavioral spy test
+  (`4d92646`) → new integration test **`tests/delegate_view.rs`** (the +2 in the
+  build-state count); code-review fixes for docs/diagnostics/drift-signposts
+  (`375ef03`); a design note + a CLAUDE.md convention (`30cfe1f`).
+- **Implication for future D2 wrappers:** prefer `#[delegate(to = inner)]` over
+  hand-writing the `View` forwards. It applies when the wrapper forwards the **`View`
+  trait** to an embedded `View` field; it does NOT apply to inherent-method forwards
+  (e.g. `Application`→`Program` loop methods). When you override a method (the
+  wrapper's own `handle_event`/`valid`), keep that method and let the macro forward
+  the rest — check the macro's drift-signpost docs for the override pattern.
 
 ### Prior session — Row 48 `TListBox` (`fc66637`, MECHANICAL)
 The first **concrete** `TListViewer`, proving the row-28 trait seam end to end.
@@ -275,9 +345,11 @@ one change. `dosShell` separately needs a backend terminal-suspend seam + SIGTST
 - **Phase 4 — menus + status line** (the path to a fully drivable app):
 
   **Menus:** `TMenuItem`/`TSubMenu`/`TMenu` (46, FOUNDATION — the menu data tree;
-  C++ `operator+` builders → a Rust builder API) → `TMenuView` (49, FOUNDATION —
-  hotkey/shortcut dispatch, the `evBroadcast` mask) → `TMenuBar` (50) / `TMenuBox`
-  (51) / `TMenuPopup` (52, popup exec via D9). **Menus force the deferred
+  C++ `operator+` builders → a Rust builder API) **✅ DONE this session**
+  (`src/menu/mod.rs`) → **NEXT: `TMenuView` (49, FOUNDATION** — hotkey/shortcut
+  dispatch, the `evBroadcast` mask; consumes the row-46 tree, `current` = an index
+  into `Menu::items`, command-graying via `MenuItem::disabled_mut`) → `TMenuBar`
+  (50) / `TMenuBox` (51) / `TMenuPopup` (52, popup exec via D9). **Menus force the deferred
   `Context` command-set query** (command graying) — build that read-only accessor
   on `Context` when you hit it (additive; the deferred-effects refactor stabilized
   `Context::new` for *effects*, a read accessor is a separate additive concern).
@@ -318,6 +390,12 @@ once their leaf prereqs exist.
   `mod.rs`/`lib.rs` + pre-seeds `theme.rs`). **FOUNDATION rows → per-row, Opus,
   full two-stage review.** Commit completed rows before dispatching worktree
   agents that build on them (worktree branches from the last *commit*).
+  **Worktree location:** `isolation:"worktree"` now lands under
+  `/scratch/oetiker/claude-worktrees/` via the `WorktreeCreate` hook — but only
+  after a session **restart** (hooks load at startup). Before that, isolation goes
+  to the project's `.claude/worktrees/`; create the worktree manually at the
+  `/scratch` path + dispatch a **non-isolated** subagent instead (the row-32
+  cadence). Verify where a probe worktree actually lands before relying on it.
 - **Two-stage review stays mandatory** (SPEC then QUALITY, fresh C++-adversarial
   agents against the **C++ + guide, NOT the brief** — the brief can be wrong, as
   the validator wave's `first_pos` mis-statement proved). Make round-trip/unit tests
