@@ -1977,6 +1977,89 @@ mod tests {
         assert_eq!(program.capture_len(), 0, "ModalFrame popped");
     }
 
+    /// A validator that rejects every final value (`is_valid` → false). Attached
+    /// to a dialog's `InputLine`, it makes `InputLine::valid(cmOK)` false.
+    struct RejectAll;
+    impl crate::validate::Validator for RejectAll {
+        fn is_valid(&self, _s: &str) -> bool {
+            false
+        }
+    }
+
+    /// CROSS-ROW (the reviewer's gap): the **headline** behavior of
+    /// `TInputLine::valid()` end-to-end — a modal dialog must **not** close on OK
+    /// while a child input line's validator rejects, but must close on Cancel.
+    ///
+    /// Isolated tests only call `InputLine::valid()` directly; the actual veto
+    /// lives in `exec_view`'s outer `while !valid(end_state)` loop (faithful to
+    /// `TGroup::execute`). The trace this proves:
+    /// - pump #1: queued `cmOK` → `Dialog::handle_event` → `end_modal(OK)` → the
+    ///   pump sets `end_state = Some(OK)` → the inner loop exits → the outer loop
+    ///   checks the MODAL view's `valid(OK)` → `Dialog::valid` → `Window::valid`
+    ///   → `Group::valid` (cmOK ≠ cmReleasedFocus, so `children.all(valid)`) →
+    ///   `InputLine::valid(OK)` runs the validator → **false** → the modal stays
+    ///   open (the loop re-spins with `end_state = None`).
+    /// - pump #2: queued `cmCancel` → `Dialog::handle_event` → `end_modal(CANCEL)`
+    ///   → outer-loop `valid(CANCEL)` → `Dialog::valid` short-circuits cmCancel →
+    ///   **true** → break → `exec_view` returns `cmCancel`.
+    ///
+    /// We queue `[cmOK, cmCancel]` precisely because `[cmOK]` alone would hang
+    /// forever (a permanently-rejecting field can never close — that IS the
+    /// faithful behavior). Asserting `cmCancel` (NOT `cmOK`) proves the cmOK
+    /// end-state was vetoed and only the un-vetoable Cancel ended the modal.
+    ///
+    /// The InputLine is inserted but NOT made the dialog's `current`: `Group::valid`
+    /// for any non-`cmReleasedFocus` command walks ALL children unconditionally
+    /// (`group.rs`: `children.iter().all(|c| c.view.valid(cmd))`), so the veto holds
+    /// regardless of focus — the "focused child" framing is setup flavor, and there
+    /// is no clean seam to make a dialog child current here. Omission is deliberate.
+    ///
+    /// BITE-VERIFIED (manually, documented — no source edit needed): swapping the
+    /// validator to `None` (accept-all) makes `InputLine::valid(OK)` true, so pump
+    /// #1's `dialog.valid(OK)` is true, the outer loop breaks on the FIRST pass, and
+    /// `exec_view` returns `Command::OK` (never reaching the queued cmCancel). I ran
+    /// that variant locally and observed `result == Command::OK` — proving (a) cmOK
+    /// is genuinely processed and reaches end-modal (not silently dropped, else the
+    /// accept-all run would also fall through to cmCancel), and (b) the validator is
+    /// the sole thing flipping OK→vetoed here. The committed test keeps `RejectAll`
+    /// and asserts the CANCEL outcome.
+    #[test]
+    fn exec_view_ok_vetoed_by_rejecting_input_line_cancel_closes() {
+        use crate::widgets::{InputLine, LimitMode};
+
+        let (mut program, _screen, _clock) = program_with_desktop(40, 12);
+
+        let mut dialog = Dialog::new(Rect::new(4, 2, 36, 10), Some("Setup".into()));
+        // A child input line whose validator rejects every final value, with some
+        // data so it is a realistic "user typed something invalid" field.
+        let mut input = InputLine::new(
+            Rect::new(2, 2, 28, 3),
+            256,
+            Some(Box::new(RejectAll)),
+            LimitMode::MaxBytes,
+        );
+        input.data = "bad".to_string();
+        dialog.insert_child(Box::new(input));
+
+        // Pre-queue cmOK THEN cmCancel: pump #1 routes cmOK -> end_modal(OK) ->
+        // outer valid(OK) vetoed by the field -> reopen; pump #2 routes cmCancel ->
+        // end_modal(CANCEL) -> valid(CANCEL) always true -> break.
+        program.out_events.push_back(Event::Command(Command::OK));
+        program
+            .out_events
+            .push_back(Event::Command(Command::CANCEL));
+
+        let result = program.exec_view(Box::new(dialog));
+
+        assert_eq!(
+            result,
+            Command::CANCEL,
+            "OK must NOT close the modal while the input line's validator rejects; \
+             only the un-vetoable Cancel ends it"
+        );
+        assert_eq!(program.capture_len(), 0, "ModalFrame popped after the loop");
+    }
+
     /// A `sfModal` window posts `cmCancel` on `cmClose` and is NOT removed (row 34
     /// owns the actual modal teardown; only this branch is wired in 33d-1).
     #[test]

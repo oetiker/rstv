@@ -52,6 +52,14 @@ impl Dialog {
         window.set_palette(WindowPalette::Gray);
         Dialog { window }
     }
+
+    /// Insert a child view into the dialog's embedded window/group (test hook —
+    /// mirrors [`Window::insert_child`]; used by the cross-row `exec_view` veto
+    /// test in `app::program` to add a validating control to a modal dialog).
+    #[cfg(test)]
+    pub(crate) fn insert_child(&mut self, view: Box<dyn View>) -> ViewId {
+        self.window.insert_child(view)
+    }
 }
 
 impl View for Dialog {
