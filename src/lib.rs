@@ -67,6 +67,7 @@ pub mod backend;
 pub mod capture;
 pub mod color;
 pub mod command;
+pub mod data;
 pub mod desktop;
 pub mod dialog;
 pub mod event;
@@ -76,6 +77,7 @@ pub mod screen;
 pub mod text;
 pub mod theme;
 pub mod timer;
+pub mod validate;
 pub mod view;
 pub mod widgets;
 pub mod window;
@@ -87,6 +89,7 @@ pub use backend::{Backend, CrosstermBackend, HeadlessBackend, HeadlessHandle, Re
 pub use capture::{CaptureFlow, CaptureHandler, CaptureStack};
 pub use color::{Color, Modifiers, Style};
 pub use command::{Command, CommandSet};
+pub use data::FieldValue;
 pub use desktop::{Background, Desktop};
 pub use dialog::Dialog;
 pub use event::{
@@ -98,9 +101,10 @@ pub use help::HelpCtx;
 pub use screen::{Buffer, Cell, DrawBuffer};
 pub use theme::{Role, Theme};
 pub use timer::{Clock, ManualClock, SystemClock, TimerId, TimerQueue};
+pub use validate::Validator;
 pub use view::{
     Context, DragMode, DrawCtx, Group, GrowMode, Options, Point, Rect, SelectMode, State,
     StateFlag, View, ViewId, ViewState,
 };
-pub use widgets::ScrollBar;
+pub use widgets::{InputLine, ScrollBar};
 pub use window::{ScrollBarOptions, Window, WindowFlags, WindowPalette};

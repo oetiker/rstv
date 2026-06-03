@@ -1,0 +1,14 @@
+---
+source: src/widgets/input_line.rs
+expression: snap
+---
+size: 8x1
+cursor: hidden
+text:
+|◄efghij►|
+attr:
+|abbbbbba|
+legend:
+  . default
+  a fg=BIOS(14) bg=BIOS(3)
+  b fg=BIOS(15) bg=BIOS(2)

@@ -116,10 +116,18 @@ pub enum Role {
     /// [`LabelNormalShortcut`](Role::LabelNormalShortcut) but is kept a distinct
     /// role so future theming can differ).
     LabelLightShortcut,
+    /// `TInputLine` field text — `cpInputLine "\x13\x13\x14\x15"` idx 1 (passive)
+    /// **and** idx 2 (active); both map to dialog entry `0x13`, so a single role
+    /// serves the focused and unfocused field (`getColor((sfFocused)?2:1)`).
+    InputNormal,
+    /// `TInputLine` selection highlight — `cpInputLine` idx 3 (`0x14`).
+    InputSelected,
+    /// `TInputLine` scroll arrows — `cpInputLine` idx 4 (`0x15`).
+    InputArrow,
 }
 
 /// Number of [`Role`] variants — the fixed length of [`Theme`]'s style array.
-const ROLE_COUNT: usize = 39;
+const ROLE_COUNT: usize = 42;
 
 impl Role {
     /// Total mapping of each variant to its index into the style array.
@@ -167,6 +175,9 @@ impl Role {
             Role::LabelLight => 36,
             Role::LabelNormalShortcut => 37,
             Role::LabelLightShortcut => 38,
+            Role::InputNormal => 39,
+            Role::InputSelected => 40,
+            Role::InputArrow => 41,
         }
     }
 }
@@ -299,6 +310,14 @@ pub struct Glyphs {
     pub button_shadow_side: char,
     /// `TButton::shadows[2]` (`\xDF` ▀) — the button's bottom-row shadow fill.
     pub button_shadow_bottom: char,
+
+    // --- Input-line glyphs (row 39) ---
+    /// `TInputLine::leftArrow` (`\x11` ◄ U+25C4) — drawn at column 0 when the
+    /// field can scroll left.
+    pub input_left_arrow: char,
+    /// `TInputLine::rightArrow` (`\x10` ► U+25BA) — drawn at the last column when
+    /// the field can scroll right.
+    pub input_right_arrow: char,
 }
 
 impl Default for Glyphs {
@@ -359,6 +378,10 @@ impl Default for Glyphs {
             button_shadow_top: '\u{2584}',
             button_shadow_side: '\u{2588}',
             button_shadow_bottom: '\u{2580}',
+
+            // Input line (row 39): ◄ (0x11) left scroll arrow, ► (0x10) right.
+            input_left_arrow: '\u{25C4}',
+            input_right_arrow: '\u{25BA}',
         }
     }
 }
@@ -457,6 +480,16 @@ impl Theme {
         set(&mut styles, Role::LabelNormalShortcut, 0x4, 0x7); // red on lightgray
         set(&mut styles, Role::LabelLightShortcut, 0x4, 0x7); // red on lightgray
 
+        // Input line (row 39). Provisional values modelled on the classic
+        // gray-dialog `cpInputLine` chain (`"\x13\x13\x14\x15"`): a cyan field
+        // (black text) for both passive and active, a green selection
+        // highlight, and a brighter arrow colour. Not authoritative — they
+        // realign with the deferred gray dialog theming (`TODO(row 34 gray
+        // theming)`).
+        set(&mut styles, Role::InputNormal, 0x0, 0x3); // black on cyan
+        set(&mut styles, Role::InputSelected, 0xF, 0x2); // white on green
+        set(&mut styles, Role::InputArrow, 0xE, 0x3); // yellow on cyan
+
         Theme {
             styles,
             glyphs: Glyphs::default(),
@@ -525,6 +558,9 @@ mod tests {
         Role::LabelLight,
         Role::LabelNormalShortcut,
         Role::LabelLightShortcut,
+        Role::InputNormal,
+        Role::InputSelected,
+        Role::InputArrow,
     ];
 
     #[test]

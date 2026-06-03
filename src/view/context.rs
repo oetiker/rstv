@@ -214,6 +214,37 @@ impl<'a> DrawCtx<'a> {
         crate::text::draw_str(row, indent, s, text_indent, style) as i32
     }
 
+    /// Write `s` at view-local `(x, y)` with a fixed `style`, starting from
+    /// display column `text_indent` of `s` (skipping that many leading columns)
+    /// — ports `TDrawBuffer::moveStr`'s `begin` parameter, used by
+    /// `TInputLine::draw` to render a horizontally-scrolled field. Width-aware and
+    /// clipped exactly like [`put_str`](Self::put_str). Returns columns written.
+    ///
+    /// A glyph straddling the `text_indent` boundary degrades to a space (the
+    /// `move_str_part` left-edge straddle), via [`text::draw_str`].
+    pub fn put_str_part(&mut self, x: i32, y: i32, s: &str, text_indent: i32, style: Style) -> i32 {
+        if self.clip.is_empty() {
+            return 0;
+        }
+        let ay = y + self.origin.y;
+        if ay < self.clip.a.y || ay >= self.clip.b.y {
+            return 0;
+        }
+        let ax = x + self.origin.x;
+        let lo = self.clip.a.x as usize;
+        let hi = self.clip.b.x as usize;
+        let row = &mut self.buffer.row_mut(ay as u16)[lo..hi];
+
+        // Combine the clip-left-edge skip (when the string starts left of the
+        // clip) with the caller's text_indent — both are column skips into `s`.
+        let (indent, clip_skip) = if ax >= self.clip.a.x {
+            ((ax - self.clip.a.x) as usize, 0)
+        } else {
+            (0, self.clip.a.x - ax)
+        };
+        crate::text::draw_str(row, indent, s, text_indent + clip_skip, style) as i32
+    }
+
     /// Write `s` at view-local `(x, y)`, toggling between `lo` and `hi` styles at
     /// each `~` (the `~` itself is not drawn) — ports `TDrawBuffer::moveCStr`'s
     /// attribute-pair toggle (used by frame icons; reused by buttons/labels/menus

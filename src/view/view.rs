@@ -68,6 +68,7 @@
 //!   (`errorAttr` → [`Role::Error`](crate::theme::Role); `showMarkers` dropped).
 
 use crate::command::Command;
+use crate::data::FieldValue;
 use crate::event::{Event, EventMask};
 use crate::help::HelpCtx;
 use crate::view::context::{Context, DrawCtx};
@@ -623,6 +624,19 @@ pub trait View {
     fn valid(&self, _cmd: Command) -> bool {
         true
     }
+
+    /// `TView::getData` — this control's typed value as a [`FieldValue`] (D10),
+    /// or `None` for a non-data view. The successor to the untyped `getData`
+    /// `memcpy`. Base: `None` (a bare view carries no transferable data); data
+    /// controls (e.g. [`InputLine`](crate::widgets::InputLine)) override.
+    fn value(&self) -> Option<FieldValue> {
+        None
+    }
+
+    /// `TView::setData` — load a typed [`FieldValue`] into this control (D10).
+    /// Base: ignore (a non-data view has nowhere to put it); data controls
+    /// override. A control ignores a `FieldValue` variant it does not understand.
+    fn set_value(&mut self, _v: FieldValue) {}
 
     /// `TView::awaken` — called after a view tree is loaded/created so the view
     /// can finish initializing. Base is a no-op.

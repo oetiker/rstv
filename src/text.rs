@@ -48,6 +48,32 @@ pub fn next(text: &str) -> Option<(usize, usize)> {
     Some((g.len(), grapheme_columns(g)))
 }
 
+/// Byte length of the grapheme cluster *ending* at byte offset `index` in
+/// `text` (the cluster you would step back over from `index`). Returns 0 when
+/// `index == 0`. Port of `TText::prev` (`ttext.cpp`).
+///
+/// magiblot's `TText::prev` reads backwards codepoint-by-codepoint until it
+/// finds a valid UTF-8 lead, returning how many bytes the previous *character*
+/// occupies (clamped to 1 for an invalid lead). Under D13 we step back over a
+/// whole **grapheme cluster** instead — `cur_pos -= prev(data, cur_pos)` lands
+/// the cursor on the previous cluster boundary, never inside a multi-byte
+/// codepoint or a combining sequence.
+///
+/// `index` must be a `char` boundary into `text` (it always is: every call site
+/// maintains `cur_pos` on grapheme boundaries). Returns 0 for `index == 0`.
+pub fn prev(text: &str, index: usize) -> usize {
+    if index == 0 {
+        return 0;
+    }
+    // The last grapheme of the prefix `text[..index]` is the one ending at
+    // `index`; its byte length is how far back the cursor steps.
+    text[..index]
+        .graphemes(true)
+        .next_back()
+        .map(|g| g.len())
+        .unwrap_or(0)
+}
+
 /// Width, the character (grapheme) count, and the number of non-zero-width
 /// graphemes of `text`. Port of `TTextMetrics`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -273,6 +299,26 @@ mod tests {
         let m2 = measure("e\u{0301}");
         assert_eq!(m2.character_count, 1);
         assert_eq!(m2.width, 1);
+    }
+
+    #[test]
+    fn prev_steps_back_one_grapheme() {
+        // ASCII: each step is one byte.
+        assert_eq!(prev("abc", 3), 1);
+        assert_eq!(prev("abc", 1), 1);
+        assert_eq!(prev("abc", 0), 0);
+        // Multi-byte: "ä" is 2 bytes in UTF-8; stepping back from the end of
+        // "aä" (3 bytes) returns 2 (the whole grapheme), never 1.
+        assert_eq!("aä".len(), 3);
+        assert_eq!(prev("aä", 3), 2);
+        assert_eq!(prev("aä", 1), 1);
+        // A combining sequence "e\u{0301}" (3 bytes) is one grapheme.
+        let s = "xe\u{0301}";
+        assert_eq!(prev(s, s.len()), "e\u{0301}".len());
+        // An emoji ZWJ cluster steps back as a single unit.
+        let fam = "👨\u{200d}👩\u{200d}👧";
+        let s2 = format!("a{fam}");
+        assert_eq!(prev(&s2, s2.len()), fam.len());
     }
 
     #[test]

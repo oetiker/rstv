@@ -1,0 +1,14 @@
+---
+source: src/widgets/input_line.rs
+expression: render(&mut il)
+---
+size: 12x1
+cursor: hidden
+text:
+| hello      |
+attr:
+|aabbbaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(0) bg=BIOS(3)
+  b fg=BIOS(15) bg=BIOS(2)
