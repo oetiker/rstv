@@ -91,7 +91,7 @@ pub use desktop::{Background, Desktop};
 pub use dialog::Dialog;
 pub use event::{
     Event, EventMask, Key, KeyEvent, KeyModifiers, MouseButtons, MouseEvent, MouseEventFlags,
-    MouseWheel,
+    MouseWheel, ctrl_to_arrow, hot_key, is_alt_hotkey, is_plain_hotkey,
 };
 pub use frame::Frame;
 pub use help::HelpCtx;

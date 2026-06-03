@@ -18,7 +18,9 @@
 
 mod key;
 
-pub use key::{Key, KeyEvent, KeyModifiers};
+pub use key::{
+    Key, KeyEvent, KeyModifiers, ctrl_to_arrow, hot_key, is_alt_hotkey, is_plain_hotkey,
+};
 
 use crate::command::Command;
 use crate::view::{Point, ViewId};
