@@ -577,23 +577,16 @@ fn move_grow(
     Rect::from_points(p, p + s)
 }
 
+#[crate::delegate(to = group, skip(
+    apply_list_scroll,
+    as_any_mut,
+    calc_bounds,
+    grabs_focus_on_click,
+    select_window_num,
+    set_value,
+    value,
+))]
 impl View for Window {
-    fn state(&self) -> &ViewState {
-        self.group.state()
-    }
-
-    fn state_mut(&mut self) -> &mut ViewState {
-        self.group.state_mut()
-    }
-
-    /// `TWindow` does not override `draw`; it inherits `TGroup::drawSubViews`.
-    /// The frame is the back-most child (drawn first), interior children draw
-    /// over it. Shadow casting is still deferred (the `group.rs` `// TODO(row
-    /// 33)`).
-    fn draw(&mut self, ctx: &mut DrawCtx) {
-        self.group.draw(ctx);
-    }
-
     /// `TWindow::handleEvent` — delegate to the group, then handle the window's
     /// own commands + the focus-cycling keys. `TGroup::handleEvent(event)` runs
     /// **first** (faithful order), then:
@@ -785,14 +778,6 @@ impl View for Window {
         }
     }
 
-    fn valid(&self, cmd: Command) -> bool {
-        self.group.valid(cmd)
-    }
-
-    fn awaken(&mut self) {
-        self.group.awaken();
-    }
-
     /// `TWindow::sizeLimits` — `TView::sizeLimits(min, max)` then `min =
     /// minWinSize {16, 6}`. We take the group's `(_, max)` and force the minimum.
     fn size_limits(&self, owner_size: Point) -> (Point, Point) {
@@ -800,40 +785,13 @@ impl View for Window {
         (Point::new(16, 6), max)
     }
 
-    // NOTE: `calc_bounds` is deliberately NOT overridden and NOT delegated to the
-    // group. The trait default routes through `Window::size_limits` (this
-    // override's 16×6 floor) and mutates the group's `ViewState` via
-    // `state_mut()` — faithful to C++ `TView::calcBounds` calling the *virtual*
-    // `sizeLimits` (i.e. `TWindow::sizeLimits`). Delegating to
-    // `self.group.calc_bounds` would use the group's `size_limits` (min 0×0) and
-    // silently bypass the window's minimum on an owner-driven resize.
-
-    fn change_bounds(&mut self, bounds: Rect) {
-        self.group.change_bounds(bounds);
-    }
-
-    fn cursor_request(&self) -> Option<Point> {
-        self.group.cursor_request()
-    }
-
-    /// Delegate the D3 tree-walk into the embedded group (as `draw`/`handle_event`
-    /// already delegate), so a `find_mut` from above descends through the window.
-    fn find_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
-        self.group.find_mut(id)
-    }
-
-    /// Delegate descendant removal into the embedded group (the owning group runs
-    /// the faithful removal + `reset_current`).
-    fn remove_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
-        self.group.remove_descendant(id, ctx)
-    }
-
-    /// Delegate focus-by-id into the embedded group (the owning group runs the
-    /// faithful `focus_child` after the `ofSelectable` gate), so a label and its
-    /// link sitting inside this window resolve correctly.
-    fn focus_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
-        self.group.focus_descendant(id, ctx)
-    }
+    // NOTE: `calc_bounds` is in the skip list above — NOT forwarded to the group.
+    // The trait default routes through `Window::size_limits` (this override's
+    // 16×6 floor) and mutates the group's `ViewState` via `state_mut()` —
+    // faithful to C++ `TView::calcBounds` calling the *virtual* `sizeLimits`
+    // (i.e. `TWindow::sizeLimits`). Forwarding to `self.group.calc_bounds` would
+    // use the group's `size_limits` (min 0×0) and silently bypass the window's
+    // minimum on an owner-driven resize.
 
     /// `TWindow::number` — the window number, or `None` for `wnNoNumber` (`0`). A
     /// window numbered `0` is never an Alt-N (`cmSelectWindowNum`) target.
