@@ -32,7 +32,7 @@
 
 use crate::command::Command;
 use crate::event::Event;
-use crate::view::{Context, DrawCtx, Group, Point, Rect, StateFlag, View, ViewId, ViewState};
+use crate::view::{Context, Group, Rect, View, ViewId};
 
 use super::Background;
 
@@ -121,20 +121,8 @@ impl Desktop {
     }
 }
 
+#[crate::delegate(to = group, skip(value, set_value, number, grabs_focus_on_click, apply_list_scroll, as_any_mut))]
 impl View for Desktop {
-    fn state(&self) -> &ViewState {
-        self.group.state()
-    }
-
-    fn state_mut(&mut self) -> &mut ViewState {
-        self.group.state_mut()
-    }
-
-    /// Delegated to the embedded group's `drawSubViews`.
-    fn draw(&mut self, ctx: &mut DrawCtx) {
-        self.group.draw(ctx);
-    }
-
     /// `TDeskTop::handleEvent` — delegate to the embedded group's three-phase
     /// router, then handle the desktop's own `cmNext`/`cmPrev` window cycling
     /// (33d-2). Faithful to `tdesktop.cpp`:
@@ -183,53 +171,6 @@ impl View for Desktop {
         }
     }
 
-    fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
-        self.group.set_state(flag, enable, ctx);
-    }
-
-    fn valid(&self, cmd: Command) -> bool {
-        self.group.valid(cmd)
-    }
-
-    fn awaken(&mut self) {
-        self.group.awaken();
-    }
-
-    fn size_limits(&self, owner_size: Point) -> (Point, Point) {
-        self.group.size_limits(owner_size)
-    }
-
-    fn calc_bounds(&mut self, owner_size: Point, delta: Point) -> Rect {
-        self.group.calc_bounds(owner_size, delta)
-    }
-
-    fn change_bounds(&mut self, bounds: Rect) {
-        self.group.change_bounds(bounds);
-    }
-
-    fn cursor_request(&self) -> Option<Point> {
-        self.group.cursor_request()
-    }
-
-    /// Delegate the D3 tree-walk into the embedded group, so a `find_mut` from
-    /// above (e.g. a root `Group` or `Program`) descends through the desktop.
-    fn find_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
-        self.group.find_mut(id)
-    }
-
-    /// Delegate descendant removal into the embedded group (the owning group runs
-    /// the faithful removal + `reset_current`).
-    fn remove_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
-        self.group.remove_descendant(id, ctx)
-    }
-
-    /// Delegate focus-by-id into the embedded group (the owning group runs the
-    /// faithful `focus_child` after the `ofSelectable` gate), so a `focus_descendant`
-    /// from `Program` descends through the desktop.
-    fn focus_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
-        self.group.focus_descendant(id, ctx)
-    }
-
     /// `cmSelectWindowNum` (Alt-N) — select the desktop window numbered `num`
     /// (33d-2). Realizes the C++ broadcast arm as a direct walk into the embedded
     /// group (see [`Group::focus_by_number`]). The program reaches this through the
@@ -246,7 +187,7 @@ mod tests {
     use crate::backend::{HeadlessBackend, Renderer};
     use crate::screen::Buffer;
     use crate::theme::Theme;
-    use crate::view::SelectMode;
+    use crate::view::{DrawCtx, Point, SelectMode};
     use crate::window::{ScrollBarOptions, Window};
     use std::collections::VecDeque;
 
