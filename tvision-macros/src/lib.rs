@@ -3,6 +3,8 @@ use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::quote;
 use syn::{Ident, ImplItem, ItemImpl, Token};
 
+mod specs;
+
 /// `#[delegate(to = <field>)]` — inject forwarders for un-provided trait methods.
 #[proc_macro_attribute]
 pub fn delegate(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -87,22 +89,12 @@ fn expand(args: DelegateArgs, mut item_impl: ItemImpl) -> syn::Result<TokenStrea
     let krate = tvision_path();
     let field = &args.field;
 
-    // SPIKE: only `View::cursor_request` is known (exercises `#krate::Point` resolution).
-    // (More methods land in a later task.)
-    if trait_ident != "View" {
-        return Err(syn::Error::new(
+    let candidates = specs::forwarders(&trait_ident, field, &krate).ok_or_else(|| {
+        syn::Error::new(
             Span::call_site(),
             format!("#[delegate]: unknown delegatable trait `{trait_ident}`"),
-        ));
-    }
-    let candidates: Vec<(&str, TokenStream2)> = vec![(
-        "cursor_request",
-        quote! {
-            fn cursor_request(&self) -> ::core::option::Option<#krate::Point> {
-                self.#field.cursor_request()
-            }
-        },
-    )];
+        )
+    })?;
 
     for (name, tokens) in candidates {
         if !provided.contains(name) && !skip.contains(name) {
