@@ -1,4 +1,4 @@
-# Session handover — Batch B in progress; resume at the FOUNDATION rows (key helpers → TButton 37 / TLabel 41 → validator wave 35/39)
+# Session handover — Batch B; TButton (37) DONE. Resume at TLabel (41) → validator wave (35/39)
 
 > Living handover for the **next** rstv session. Read this, then
 > [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md) (orientation /
@@ -9,20 +9,58 @@
 
 | commit | what |
 |--------|------|
-| `b265a28` | Row 34 — `TDialog` + the modal `exec_view` lifecycle (Phase 2 done) |
-| `3aaba20` | Demo + ModalFrame follow-the-drag fix |
-| `8399d2b` | Pre-seed Theme roles for Batch B gating wave (StaticText + Cluster) |
-| `45ae919` | **Batch B gating wave — TStaticText (36) + TCluster family (38/42/43/44)** |
-| `8662624` | Pre-seed Theme roles + glyphs for TIndicator (45) |
-| `249a56f` | **Batch B no-validator wave (part 1) — TIndicator (45) + TParamText (40)** |
+| `249a56f` | Batch B no-validator wave (part 1) — TIndicator (45) + TParamText (40) |
+| `fa3c767` | docs: Batch B progress + FOUNDATION seam analysis |
+| `b53c618` | **Shared key helpers (task #6)** — `hot_key`/`ctrl_to_arrow`/`is_alt_hotkey`/`is_plain_hotkey` |
+| `9c5fda7` | **`Event::Timer(TimerId)`** — typed timer-expiry; resolves the timer-id payload gap |
+| `fbb0de3` | Pre-seed Theme roles + shadow glyphs for TButton (37) |
+| `71fc6c3` | docs: D7 — `Role` closed-enum is a port-phase default, not a hard rule |
+| `53d011e` | **`View::grabs_focus_on_click`** — per-view opt-out for the mouse-down auto-select (restores `bfGrabFocus`) |
+| `6d763dc` | **TButton (37)** — clickable command button + animation |
 
-**Build state:** 338 lib + 3 integration + 1 doctest green; `cargo clippy
+**Build state:** 388 lib + 3 integration + 2 doctests green; `cargo clippy
 --all-targets -- -D warnings` and `cargo fmt --check` clean. Working tree clean.
 
-**Phase 2 is COMPLETE.** **Batch B is ~7 rows in:** 36, 38, 42, 43, 44, 45, 40
-done (all two-stage reviewed SPEC-PASS + QUALITY-PASS). The **remaining Batch B
-rows all have a FOUNDATION gap** and need careful per-row design (Opus / main
+**Phase 2 is COMPLETE.** **Batch B:** 36, 38, 42, 43, 44, 45, 40, **37** done
+(all two-stage reviewed SPEC-PASS + QUALITY-PASS). The **remaining Batch B rows
+still have a FOUNDATION gap** and need careful per-row design (Opus / main
 thread), not a clean MECHANICAL fan-out — see the seam analysis below.
+
+## What landed THIS session (key helpers + Event::Timer + grabs_focus_on_click + TButton 37)
+- **Shared key helpers (`b53c618`)** — in `src/event/key.rs` (re-exported via
+  `event/mod.rs` + `lib.rs`). Decomposed-model adaptations: `getAltCode`'s
+  combined-scancode return has no meaning, so the accelerator idiom becomes the
+  predicates `is_alt_hotkey` (any alt+char, case-fold, only `alt` required) +
+  `is_plain_hotkey` (`!alt && !ctrl` — C++ `charScan.charCode` is the control
+  code under those mods). `ctrl_to_arrow` = WordStar Ctrl-letter → bare arrow.
+  Spec review caught a real BLOCKER (plain-hotkey false-matching Ctrl+letter).
+- **`Event::Timer(TimerId)` (`9c5fda7`)** — the typed successor to `evBroadcast
+  cmTimerExpired`+`infoPtr==TTimerId`. Broadcast-class routed (group's
+  all-children arm; `deliver`'s gates already pass it). Pump emits one
+  `Event::Timer(id)` per expired id. `Command::TIMER_EXPIRED` removed. **First
+  consumer = TButton's animation.** (Per Phase-A precedent: integer infoPtr
+  payloads get their own typed mechanism, not `Broadcast{source}`.)
+- **`View::grabs_focus_on_click` (`53d011e`)** — the group's carryover #1
+  (relocated `TView::handleEvent` mouse-down auto-select) was unconditional;
+  C++ lets each view opt out (TButton selects only with `bfGrabFocus`). New
+  defaulted trait method (true); Button overrides → its `grab_focus` flag; the
+  group consults it before `focus_child`. Default-true = zero change to all
+  existing views. **Goes live at TLabel/TInputLine** (clicking OK must not steal
+  focus from an input line). This was an advisor-flagged group divergence, fixed
+  as substrate per [[fix-foundations-not-bandaids]], not a button footnote.
+- **TButton (37) (`6d763dc`)** — `src/widgets/button.rs`. Full draw (face +
+  ▄█▀ drop shadow + `~`-title), single-shot mouse press, Alt-hotkey/Space →
+  one-shot animation timer firing on `Event::Timer`, the grab/release-default
+  dance (`makeDefault` inverted guard), `set_state` base-replication + makeDefault.
+  **Three TButton deferrals → become the next FOUNDATION primitives:**
+  (1) **command-enabled graying** — needs a `Context` command-set query (ctor
+  `sfDisabled`-from-command + `cmCommandSetChanged` handler dropped; correctness
+  preserved by the program's boundary command filter). **Menus will force this.**
+  (2) **plain-letter postProcess accelerator** — needs a *phase signal* on
+  `Context` (only Alt-hotkey + focused-Space honored; `is_plain_hotkey`
+  intentionally unused — ungated it would steal plain letters from a focused
+  input line). **TLabel/cluster accelerators also want this.**
+  (3) mouse hold-tracking + pressed-flash → row 31, D9 (single-shot for now).
 
 ## What landed this session (Batch B, rows 36/38/42/43/44/45/40)
 
@@ -59,52 +97,19 @@ C++-adversarial agents — the row-34 lesson: a brief itself can be wrong). The
 orchestrator pre-seeds the Theme roles/glyphs each row needs (avoids worktree
 `theme.rs` conflicts), as done for the rows above.
 
-### Prereq (do FIRST) — shared key helpers (task #6)
-TButton, TLabel, TScrollBar, and TCluster **all** converge on the accelerator/key
-helpers, which every one of them deferred. Build them **once**, before 37/41:
-- `hotKey(label) -> Option<char>` — the char after `~` (uppercased), the shortcut.
-- `getAltCode(c) -> Key` — `tvtext2.cpp:82`; maps a letter to its Alt-keycode.
-- `ctrlToArrow(key) -> Key` — WordStar Ctrl-letter → arrow aliases (scrollbar's
-  `TODO/NOTE(ctrlToArrow)`; cluster's literal-arrows-only deferral).
-Likely a small `src/event/keys.rs` (or extend `src/event/key.rs`). Faithful ports
-from `tvtext2.cpp` / `tkeys`/`syskeys`. With these, the cluster/scrollbar
-accelerator + WordStar TODOs can also be retired opportunistically.
+### ✅ DONE — shared key helpers (task #6, `b53c618`) and TButton (37, `6d763dc`)
+Both shipped this session (see "What landed THIS session" above). The key helpers
+landed as **predicates** (`is_alt_hotkey`/`is_plain_hotkey`), not the literal
+`getAltCode`, because of the decomposed key model. The TButton timer-id blocker was
+resolved with **`Event::Timer(TimerId)`** (option (a) — carry the id; option (b)
+target-by-ViewId was rejected: it can't tell two timers of one view apart and
+needs unbuilt directed-routing). **TButton's two deferrals are the next two
+FOUNDATION primitives** (a `Context` command-set query for graying; a phase signal
+for the plain-letter accelerator) — see the rows below + the deferral notes above.
+The cluster/scrollbar `ctrlToArrow`/accelerator TODOs can now be retired
+opportunistically using the shared helpers.
 
-### Row 37 — TButton (FOUNDATION; task #7). **Resolve the timer-id payload first.**
-`tbutton.cpp`: press animation via the row-20 `Clock`, the grab/release-default
-broadcast protocol, the natural **first `exec_view` consumer** (an OK/Cancel
-dialog round-trip).
-- **BLOCKER to decide:** the timer-expiry broadcast **drops the `TimerId`**
-  (`src/app/program.rs:654`, `TODO(timer payload)` — it broadcasts
-  `cmTimerExpired` with `source: None`). C++ TButton checks
-  `event.message.infoPtr == animationTimer` to know it's *its* timer. With the id
-  gone, our button can only check `animationTimer != 0` → **it fires on ANY
-  timer's expiry the moment a second timer source exists** (latent-but-real, not a
-  rare race). Two resolution shapes — **pick before implementing**:
-  (a) carry the `TimerId` in the expiry event, or (b) **target** the expiry to the
-  owning `ViewId` (the truer `infoPtr` successor; routes like a directed message).
-  **Recommendation: resolve it now** (TButton is the forcing function, it's small,
-  and it keeps the animation faithful) rather than the defer-animation fallback
-  (press immediately, no flash). This is the next session's call — state the
-  tradeoff in the brief.
-- Commands: `DEFAULT`/`COMMAND_SET_CHANGED`/`TIMER_EXPIRED`/`RECORD_HISTORY`
-  already exist in `command.rs`. `cmGrabDefault`/`cmReleaseDefault` →
-  **button-local consts** in `button.rs` (D1: view-specific consts live with the
-  view — no `command.rs` edit).
-- Pre-seed **8 cpButton roles** (`"\x0A\x0B\x0C\x0D\x0E\x0E\x0E\x0F"`):
-  Button{Normal,Default,Selected,Disabled} text + {Normal,Default,Selected}Shortcut
-  + ButtonShadow. getColor map: `0x0501`=(Normal,NormalShortcut),
-  `0x0602`=(Default,DefaultShortcut), `0x0703`=(Selected,SelectedShortcut),
-  `0x0404`=(Disabled,Disabled), `getColor(8)`=Shadow. Plus shadow glyphs
-  (`shadows[3]` in `tvtext1.cpp`).
-- Defer (faithful to scrollbar/cluster): the mouse `do{}while(mouseEvent(...,move))`
-  press-tracking loop → row 31, D9 (single-shot fallback: down inside clickRect →
-  press). `showMarkers` dropped. Accelerators use the new shared key helpers.
-- `setState`: sfFocused → `makeDefault` (grab/release-default broadcast);
-  sfSelected/sfActive → redraw (D8 no-op). `press()` → broadcast (bfBroadcast) or
-  post `Event::Command` (the `infoPtr`/`this` → `Broadcast{source}` or command).
-
-### Row 41 — TLabel (FOUNDATION-ish; task #8). focus-by-id + first `Broadcast{source}` consumer.
+### Row 41 — TLabel (FOUNDATION-ish; task #8). focus-by-id + first `Broadcast{source}` consumer. **← START HERE**
 `tlabel.cpp`: a caption that **links** to a control and focuses it on click/hotkey,
 and **highlights** while its linked control is focused.
 - **link is an `Option<ViewId>` (D3)** — not a `TView*`. `TLabel` is the **first
@@ -150,8 +155,20 @@ carries that design; build when a menu/msgbox needs it (Phase 4), not before.
 - **`message()`/`query` + `cmCanCloseForm` veto** — needs a validating control
   (`TInputLine` + a `TValidator`); guide D4 "message() — corrected" is the design.
 
-## Still deferred (older, unchanged)
-- **Timer-id payload (D4)** — `program.rs:654`; **TButton 37 forces this** (above).
+## Still deferred (older + new this session)
+- ✅ **Timer-id payload (D4) — RESOLVED** (`9c5fda7`, `Event::Timer(TimerId)`).
+- **NEW — `Context` command-set query** (for command-enabled *graying*): TButton
+  deferred its ctor `sfDisabled`-from-command + `cmCommandSetChanged` handler
+  because `Context` carries no read of `curCommandSet`. Correctness is preserved
+  (the program filters disabled `Event::Command` at its boundary); only the visual
+  gray-out is missing. **Menus (Batch C) force this** — add a read-only command-set
+  accessor to `Context` then (the deferred-effects refactor stabilized
+  `Context::new` for *effects*; a read accessor is a separate, additive concern).
+- **NEW — phase signal on `Context`** (for the plain-letter postProcess
+  accelerator): TButton honors only Alt-hotkey + focused-Space; the C++
+  `owner->phase == phPostProcess` plain-letter branch needs the dispatch phase
+  exposed to the view. The cluster's deferred accelerators want the same. Add when
+  the first widget genuinely needs plain-letter accelerators.
 - **`cmResize` keyboard resize sub-mode** (`window.rs`).
 - **Scrollbar auto-repeat + thumb-drag** (`scrollbar.rs` `TODO(row 31, D9)`).
 - **Cluster mouse drag-cursor loop** (`cluster.rs` `TODO(row 31, D9)`); cluster +
@@ -185,11 +202,14 @@ carries that design; build when a menu/msgbox needs it (Phase 4), not before.
   hand, re-run plain, commit the `.snap`.
 
 ## Outstanding TODOs seeded in code (grep)
-- `TODO(timer payload)` in `src/app/program.rs` — **TButton 37 forces this**.
-- `TODO(row 31, D9)` in `src/widgets/scrollbar.rs` + `src/widgets/cluster.rs` —
-  press-and-hold / drag-tracking loops.
+- ✅ `TODO(timer payload)` — RESOLVED (removed; now `Event::Timer`).
+- `TODO(button: command-enabled graying ...)` + `TODO(button/cluster: plain-hotkey
+  postProcess accelerator ...)` in `src/widgets/button.rs` — the two new
+  `Context` primitives (see "Still deferred").
+- `TODO(row 31, D9)` in `src/widgets/scrollbar.rs` + `src/widgets/cluster.rs` +
+  `src/widgets/button.rs` — press-and-hold / drag-tracking loops.
 - `TODO(row 41, accelerators)` / `TODO(ctrlToArrow)` in `src/widgets/cluster.rs` —
-  retire via the shared key helpers (task #6).
+  shared key helpers now EXIST (`b53c618`); retire opportunistically.
 - `TODO(row 34 gray theming)` in `src/window/window.rs`.
 - `TODO(33d-2/later, D9)` in `src/window/window.rs` — cmResize keyboard sub-mode.
 - `TODO(row 33, D9)` in `src/frame.rs`; `TODO(row 33)` in `src/view/group.rs`.
