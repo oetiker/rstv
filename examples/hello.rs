@@ -40,8 +40,8 @@ use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 
 use tvision::{
-    Backend, Color, Command, Context, CrosstermBackend, Desktop, Dialog, DrawCtx, Event, Point,
-    Program, Rect, StateFlag, Style, SystemClock, Theme, View, ViewId, ViewState,
+    Backend, Color, Command, CrosstermBackend, Desktop, Dialog, DrawCtx, Program, Rect, Style,
+    SystemClock, Theme, View,
 };
 
 // ---------------------------------------------------------------------------
@@ -51,9 +51,10 @@ use tvision::{
 /// A dialog with custom interior drawing — the canonical TV "About box" shape.
 ///
 /// It *is-a* [`Dialog`] (embed-and-delegate, the port's stand-in for C++
-/// inheritance): every [`View`] method forwards to the inner dialog, except
-/// [`draw`](View::draw), which first lets the dialog paint its frame/title/close
-/// box, then fills the interior and overlays centred text.
+/// inheritance): every [`View`] method is forwarded to the inner dialog by the
+/// `#[delegate(to = dialog)]` macro, except [`draw`](View::draw), which first
+/// lets the dialog paint its frame/title/close box, then fills the interior and
+/// overlays centred text.
 struct AboutDialog {
     dialog: Dialog,
 }
@@ -76,15 +77,8 @@ impl AboutDialog {
     }
 }
 
+#[tvision::delegate(to = dialog)]
 impl View for AboutDialog {
-    fn state(&self) -> &ViewState {
-        self.dialog.state()
-    }
-
-    fn state_mut(&mut self) -> &mut ViewState {
-        self.dialog.state_mut()
-    }
-
     /// `TAboutDialog::draw` — `TDialog::draw()` first (frame, border, title, close
     /// box), then the interior fill + centred text. The `DrawCtx` is dialog-local
     /// (origin at the dialog's top-left), so coordinates are `0..W` / `0..H`.
@@ -113,48 +107,7 @@ impl View for AboutDialog {
             ctx.put_str(x, 2 + i as i32, line, body);
         }
     }
-
-    // -- everything else forwards to the inner dialog -----------------------
-
-    fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
-        self.dialog.handle_event(ev, ctx);
-    }
-
-    fn valid(&self, cmd: Command) -> bool {
-        self.dialog.valid(cmd)
-    }
-
-    fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
-        self.dialog.set_state(flag, enable, ctx);
-    }
-
-    fn awaken(&mut self) {
-        self.dialog.awaken();
-    }
-
-    fn size_limits(&self, owner_size: Point) -> (Point, Point) {
-        self.dialog.size_limits(owner_size)
-    }
-
-    fn change_bounds(&mut self, bounds: Rect) {
-        self.dialog.change_bounds(bounds);
-    }
-
-    fn cursor_request(&self) -> Option<Point> {
-        self.dialog.cursor_request()
-    }
-
-    fn find_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
-        self.dialog.find_mut(id)
-    }
-
-    fn remove_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
-        self.dialog.remove_descendant(id, ctx)
-    }
-
-    fn number(&self) -> Option<i16> {
-        self.dialog.number()
-    }
+    // All other View methods are injected by #[delegate(to = dialog)] above.
 }
 
 // ---------------------------------------------------------------------------
