@@ -32,9 +32,7 @@ use crate::command::Command;
 use crate::event::{Event, hot_key, is_alt_hotkey};
 use crate::text;
 use crate::theme::Role;
-use crate::view::{
-    Context, DrawCtx, GrowMode, Options, Point, Rect, StateFlag, View, ViewId, ViewState,
-};
+use crate::view::{Context, DrawCtx, GrowMode, Options, Rect, View, ViewId, ViewState};
 
 // ---------------------------------------------------------------------------
 // StaticText
@@ -301,71 +299,21 @@ impl ParamText {
     }
 }
 
-// NOTE(delegation): this hand-written full-`View` forward duplicates the body
-// `cluster_wrapper!` generates (field `inner` vs `cluster`). If a third embed
-// wrapper appears, promote that macro to a shared `delegate_view!(Ty, field)` so
-// a new trait method need only be added once.
-impl View for ParamText {
-    fn state(&self) -> &ViewState {
-        self.inner.state()
-    }
-
-    fn state_mut(&mut self) -> &mut ViewState {
-        self.inner.state_mut()
-    }
-
-    fn draw(&mut self, ctx: &mut DrawCtx) {
-        self.inner.draw(ctx)
-    }
-
-    fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
-        self.inner.handle_event(ev, ctx)
-    }
-
-    fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
-        self.inner.set_state(flag, enable, ctx)
-    }
-
-    fn valid(&self, cmd: Command) -> bool {
-        self.inner.valid(cmd)
-    }
-
-    fn awaken(&mut self) {
-        self.inner.awaken()
-    }
-
-    fn size_limits(&self, owner_size: Point) -> (Point, Point) {
-        self.inner.size_limits(owner_size)
-    }
-
-    fn calc_bounds(&mut self, owner_size: Point, delta: Point) -> Rect {
-        self.inner.calc_bounds(owner_size, delta)
-    }
-
-    fn change_bounds(&mut self, bounds: Rect) {
-        self.inner.change_bounds(bounds)
-    }
-
-    fn cursor_request(&self) -> Option<Point> {
-        self.inner.cursor_request()
-    }
-
-    fn find_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
-        self.inner.find_mut(id)
-    }
-
-    fn remove_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
-        self.inner.remove_descendant(id, ctx)
-    }
-
-    fn number(&self) -> Option<i16> {
-        self.inner.number()
-    }
-
-    fn select_window_num(&mut self, num: i16, ctx: &mut Context) -> bool {
-        self.inner.select_window_num(num, ctx)
-    }
-}
+// P  = {state, state_mut, draw, handle_event, set_state, valid, awaken,
+//       size_limits, calc_bounds, change_bounds, cursor_request, find_mut,
+//       remove_descendant, number, select_window_num}   — all verbatim forwards.
+// DELETE = P (macro regenerates them all identically).
+// SKIP   = 21 − P = {apply_list_scroll, as_any_mut, focus_descendant,
+//          grabs_focus_on_click, set_value, value}.
+#[crate::delegate(to = inner, skip(
+    apply_list_scroll,
+    as_any_mut,
+    focus_descendant,
+    grabs_focus_on_click,
+    set_value,
+    value
+))]
+impl View for ParamText {}
 
 // ---------------------------------------------------------------------------
 // Label
@@ -512,19 +460,23 @@ impl Label {
     }
 }
 
-// NOTE(delegation): mirrors the `ParamText` full-`View` forward (field `inner`);
-// `draw` + `handle_event` are *overridden*, not delegated. See the ParamText
-// delegation NOTE: if a third pattern of this shape grows, promote a shared
-// `delegate_view!` macro so a new trait method is added once.
+// P      = {state, state_mut, draw, handle_event, set_state, valid, awaken,
+//            size_limits, calc_bounds, change_bounds, cursor_request, find_mut,
+//            remove_descendant, focus_descendant, number, select_window_num}
+// KEEP   = {draw, handle_event}  — custom bodies.
+// DELETE = P \ KEEP = {state, state_mut, set_state, valid, awaken, size_limits,
+//            calc_bounds, change_bounds, cursor_request, find_mut,
+//            remove_descendant, focus_descendant, number, select_window_num}
+// SKIP   = 21 − P = {apply_list_scroll, as_any_mut, grabs_focus_on_click,
+//            set_value, value}.
+#[crate::delegate(to = inner, skip(
+    apply_list_scroll,
+    as_any_mut,
+    grabs_focus_on_click,
+    set_value,
+    value
+))]
 impl View for Label {
-    fn state(&self) -> &ViewState {
-        self.inner.state()
-    }
-
-    fn state_mut(&mut self) -> &mut ViewState {
-        self.inner.state_mut()
-    }
-
     /// `TLabel::draw` — a single row: fill with the caption color, then draw the
     /// `~`-marked text at column 1 through `put_cstr`'s lo/hi toggle.
     ///
@@ -600,54 +552,6 @@ impl View for Label {
 
             _ => {}
         }
-    }
-
-    fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
-        self.inner.set_state(flag, enable, ctx)
-    }
-
-    fn valid(&self, cmd: Command) -> bool {
-        self.inner.valid(cmd)
-    }
-
-    fn awaken(&mut self) {
-        self.inner.awaken()
-    }
-
-    fn size_limits(&self, owner_size: Point) -> (Point, Point) {
-        self.inner.size_limits(owner_size)
-    }
-
-    fn calc_bounds(&mut self, owner_size: Point, delta: Point) -> Rect {
-        self.inner.calc_bounds(owner_size, delta)
-    }
-
-    fn change_bounds(&mut self, bounds: Rect) {
-        self.inner.change_bounds(bounds)
-    }
-
-    fn cursor_request(&self) -> Option<Point> {
-        self.inner.cursor_request()
-    }
-
-    fn find_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
-        self.inner.find_mut(id)
-    }
-
-    fn remove_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
-        self.inner.remove_descendant(id, ctx)
-    }
-
-    fn focus_descendant(&mut self, id: ViewId, ctx: &mut Context) -> bool {
-        self.inner.focus_descendant(id, ctx)
-    }
-
-    fn number(&self) -> Option<i16> {
-        self.inner.number()
-    }
-
-    fn select_window_num(&mut self, num: i16, ctx: &mut Context) -> bool {
-        self.inner.select_window_num(num, ctx)
     }
 }
 
@@ -942,7 +846,7 @@ mod tests {
 
     use crate::event::{Key, KeyEvent, KeyModifiers, MouseButtons, MouseEvent};
     use crate::timer::TimerQueue;
-    use crate::view::{Deferred, ViewId};
+    use crate::view::{Deferred, Point, ViewId};
 
     /// Render a `Label` to a snapshot string.
     fn render_label(label: &mut Label) -> String {
