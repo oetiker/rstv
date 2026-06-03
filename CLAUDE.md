@@ -583,6 +583,34 @@ vendored ratatui cell-buffer+diff (MIT) → retained view tree + event loop.
     QUALITY-PASS; fixes applied: `num_cols` zero-guard, `focused_cursor` test,
     resize-doc correction, wiring caveat). 482 lib + 3 integration + 2 doctests
     green; clippy/fmt clean.
+  - **Row 48 `TListBox` DONE (`fc66637`, MECHANICAL)** — module
+    `src/widgets/list_box.rs`. The **first concrete `TListViewer`**, proving the
+    row-28 trait seam end to end: `ListBox { lv: ListViewerState, items:
+    Vec<String> }` reuses all of `TListViewer`'s draw/event/nav **verbatim** via
+    the `ListViewer` trait, overriding **only `get_text`** (`items.get(item as
+    usize).cloned().unwrap_or_default()` — collapses the C++ `items==0→EOS` + OOB
+    cases, panic-free); `is_selected`/`select_item` **inherit the base** (C++
+    overrides neither). `impl View` delegates `draw`/`handle_event`/`set_state`/
+    `cursor_request`/`apply_list_scroll`/`as_any_mut` to the `list_viewer::*` free
+    fns (the `FakeList` template). **D10 value protocol — first consumer beyond
+    `TInputLine`:** `value() → FieldValue::Int(focused)` (the `getData` selection
+    half); **`set_value` DEFERRED** (advisor-confirmed) — the **`Context`-free**
+    `View::set_value` signature can't republish the v-bar (C++ `setData` =
+    `newList`+`focusItem`, both need a `Context` in our model), so a partial would
+    leave the thumb desynced after a scatter; lands with the **dialog
+    gather/scatter** consumer (inputBox/Batch E) which must solve Context-in-scatter
+    (`TODO(set_value: dialog gather/scatter)`). **Population is post-insert** (ctor
+    has no `Context`): `new_list(items, ctx)` (`set_range` + `focus_item(0)` iff
+    `range>0`) + `list_viewer::update_steps(ctx)` for the page/arrow steps — both
+    documented on the type. The dialog gather/scatter group-walk stays deferred (no
+    consumer yet). **Dropped:** `dataSize`/`TListBoxRec` (→ typed value), streaming
+    (D12), `drawView` (D8). Two-stage reviewed (SPEC-PASS + QUALITY-PASS, fresh
+    C++-adversarial Opus agents). **Caught + reverted out-of-scope creep:** the
+    implementer also added an exported `delegate_view_rest!` macro to `view.rs` +
+    refactored `examples/hello.rs` — unrelated to row 48, unreviewed, touching a
+    FOUNDATION file; reverted (the macro idea can be revisited deliberately later).
+    Brief: `docs/briefs/row48-tlistbox.md`. 491 lib + 3 integration + 2 doctests
+    green; clippy/fmt clean.
 
 ## Next step
 **Direction = [`docs/PORT-ORDER.md`](docs/PORT-ORDER.md)** — dependency-ordered;
@@ -592,16 +620,14 @@ that *may* run concurrently — an efficiency, not a competing direction. Contin
 subagent-driven (see "How to run the port" above; FOUNDATION → Opus + two-stage
 review, MECHANICAL → Sonnet worktree fan-out).
 
-**Immediate next: row 48 `TListBox`** (MECHANICAL, `tlistbox.cpp`) — the first
-**concrete** `TListViewer`: impl `ListViewer` (override `get_text`/`is_selected`
-over an owned collection) + `View` (delegate `draw`/`handle_event`/`set_state`/
-`cursor_request`/`apply_list_scroll`/`as_any_mut` to the row-28 free fns — see the
-`FakeList` test consumer for the exact wiring) + typed value (D10; first
-`value`/`set_value` consumer beyond `TInputLine` — may pull in the still-deferred
-**dialog gather/scatter group-walk**). Then `TApplication` (32, MECHANICAL, thin
-tile/cascade wrapper over `TProgram`, slot in anytime) → **Phase 4** (menus
+**Immediate next: row 32 `TApplication`** (MECHANICAL, thin tile/cascade/dosShell
+wrapper over `TProgram`; independent, slot in anytime) → **Phase 4** (menus
 46/49/50/51/52, status 47/53 — the path to a fully drivable app; menus force the
-deferred `Context` command-set query). Full per-row detail in
+deferred `Context` command-set query). Row 48 `TListBox` is **DONE** (the first
+concrete `TListViewer` — see Current state). Available parallel fan-out (efficiency,
+not a competing direction): **Batch C concrete validators 58–62** (MECHANICAL,
+`tvalidat.cpp`; 59 `TRangeValidator` resolves the deferred validator `transfer`
+hook + the `cur_pos` re-clamp hazard). Full per-row detail in
 [`docs/HANDOVER.md`](docs/HANDOVER.md).
 
 Phase sequence so far (all ✅ except where noted):
@@ -650,10 +676,13 @@ Phase sequence so far (all ✅ except where noted):
    The list base as a **trait** (`ListViewer: View` + free generics; not the
    Scroller embed shape — `TListBox` must reuse `draw` while overriding `getText`);
    read-sync writes back (`View::apply_list_scroll` + `Deferred::SyncListViewer`),
-   bounded by the scrollbar change-guard. ← **NEXT: row 48 `TListBox`** (MECHANICAL,
-   first concrete consumer), then `TApplication` 32, then **Phase 4** (menus
-   46/49/50/51/52, status 47/53).
-10. **Batches C–E fan out** (concrete validators 58–62, dialog families): the bulk
+   bounded by the scrollbar change-guard.
+10. ~~**Row 48 `TListBox`**~~ ✅ DONE (`fc66637`, MECHANICAL, see Current state).
+    First concrete `TListViewer`: owns a `Vec<String>`, overrides only `get_text`,
+    delegates the rest to the row-28 free fns; D10 `value()→Int(focused)` with
+    `set_value` deferred. ← **NEXT: `TApplication` 32**, then **Phase 4** (menus
+    46/49/50/51/52, status 47/53).
+11. **Batches C–E fan out** (concrete validators 58–62, dialog families): the bulk
     `MECHANICAL` rows; parallel worktree implementer+reviewer trios, commit at batch
     boundaries — runnable concurrently alongside the in-sequence FOUNDATION work.
 

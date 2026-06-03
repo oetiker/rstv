@@ -1,4 +1,4 @@
-# Session handover — Row 28 `TListViewer` DONE. Next (per PORT-ORDER): Row 48 `TListBox` → `TApplication` 32 → Phase 4
+# Session handover — Row 48 `TListBox` DONE. Next (per PORT-ORDER): `TApplication` 32 → Phase 4
 
 > Living handover for the **next** rstv session. Read this, then
 > [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md) (orientation /
@@ -16,22 +16,62 @@
 | commit | what |
 |--------|------|
 | `543b2c8` | **TScroller (27)** — cross-view scrollbar broker (FOUNDATION) |
-| `3de6c62` | docs: row 27 TScroller DONE — CLAUDE.md + HANDOVER |
-| `c1ad789` | **TListViewer (28)** — list base (trait) + write-back broker (FOUNDATION) ← THIS session |
+| `c1ad789` | **TListViewer (28)** — list base (trait) + write-back broker (FOUNDATION) |
+| `fc66637` | **TListBox (48)** — first concrete `TListViewer` (MECHANICAL) ← THIS session |
 
-**Build state:** 482 lib + 3 integration + 2 doctests green; `cargo clippy
+**Build state:** 491 lib + 3 integration + 2 doctests green; `cargo clippy
 --all-targets -- -D warnings` and `cargo fmt --check` clean. Working tree clean
 (after the docs commit that pairs with this handover update).
 (Cargo artifacts land in `/home/oetiker/scratch/cargo-target` — set
 `CARGO_TARGET_DIR`.)
 
 **Phase 2 COMPLETE. Batch B (Phase-3 leaves) COMPLETE.** Phase-1 row 32 +
-Phase-4 (46+) + the list/dialog leaf rows remain. **Row 28 `TListViewer` DONE**
-this session (FOUNDATION; the list base as a **trait**, write-back broker — see
-below). Next incomplete in PORT-ORDER sequence: **row 48 `TListBox`** (MECHANICAL,
-first concrete `TListViewer`), then 32 `TApplication`, then Phase 4 (menus/status).
+Phase-4 (46+) + the remaining list/dialog leaf rows remain. **Row 48 `TListBox`
+DONE** this session (MECHANICAL; the first concrete `TListViewer` — see below).
+Next incomplete in PORT-ORDER sequence: **row 32 `TApplication`** (MECHANICAL,
+thin wrapper over `TProgram`), then Phase 4 (menus/status). Batch C concrete
+validators 58–62 are an available parallel fan-out.
 
-## What landed THIS session — Row 28 `TListViewer` (`c1ad789`, FOUNDATION)
+## What landed THIS session — Row 48 `TListBox` (`fc66637`, MECHANICAL)
+The first **concrete** `TListViewer`, proving the row-28 trait seam end to end.
+Built main-thread/Opus-orchestrated: tight brief
+(`docs/briefs/row48-tlistbox.md`) → Sonnet implementer → full two-stage review
+(SPEC then QUALITY, fresh C++-adversarial Opus agents) → integrate.
+
+`ListBox { lv: ListViewerState, items: Vec<String> }` (`src/widgets/list_box.rs`)
+reuses **all** of `TListViewer`'s draw/event/nav verbatim via the `ListViewer`
+trait, overriding **only `get_text`** (`items.get(item as usize).cloned().
+unwrap_or_default()` — collapses the C++ `items==0→EOS` + OOB cases, panic-free);
+`is_selected`/`select_item` **inherit the base** (C++ overrides neither). `impl
+View` delegates `draw`/`handle_event`/`set_state`/`cursor_request`/
+`apply_list_scroll`/`as_any_mut` to the `list_viewer::*` free fns (the `FakeList`
+template). Wired into `widgets/mod.rs` + `lib.rs`.
+
+- **D10 value protocol — first consumer beyond `TInputLine`:** `value() →
+  FieldValue::Int(focused)` (the `getData` selection half; the collection is
+  config `new_list` manages, NOT part of the transferable value — no `List`
+  variant, `FieldValue` grows per consumer).
+- **`set_value` DEFERRED** (advisor-confirmed): the **`Context`-free**
+  `View::set_value` signature can't republish the v-bar (C++ `setData` =
+  `newList`+`focusItem`, both need a `Context` in our model), so a partial would
+  leave the scroll thumb desynced after a scatter. Lands with the **dialog
+  gather/scatter** consumer (inputBox/Batch E), which must itself solve threading
+  a `Context` into scatter. `TODO(set_value: dialog gather/scatter)`.
+- **Population is post-insert** (the ctor has no `Context`): `new_list(items,
+  ctx)` (`set_range` + `focus_item(0)` iff `range>0`) **plus**
+  `list_viewer::update_steps(ctx)` for the page/arrow steps — miss either and the
+  thumb starts unsynced. Documented on the type.
+- **Dropped:** `dataSize`/`TListBoxRec` (→ typed value), streaming (D12),
+  `drawView` (D8). The dialog gather/scatter group-walk stays deferred (no
+  consumer yet).
+- **Process catch — out-of-scope creep reverted:** the implementer also added an
+  exported `delegate_view_rest!` macro to `src/view/view.rs` + refactored
+  `examples/hello.rs` to use it — unrelated to row 48, unreviewed (both review
+  agents were scoped to `list_box.rs`), and touching a FOUNDATION file. Reverted
+  before commit. The macro is a genuinely useful D2-embed helper; if wanted, do it
+  deliberately as its own reviewed change.
+
+### Prior session — Row 28 `TListViewer` (`c1ad789`, FOUNDATION)
 `TListViewer` (base for `TListBox` 48, history, color/file lists) drives two
 sibling scrollbars like `TScroller` but **diverges structurally in two ways** the
 "reuse the broker verbatim" line glossed over — both confirmed with the advisor
@@ -174,28 +214,15 @@ agents). Brief: `docs/briefs/row35-39-validator-inputline.md`.
 
 Lowest-numbered incomplete rows = the work. Next up:
 
-### Row 48 `TListBox` (MECHANICAL) — the immediate next row
-The first **concrete** `TListViewer` (C++ `tlistbox.cpp`/`slistbox.cpp`/
-`nmlstbox.cpp`). It owns a collection (a `Vec`) and is the proof the row-28 trait
-seam works end to end. Shape (copy the `#[cfg(test)] FakeList` in
-`src/widgets/list_viewer.rs` for the exact wiring):
-- `impl ListViewer for ListBox` — `lv()`/`lv_mut()` return its embedded
-  `ListViewerState`; override `get_text(item)` (read the owned collection) and
-  `is_selected(item)`.
-- `impl View for ListBox` — **delegate** `draw`/`handle_event`/`set_state`/
-  `cursor_request`/**`apply_list_scroll`**/`as_any_mut` to the `list_viewer::*` free
-  fns (forgetting `apply_list_scroll` silently loses scroll-sync — no compile error;
-  the trait doc warns about this).
-- **Typed value (D10):** first `value`/`set_value` consumer beyond `TInputLine` —
-  may pull in the still-deferred **dialog gather/scatter group-walk** (see below).
-  `newList`/`getText` over the collection; `cmListItemSelected` already wired in 28.
-- MECHANICAL but the **first consumer** of a fresh FOUNDATION seam → still worth a
-  careful two-stage review (it validates the trait ergonomics for all later list
-  widgets).
+### Row 32 `TApplication` (MECHANICAL) — the immediate next row
+- **`TApplication` (32, MECHANICAL)** — thin tile/cascade/dosShell wrapper over
+  `TProgram`; independent, slot in anytime. C++ `tapplica.cpp` — `TApplication`
+  is essentially `TProgram` + `initHistory`/`doneHistory` and the static
+  `cascade`/`tile`/`dosShell` helpers. Most of those need the desktop tile/cascade
+  geometry (`TDeskTop::tile`/`cascade`) which may itself be partly deferred —
+  scope it to what `TProgram` + `TDeskTop` already expose, breadcrumb the rest.
 
 ### Then, in PORT-ORDER order
-- **`TApplication` (32, MECHANICAL)** — thin tile/cascade/dosShell wrapper over
-  `TProgram`; independent, slot in anytime.
 - **Phase 4 — menus + status line** (the path to a fully drivable app):
 
   **Menus:** `TMenuItem`/`TSubMenu`/`TMenu` (46, FOUNDATION — the menu data tree;
