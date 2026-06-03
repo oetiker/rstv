@@ -50,31 +50,132 @@
 //!   menu-bar insert** (or have `Program` broadcast `cmCommandSetChanged` once at
 //!   startup) so the first paint is correct.
 
+use crate::color::Style;
 use crate::command::{Command, CommandSet};
 use crate::event::{Event, KeyEvent};
 use crate::menu::{Menu, MenuItem};
-use crate::view::{Context, ViewState};
+use crate::theme::Role;
+use crate::view::{Context, DrawCtx, Rect, View, ViewState};
 
 /// Runtime (view) state shared by the menu views — the `TMenuView` data members
 /// that the passive layer needs. The embed target `TMenuBar` (row 50) /
 /// `TMenuBox` (row 51) build on.
 ///
-/// The C++ `current` (the highlighted item) and `parentMenu` (the up-pointer to
-/// the owning menu) fields are **deferred**: only `execute()` / `trackMouse` /
-/// `getHelpCtx` consume them, all of which land with the modal layer (rows
-/// 50–52). They are omitted here per the omit-until-consumer rule; the rows that
-/// add `execute()` add them.
+/// The C++ `current` (the highlighted item) field is added here (rows 50/51): the
+/// draw layer ([`MenuBar`](crate::menu::MenuBar)/[`MenuBox`](crate::menu::MenuBox))
+/// reads it to pick the selected colour. The C++ `parentMenu` (the up-pointer to
+/// the owning menu) field is still **deferred**: only `execute()` / `trackMouse` /
+/// `getHelpCtx` (the Step-2 modal layer) consume it; the row that adds `execute()`
+/// adds it.
 pub struct MenuViewState {
     /// The embedded [`ViewState`] (`TView` data members).
     pub state: ViewState,
     /// The menu tree this view presents (C++ `TMenuView::menu`).
     pub menu: Menu,
+    /// `TMenuView::current` — the highlighted item, an **index** into
+    /// [`menu`](Self::menu)`.items` (C++ `TMenuItem* current`; `None` == C++
+    /// `current == 0`). Consistent with [`Menu::default`] (also an index). Draw
+    /// compares `Some(i) == current` to pick the selected colour; defaults to
+    /// `None` (nothing highlighted).
+    ///
+    /// `Option<usize>` fits every Step-2 `execute()` mutation already audited:
+    /// `current = menu->deflt` → index; `nextItem`/`prevItem` wrap by index;
+    /// `current = p` → index; `menu->deflt = current; current = 0` → set default +
+    /// `None`; `p == current` comparisons → index equality.
+    pub current: Option<usize>,
 }
 
 impl MenuViewState {
-    /// Build a menu-view state over `state` and `menu`.
+    /// Build a menu-view state over `state` and `menu`, with nothing highlighted
+    /// (`current = None`, the C++ `current == 0`). `current` is `pub`, so a caller
+    /// (or test) can set it directly.
     pub fn new(state: ViewState, menu: Menu) -> Self {
-        MenuViewState { state, menu }
+        MenuViewState {
+            state,
+            menu,
+            current: None,
+        }
+    }
+}
+
+/// `TMenuView` — the polymorphism seam between [`MenuBar`](crate::menu::MenuBar)
+/// and [`MenuBox`](crate::menu::MenuBox).
+///
+/// Row 49's "no trait yet" decision **flips** here: `getItemRect` and `draw` are
+/// the overridable virtuals that differ between bar and box, so (mirroring
+/// [`ListViewer`](crate::widgets::list_viewer::ListViewer)) the abstract base is a
+/// trait carrying the data accessors plus the overridable virtuals, while the
+/// passive shared logic ([`hot_key`]/[`update_menu_commands`]/[`handle_event`])
+/// stays as free functions over `&Menu`/[`MenuViewState`].
+///
+/// `get_item_rect`'s only callers (`trackMouse`/`execute`/`getHelpCtx`) are Step 2,
+/// but it ships **now, with `draw`,** deliberately: the item geometry and the draw
+/// layout are the *same contract* and must agree cell-for-cell; building +
+/// unit-testing them together locks that contract while the layout is fresh, and
+/// gives Step-2 navigation a verified substrate. The trait itself is the Step-2
+/// polymorphism seam (`execute()` will call `get_item_rect`/`draw`/`new_sub_view`
+/// on `MenuView` references).
+pub trait MenuView: View {
+    /// Borrow the embedded [`MenuViewState`].
+    fn mv(&self) -> &MenuViewState;
+    /// Mutably borrow the embedded [`MenuViewState`].
+    fn mv_mut(&mut self) -> &mut MenuViewState;
+
+    /// `TMenuView::getItemRect` — the screen rect of item `index` within this view.
+    /// Base returns an empty rect (C++ `TRect(0,0,0,0)`);
+    /// [`MenuBar`](crate::menu::MenuBar)/[`MenuBox`](crate::menu::MenuBox) override.
+    fn get_item_rect(&self, _index: usize) -> Rect {
+        Rect::new(0, 0, 0, 0)
+    }
+}
+
+/// The four `(lo, hi)` style pairs a menu item is drawn in — the C++ `getColor`
+/// matrix (`cNormal`/`cSelect`/`cNormDisabled`/`cSelDisabled`), resolved once per
+/// `draw`. Shared by [`MenuBar`](crate::menu::MenuBar) and
+/// [`MenuBox`](crate::menu::MenuBox) so the disabled/selected matrix lives in one
+/// place.
+#[derive(Clone, Copy)]
+pub struct MenuColors {
+    /// `cNormal = getColor(0x0301)` → `(MenuNormal, MenuNormalShortcut)`.
+    pub normal: (Style, Style),
+    /// `cSelect = getColor(0x0604)` → `(MenuSelected, MenuSelectedShortcut)`.
+    pub select: (Style, Style),
+    /// `cNormDisabled = getColor(0x0202)` → `MenuDisabled` for both lo and hi.
+    pub norm_disabled: (Style, Style),
+    /// `cSelDisabled = getColor(0x0505)` → `MenuSelectedDisabled` for both lo/hi.
+    pub sel_disabled: (Style, Style),
+}
+
+impl MenuColors {
+    /// Resolve the `cpMenuView` palette roles from the draw context's theme.
+    pub fn resolve(ctx: &DrawCtx) -> Self {
+        let d = ctx.style(Role::MenuDisabled);
+        let sd = ctx.style(Role::MenuSelectedDisabled);
+        MenuColors {
+            normal: (
+                ctx.style(Role::MenuNormal),
+                ctx.style(Role::MenuNormalShortcut),
+            ),
+            select: (
+                ctx.style(Role::MenuSelected),
+                ctx.style(Role::MenuSelectedShortcut),
+            ),
+            // Disabled rows: a single style for both lo and hi (no shortcut
+            // highlight when greyed).
+            norm_disabled: (d, d),
+            sel_disabled: (sd, sd),
+        }
+    }
+
+    /// The `(lo, hi)` pair for an item given its `disabled`/`selected` state — the
+    /// C++ `getColor` matrix, shared by command and submenu rows (bar and box).
+    pub fn item(&self, disabled: bool, selected: bool) -> (Style, Style) {
+        match (disabled, selected) {
+            (true, true) => self.sel_disabled,
+            (true, false) => self.norm_disabled,
+            (false, true) => self.select,
+            (false, false) => self.normal,
+        }
     }
 }
 

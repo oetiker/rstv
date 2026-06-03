@@ -1,0 +1,14 @@
+---
+source: src/menu/menu_bar.rs
+expression: "render(&mut bar, 8, 1)"
+---
+size: 8x1
+cursor: hidden
+text:
+|  File  |
+attr:
+|aabaaaaa|
+legend:
+  . default
+  a fg=BIOS(0) bg=BIOS(7)
+  b fg=BIOS(4) bg=BIOS(7)

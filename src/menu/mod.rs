@@ -33,8 +33,12 @@ use crate::command::Command;
 use crate::event::{Key, KeyEvent, KeyModifiers};
 use crate::help::HelpCtx;
 
+pub mod menu_bar;
+pub mod menu_box;
 pub mod menu_view;
-pub use menu_view::MenuViewState;
+pub use menu_bar::MenuBar;
+pub use menu_box::MenuBox;
+pub use menu_view::{MenuColors, MenuView, MenuViewState};
 
 /// A single menu entry. Ports `TMenuItem` (`menus.h`) — including the
 /// `TSubMenu` subclass and `newLine()` separator — collapsed into one

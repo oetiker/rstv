@@ -134,10 +134,28 @@ pub enum Role {
     /// a scroller inside a window remaps via the palette chain.
     /// `cpScroller` idx 2 (`ScrollerSelected`) is deferred to `TEditor` row 66.
     ScrollerNormal,
+    /// `TMenuView` normal item text (`cpMenuView "\x02\x03\x04\x05\x06\x07"`):
+    /// `getColor(0x0301)` lo → palette idx 1. Also the menu-bar background fill.
+    MenuNormal,
+    /// `TMenuView` normal item shortcut highlight: `getColor(0x0301)` hi → palette
+    /// idx 3.
+    MenuNormalShortcut,
+    /// `TMenuView` selected (highlighted) item text: `getColor(0x0604)` lo →
+    /// palette idx 4.
+    MenuSelected,
+    /// `TMenuView` selected item shortcut highlight: `getColor(0x0604)` hi →
+    /// palette idx 6.
+    MenuSelectedShortcut,
+    /// `TMenuView` disabled (greyed) item text: `getColor(0x0202)` → palette idx 2
+    /// for both lo and hi (no shortcut highlight when greyed).
+    MenuDisabled,
+    /// `TMenuView` selected-but-disabled item text: `getColor(0x0505)` → palette
+    /// idx 5 for both lo and hi.
+    MenuSelectedDisabled,
 }
 
 /// Number of [`Role`] variants — the fixed length of [`Theme`]'s style array.
-const ROLE_COUNT: usize = 44;
+const ROLE_COUNT: usize = 50;
 
 impl Role {
     /// Total mapping of each variant to its index into the style array.
@@ -190,6 +208,12 @@ impl Role {
             Role::InputSelected => 41,
             Role::InputArrow => 42,
             Role::ScrollerNormal => 43,
+            Role::MenuNormal => 44,
+            Role::MenuNormalShortcut => 45,
+            Role::MenuSelected => 46,
+            Role::MenuSelectedShortcut => 47,
+            Role::MenuDisabled => 48,
+            Role::MenuSelectedDisabled => 49,
         }
     }
 }
@@ -514,6 +538,19 @@ impl Theme {
         // `ScrollerSelected` (idx 2 = `0x24`) is deferred to `TEditor` row 66.
         set(&mut styles, Role::ScrollerNormal, 0x8, 0x2); // darkgray on green (0x28)
 
+        // Menu family (rows 50/51). Provisional values modelled on the classic
+        // menu look: a lightgray-on-black bar (`cpMenuView` resolves through
+        // `cpMenuBar`/`cpMenuView` into the app gray scheme), a green highlight
+        // for the selected item, a red shortcut accent, and darkgray for greyed
+        // items. Not authoritative — they realign with the deferred gray theming.
+        // TODO(row 34 gray theming): realign provisional menu colours.
+        set(&mut styles, Role::MenuNormal, 0x0, 0x7); // idx 1: black on lightgray
+        set(&mut styles, Role::MenuNormalShortcut, 0x4, 0x7); // idx 3: red on lightgray
+        set(&mut styles, Role::MenuSelected, 0xF, 0x2); // idx 4: white on green
+        set(&mut styles, Role::MenuSelectedShortcut, 0xE, 0x2); // idx 6: yellow on green
+        set(&mut styles, Role::MenuDisabled, 0x8, 0x7); // idx 2: darkgray on lightgray
+        set(&mut styles, Role::MenuSelectedDisabled, 0x8, 0x2); // idx 5: darkgray on green
+
         Theme {
             styles,
             glyphs: Glyphs::default(),
@@ -587,6 +624,12 @@ mod tests {
         Role::InputSelected,
         Role::InputArrow,
         Role::ScrollerNormal,
+        Role::MenuNormal,
+        Role::MenuNormalShortcut,
+        Role::MenuSelected,
+        Role::MenuSelectedShortcut,
+        Role::MenuDisabled,
+        Role::MenuSelectedDisabled,
     ];
 
     #[test]

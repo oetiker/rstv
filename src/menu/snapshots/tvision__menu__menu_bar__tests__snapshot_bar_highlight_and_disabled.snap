@@ -1,0 +1,17 @@
+---
+source: src/menu/menu_bar.rs
+expression: "render(&mut bar, 24, 1)"
+---
+size: 24x1
+cursor: hidden
+text:
+|  File  Edit  Window    |
+attr:
+|aabaaaacdcccceeeeeeeeaaa|
+legend:
+  . default
+  a fg=BIOS(0) bg=BIOS(7)
+  b fg=BIOS(4) bg=BIOS(7)
+  c fg=BIOS(15) bg=BIOS(2)
+  d fg=BIOS(14) bg=BIOS(2)
+  e fg=BIOS(8) bg=BIOS(7)

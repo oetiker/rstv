@@ -1,4 +1,4 @@
-# Session handover — Row 49 `TMenuView` passive layer DONE (Phase 4). Next (per PORT-ORDER): Row 50 `TMenuBar` / 51 `TMenuBox` / 52 `TMenuPopup` (the D9 popup-exec path + drawing + `execute()`), then status line 47/53
+# Session handover — Rows 50/51 `TMenuBar`/`TMenuBox` **DRAW/DATA layer** DONE (Phase 4). Next: the **Step-2 menu modal layer** — `execute()` as a capture-stack state machine + submenu recursion + `TMenuPopup` (52), then status line 47/53
 
 > Living handover for the **next** rstv session. Read this, then
 > [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md) (orientation /
@@ -15,25 +15,29 @@
 
 | commit | what |
 |--------|------|
-| `dfe66b1` | **TMenuView passive layer (49)** — command-graying broker + hotkey dispatch (FOUNDATION) ← THIS session |
+| _(uncommitted at handover write — see "What landed THIS session")_ | **TMenuBar/TMenuBox DRAW/DATA layer (50/51)** — `MenuView` trait + `current` + draw/getItemRect + 6 menu theme roles (FOUNDATION) ← THIS session |
+| `dfe66b1` | **TMenuView passive layer (49)** — command-graying broker + hotkey dispatch (FOUNDATION) |
 | `c5c061d` | **TMenu data tree (46)** — `MenuItem`/`Menu`/`MenuBuilder` (FOUNDATION) |
 | `fc66637` | **TListBox (48)** — first concrete `TListViewer` (MECHANICAL) |
 | `3e6645f` | **TApplication (32)** — thin D2 wrapper over `Program` (MECHANICAL) |
 | `47894f0…66ab55f` | **`#[delegate]` proc-macro** — `tvision-macros` crate + workspace, then **adopted** across cluster/Window/Dialog/ParamText/Label/Desktop + the hello example (replaces `cluster_wrapper!`) |
 
-**Build state:** 510 lib + 5 integration (3 `render_pipeline` + 2 `delegate_view`)
-+ 2 doctests green; `cargo clippy --workspace --all-targets -- -D warnings` and
-`cargo fmt --all --check` clean. **It is a Cargo workspace** (`tvision` +
-`tvision-macros`) — use `--workspace` for test/clippy/fmt. (Cargo artifacts land in
-`/home/oetiker/scratch/cargo-target` — set `CARGO_TARGET_DIR`.)
+**Build state:** 524 lib (was 510; +4 row-49 broker tests landed earlier, + the
+new menu draw/data tests this session) + 5 integration (3 `render_pipeline` + 2
+`delegate_view`) + 2 doctests green; `cargo clippy --workspace --all-targets -- -D
+warnings` and `cargo fmt --all --check` clean. **It is a Cargo workspace**
+(`tvision` + `tvision-macros`) — use `--workspace` for test/clippy/fmt. (Cargo
+artifacts land in `/home/oetiker/scratch/cargo-target` — set `CARGO_TARGET_DIR`.)
 
 **Phase 2 COMPLETE. Batch B (Phase-3 leaves) COMPLETE. Phase-1 row 32 COMPLETE.**
 **Phase 4 in progress — Row 46 `TMenu` data tree + Row 49 `TMenuView` passive
-layer DONE** (row 49 = THIS session, see below; row 46 + the `#[delegate]` macro +
-row 32 landed in prior sessions, sections further down).
-**Next incomplete in PORT-ORDER sequence: Row 50 `TMenuBar`** (then 51 `TMenuBox`,
-52 `TMenuPopup`), then status line 47/53. Batch C concrete validators 58–62 are an
-available parallel fan-out.
+layer + Rows 50/51 `TMenuBar`/`TMenuBox` DRAW/DATA layer DONE** (50/51 draw = THIS
+session, see below). **Deliberate split (advisor-vetted):** rows 50/51/52 were
+NOT landed together — this session shipped only the *draw/data* slice (independently
+snapshot-testable + committable), de-risking the modal work by giving it a verified
+substrate. **Next: the Step-2 menu modal layer** (`execute()` + navigation + submenu
+recursion + `TMenuPopup` 52), then status line 47/53. Batch C concrete validators
+58–62 are an available parallel fan-out.
 
 > **Worktrees** live under `/scratch/oetiker/claude-worktrees/<project>-<name>`
 > (global CLAUDE.md). A `WorktreeCreate` hook (`~/.claude/settings.json` →
@@ -44,7 +48,98 @@ available parallel fan-out.
 > create the worktree manually at the `/scratch` path + dispatch a non-isolated
 > subagent.
 
-## What landed THIS session — Row 49 `TMenuView` passive layer (FOUNDATION)
+## What landed THIS session — Rows 50/51 `TMenuBar`/`TMenuBox` DRAW/DATA layer (FOUNDATION)
+The **draw/data slice** of the menu views — drawing + geometry + the polymorphism
+seam, **no modal loop**. Brief: [`docs/briefs/row50-51-menu-draw.md`](file:///home/oetiker/checkouts/rstv/docs/briefs/row50-51-menu-draw.md)
+(advisor-vetted scope split) → Opus implementer → **full two-stage review** (spec
+then quality, fresh C++-adversarial Opus agents, both PASS) → 6 polish items (M1
+`MenuColors` unification + M2/N1 clarity + T1/T2/T4 edge-case tests) → integrate.
+
+- **The scope split (advisor-confirmed, overrides the old "50/51/52 land together"
+  framing):** `draw`/`getItemRect`/`getRect` read only `menu` + `current` — never the
+  modal state — so the draw layer is a clean, snapshot-testable slice. The modal
+  `execute()` loop, `TMenuPopup`, navigation, and the D9 async-modal path are a
+  **separate Step-2 design session** (see NEXT). Landing tested draw first de-risks
+  the modal work (verified substrate to navigate) — the HANDOVER itself conceded this
+  ordering ("each menu view needs getItemRect + draw *so* execute()'s nav is testable").
+- **The `MenuView` trait** (`src/menu/menu_view.rs`) — row 49's "no trait yet" decision
+  **flips** here: `get_item_rect`/`draw` ARE the overridable virtuals (bar ≠ box). Mirrors
+  the row-28 `ListViewer` shape: trait `MenuView: View` with `mv()/mv_mut()` accessors +
+  defaulted `get_item_rect(index) -> Rect` (base = empty rect, C++ `TRect(0,0,0,0)`); the
+  passive `hot_key`/`update_menu_commands`/`handle_event` stay as the row-49 **free fns**.
+  `mv()/mv_mut()` are unused now (the Step-2 polymorphism seam; reachable as pub-API trait
+  items so no `dead_code`).
+- **`MenuViewState.current: Option<usize>`** added (index into `menu.items`; `None` == C++
+  `current == 0`; consistent with `Menu::default`). Verified against every Step-2
+  `execute()` mutation (it fits all). **`parentMenu` still deferred** — draw/getItemRect
+  never read it; only the Step-2 modal-nav methods do.
+- **`TMenuBar`** (`src/menu/menu_bar.rs`): `draw` (`tmenubar.cpp:48` — bg fill + left-to-right
+  items, the `if x+l<size.x` clip with `x += l+2` advancing even when clipped, the 4-color
+  matrix), `get_item_rect` (horizontal accumulator, separators consume no x), ctor sets
+  `gfGrowHiX` + `ofPreProcess`. **`handle_event` delegates to the row-49 passive
+  `menu_view::handle_event`** (C++ `TMenuBar::handleEvent` *is* `TMenuView::handleEvent`,
+  not overridden) — so row 49 finally has a concrete consumer.
+- **`TMenuBox`** (`src/menu/menu_box.rs`): the `menu_box_rect` sizing helper (`getRect`,
+  `tmenubox.cpp:25`), `frame_line` (the `frameChars` table decoded to single-line box glyphs
+  from `Glyphs` — `frame_tl/tr/bl/br/h/v/tee_l/tee_r`; **note the faithful inset: cols 0 and
+  size.x-1 are blank**), `draw` (`tmenubox.cpp:80` — top border → one row per item → bottom;
+  per-line `color` fill split from `cNormal` borders; submenu `►` at size.x-4; param
+  right-aligned at size.x-3-cstrlen), `get_item_rect` (y from 1). Ctor sets `sfShadow` +
+  `ofPreProcess`. `handle_event` delegates to the passive layer (TMenuBox inherits it).
+- **Theme:** 6 `Role` variants for the `cpMenuView` palette (`MenuNormal`/`…Shortcut`/
+  `MenuSelected`/`…Shortcut`/`MenuDisabled`/`MenuSelectedDisabled`, idx 1/3/4/6/2/5).
+  Disabled roles use one style for both lo+hi (no shortcut highlight when greyed).
+  **Colours provisional** — `TODO(row 34 gray theming)`. Spec review resolved the faithful
+  `cpAppColor` bytes (the row-34 realignment target): cNormal lo=`0x70` hi=`0x74`,
+  cSelect lo=`0x20` hi=`0x24`, cNormDisabled=`0x78`, cSelDisabled=`0x28` (4 of 6 seeds are
+  already exact; the 2 selected-fg seeds are brightened, realign with the other provisional
+  Input/Scroller colours as one coherent pass).
+- **`MenuColors`** (`menu_view.rs`, pub) — the 4 `(lo,hi)` pairs + `resolve(&DrawCtx)` +
+  `.item(disabled, selected)`; shared by bar AND box (killed an 8-arg helper + its
+  `#[allow(too_many_arguments)]`).
+- **Verification:** 2 snapshots (bar highlight+disabled; box frame+highlight+disabled+
+  separator+param+submenu) + a 3rd narrow-bar snapshot (clip-skip branch) + bite-checked
+  unit tests for `get_item_rect` (bar+box) and `menu_box_rect` sizing (incl. a discriminating
+  submenu-`+3` test) + empty-menu no-panic + a `handle_event` accelerator-delegation smoke.
+  `cargo-insta` NOT installed → `.snap`s generated via `INSTA_UPDATE=always`, hand-verified,
+  committed.
+
+### NEXT — Step-2: the menu **modal layer** (`execute()` + nav + submenu recursion + `TMenuPopup` 52)
+**This is a fresh FOUNDATION design session — get the advisor to vet the approach before
+building.** The substrate is now in place (draw + geometry verified). The core challenge:
+map the C++ `TMenuView::execute()` (`tmnuview.cpp:179`) — a nested `getEvent` loop with
+loop-locals (`current`/`autoSelect`/`lastTargetItem`/`mouseActive`/`firstEvent`/`itemShown`)
+that opens submenus by **recursively** calling `owner->execView(target)` — onto our
+single-loop + capture-stack model (D9).
+
+- **Likely shape (verify before building — the old HANDOVER's "execute() = `OpenModal`" is a
+  mis-read):** D9 says modality is a **handler, not a loop**, so menu navigation is a
+  **capture stack** — one frame per open level; opening a submenu **pushes a capture frame +
+  inserts a `TMenuBox`** (a new deferred *insert-view* variant, NOT `OpenModal`), closing
+  pops. `execute()`'s loop-locals become **persistent state on the capture frame**.
+  `Deferred::OpenModal(Box<dyn View>)` is for a dialog a menu *command* launches (msgbox /
+  Batch E), **not** menu nav itself — confirm this distinction with the advisor first.
+- Adds to the trait: `parentMenu` + the nav methods (`trackMouse`/`trackKey`/`nextItem`/
+  `prevItem` — note the separator-skipping + `prevItem`-via-`nextItem`), `findItem`/
+  `findAltShortcut`, `do_a_select`/`newSubView`/`mouseInOwner`/`mouseInMenus`/`topMenu`,
+  `getHelpCtx`. The activation branches of `menu_view::handle_event` (evMouseDown / cmMenu /
+  alt-shortcut) get wired (currently breadcrumbed).
+- **`TMenuPopup` (52)** = `TMenuBox` + the `execute()`/`handleEvent` overrides (`menu->deflt
+  = 0`; `putClickEventOnExit = False`; ctrl-char + hotKey dispatch) + the `popupMenu()` free fn.
+- **Initial-regray gap to close (carried from row 49):** menus are born all-enabled (the
+  row-46 builder has no command set); the row-49 broker only regrays on a
+  `cmCommandSetChanged` broadcast, which does NOT fire at startup. So a menu holding a
+  startup-disabled command (`cmZoom`/`cmClose`/…) draws enabled until the first broadcast.
+  Fix at menu-bar insert: trigger an initial `Deferred::UpdateMenu` (or have `Program`
+  broadcast `cmCommandSetChanged` once at startup). `TODO(menu insert: trigger initial
+  UpdateMenu)` is breadcrumbed in `menu_bar.rs`.
+- **Wiring a real menu bar into `Program`** is the first emitter of `cmTile`/`cmCascade`/
+  `cmDosShell` → then wire the row-32 breadcrumb in `program_handle_event` + build
+  `Desktop::tile`/`cascade` geometry (see the row-32 breadcrumb section below), and revisit
+  the `program_handle_event` modal-isolation breadcrumb (suppress program-level interception
+  during a modal — C++'s nested `p->execute()` does this structurally).
+
+## Prior session — Row 49 `TMenuView` passive layer (FOUNDATION)
 The **passive (non-modal) layer** of `TMenuView` (`tmnuview.cpp`): command-graying
 + hotkey-accelerator dispatch, **no drawing / no modal loop** (those are 50–52).
 `src/menu/menu_view.rs`. Built main-thread/Opus-orchestrated: advisor-vetted brief
@@ -102,30 +197,9 @@ async-modal path and lands with the drawing subclasses.
   disable→`cmCommandSetChanged`→request→apply→disabled, bite-checked) + the
   accelerator-post path (enabled posts, regrayed-disabled posts nothing).
 
-### NEXT — Row 50 `TMenuBar` / 51 `TMenuBox` / 52 `TMenuPopup` (the menu modal layer)
-This is where the deferred `execute()` and the **D9 view-triggered async-modal path**
-(`Deferred::OpenModal(Box<dyn View>)` + a posted completion `Command`, guide D9
-"exec_view — corrected") get **built** — both `execView` calls in the C++
-(`do_a_select`→`owner->execView(this)` and `execute`'s submenu
-`owner->execView(target)`) are view-triggered modals needing this path. Each menu
-view also needs `getItemRect` + `draw` (so `execute()`'s navigation is testable). At
-that point introduce the `MenuView` trait + the `current`/`parentMenu` fields (the
-row-28 `ListViewer` trait + free-fn-over-state shape), and port the modal navigation
-(`trackMouse`/`trackKey`/`nextItem`/`prevItem` — note the subtle separator-skipping +
-`prevItem`-via-`nextItem`). `TMenuBar` (50) = horizontal layout; `TMenuBox` (51) =
-vertical popup box w/ frame glyphs (D7); `TMenuPopup` (52) = `popupMenu()` free fn +
-exec. **Initial-regray gap to close at 50/51:** the C++ `TMenuItem` ctor reads
-`commandEnabled` at construction, but our row-46 builder has no command set, so
-menus are born **all-enabled** and the row-49 broker only corrects them on a
-`cmCommandSetChanged` broadcast — which does **not** fire at startup
-(`default_command_set` seeds directly, no toggle). So a menu with a startup-disabled
-command (`cmZoom`/`cmClose`/`cmResize`/`cmNext`/`cmPrev`) would *draw* enabled until
-the first broadcast. Trigger an initial `Deferred::UpdateMenu` on menu-bar insert
-(or have `Program` broadcast `cmCommandSetChanged` once at startup) so the first
-paint is correct. Wiring a real menu bar into `Program` is the first emitter of
-`cmTile`/`cmCascade`/`cmDosShell` → then wire the row-32 breadcrumb in
-`program_handle_event` + build `Desktop::tile`/`cascade` geometry (see the row-32
-breadcrumb section below).
+_(The Step-2 modal-layer plan that previously lived here is now the **NEXT** section
+above — updated with the capture-stack-not-`OpenModal` framing + the carried
+initial-regray gap.)_
 
 ## Prior session — Row 46 `TMenu` data tree (FOUNDATION)
 First Phase-4 row: the **menu data tree** (`TMenuItem`/`TSubMenu`/`TMenu`,

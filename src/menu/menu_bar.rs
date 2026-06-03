@@ -1,0 +1,320 @@
+//! `TMenuBar` — the horizontal menu bar (`tmenubar.cpp`, rows 50/51).
+//!
+//! `TMenuBar` is a one-row [`MenuView`] that lays its top-level items out
+//! left-to-right. This row ports its **draw/data layer**: [`draw`](MenuBar::draw)
+//! ([`tmenubar.cpp:48`]) and [`get_item_rect`](MenuView::get_item_rect)
+//! ([`tmenubar.cpp:94`]). The modal `execute()` loop, navigation, and activation
+//! branches are Step 2; [`handle_event`](MenuBar::handle_event) delegates to the
+//! row-49 passive [`menu_view::handle_event`] (C++ `TMenuBar::handleEvent` *is*
+//! `TMenuView::handleEvent`, not overridden).
+//!
+//! This is **not** a D2 `View`-embed: [`MenuViewState`] embeds a [`ViewState`],
+//! not a `View`, so the `#[delegate]` macro does not apply — the differing `View`
+//! methods (`state`/`state_mut`/`draw`/`handle_event`) are hand-written, like
+//! [`ListBox`](crate::widgets::ListBox).
+//!
+//! ## Drops / deferrals (faithful, breadcrumbed)
+//!
+//! - `execute()`/navigation/activation → Step 2 (the breadcrumbs live in
+//!   [`menu_view::handle_event`]).
+//! - Initial command regray on insert — the row-49 doc flags that a menu bar
+//!   holding a startup-disabled command would draw it enabled until the first
+//!   `cmCommandSetChanged`. There is **no insert/Program wiring in this row's
+//!   scope** (Step 2 owns it). `TODO(menu insert: trigger initial UpdateMenu)`.
+//! - `TStreamable` (`build`) → D12 dropped.
+
+use crate::event::Event;
+use crate::menu::menu_view::{self, MenuColors, MenuView, MenuViewState};
+use crate::view::{Context, DrawCtx, Rect, View, ViewState};
+
+/// `cstrlen` — display width of a `~`-marked control string, **ignoring** the `~`
+/// markers (which are not printed columns). A per-module copy mirroring
+/// `button.rs` / `cluster.rs` (the established precedent), using the same
+/// `UnicodeWidthChar` primitive so widths match the rest of the renderer.
+fn cstrlen(s: &str) -> i32 {
+    s.chars()
+        .filter(|&c| c != '~')
+        .map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(1) as i32)
+        .sum()
+}
+
+/// `TMenuBar` — the horizontal menu bar. Holds the shared [`MenuViewState`]; the
+/// bar-specific layout lives in [`draw`](MenuBar::draw) /
+/// [`get_item_rect`](MenuView::get_item_rect).
+pub struct MenuBar {
+    mv: MenuViewState,
+}
+
+impl MenuBar {
+    /// Construct a menu bar over `bounds` presenting `menu` — ports
+    /// `TMenuBar::TMenuBar` (`tmenubar.cpp:27`).
+    ///
+    /// Faithful: `growMode = gfGrowHiX` (the bar stretches with the screen width)
+    /// and `options |= ofPreProcess` (it pre-processes focused-chain events, so it
+    /// sees accelerators before the focused view).
+    pub fn new(bounds: Rect, menu: crate::menu::Menu) -> Self {
+        let mut state = ViewState::new(bounds);
+        state.grow_mode.hi_x = true; // gfGrowHiX
+        state.options.pre_process = true; // ofPreProcess
+        MenuBar {
+            mv: MenuViewState::new(state, menu),
+        }
+    }
+}
+
+impl MenuView for MenuBar {
+    fn mv(&self) -> &MenuViewState {
+        &self.mv
+    }
+
+    fn mv_mut(&mut self) -> &mut MenuViewState {
+        &mut self.mv
+    }
+
+    /// `TMenuBar::getItemRect` (`tmenubar.cpp:94`) — the screen rect of item
+    /// `index`, by the horizontal accumulator.
+    ///
+    /// Faithful: start `r = (1, 0, 1, 1)`; for each item run `r.a.x = r.b.x`
+    /// **first**, then (only for a named item) `r.b.x += cstrlen(name) + 2`, then
+    /// return `r` once the loop index reaches `index`. A separator runs the
+    /// `r.a.x = r.b.x` step but adds nothing, so it consumes no horizontal space —
+    /// faithful to the C++ `while(True)` walk (only ever called with an existing
+    /// index).
+    fn get_item_rect(&self, index: usize) -> Rect {
+        let mut r = Rect::new(1, 0, 1, 1);
+        for (i, item) in self.mv.menu.items.iter().enumerate() {
+            r.a.x = r.b.x;
+            if !matches!(item, crate::menu::MenuItem::Separator) {
+                r.b.x += cstrlen(item_name(item)) + 2;
+            }
+            if i == index {
+                return r;
+            }
+        }
+        // The C++ loop never exits without a match (it is only called with a valid
+        // index); return the last accumulated rect as a defensive fallback.
+        r
+    }
+}
+
+impl View for MenuBar {
+    fn state(&self) -> &ViewState {
+        &self.mv.state
+    }
+
+    fn state_mut(&mut self) -> &mut ViewState {
+        &mut self.mv.state
+    }
+
+    /// `TMenuBar::draw` (`tmenubar.cpp:48`) — fill the bar then lay the named items
+    /// out left-to-right, each with a leading + trailing space, in the per-item
+    /// colour.
+    ///
+    /// Colour matrix (`getColor`, resolved via [`MenuColors`]): `cNormal = 0x0301`,
+    /// `cSelect = 0x0604`, `cNormDisabled = 0x0202` (lo==hi), `cSelDisabled =
+    /// 0x0505` (lo==hi).
+    ///
+    /// The C++ `TDrawBuffer` + `writeBuf(0,0,size.x,1,b)` becomes direct
+    /// view-local [`DrawCtx`] writes (D8 — no `DrawBuffer`).
+    fn draw(&mut self, ctx: &mut DrawCtx) {
+        let colors = MenuColors::resolve(ctx);
+
+        let size = self.mv.state.size;
+        // b.moveChar(0, ' ', cNormal, size.x) — fill the whole bar.
+        ctx.fill(Rect::new(0, 0, size.x, 1), ' ', colors.normal.0);
+
+        let mut x = 1;
+        for (i, item) in self.mv.menu.items.iter().enumerate() {
+            let name = match item {
+                crate::menu::MenuItem::Separator => continue, // C++ p->name == 0 skip
+                other => item_name(other),
+            };
+            let l = cstrlen(name);
+            if x + l < size.x {
+                let disabled = item_disabled(item);
+                let selected = self.mv.current == Some(i);
+                let (lo, hi) = colors.item(disabled, selected);
+                // b.moveChar(x, ' ', color, 1); moveCStr(x+1, name, color);
+                // moveChar(x+l+1, ' ', color, 1).
+                ctx.put_char(x, 0, ' ', lo);
+                ctx.put_cstr(x + 1, 0, name, lo, hi);
+                ctx.put_char(x + l + 1, 0, ' ', lo);
+            }
+            x += l + 2;
+        }
+    }
+
+    /// `TMenuBar::handleEvent` — `TMenuBar` does **not** override
+    /// `TMenuView::handleEvent`, so this delegates to the row-49 passive
+    /// [`menu_view::handle_event`] (command-graying broadcast + accelerator post;
+    /// the activation/modal branches are breadcrumbed there for Step 2).
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
+        menu_view::handle_event(&self.mv, ev, ctx);
+    }
+}
+
+/// The display label of a named menu item. Never called on a [`Separator`], which
+/// has no name (the C++ `p->name == 0` branch is handled by the caller).
+///
+/// [`Separator`]: crate::menu::MenuItem::Separator
+fn item_name(item: &crate::menu::MenuItem) -> &str {
+    match item {
+        crate::menu::MenuItem::Command { name, .. }
+        | crate::menu::MenuItem::SubMenu { name, .. } => name,
+        crate::menu::MenuItem::Separator => "",
+    }
+}
+
+/// The `disabled` flag of a menu item (`false` for a [`Separator`], which is never
+/// greyed).
+///
+/// [`Separator`]: crate::menu::MenuItem::Separator
+fn item_disabled(item: &crate::menu::MenuItem) -> bool {
+    match item {
+        crate::menu::MenuItem::Command { disabled, .. }
+        | crate::menu::MenuItem::SubMenu { disabled, .. } => *disabled,
+        crate::menu::MenuItem::Separator => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::{HeadlessBackend, Renderer};
+    use crate::command::Command;
+    use crate::menu::{Menu, alt};
+    use crate::screen::Buffer;
+    use crate::theme::Theme;
+
+    /// A `File`/`Edit`/`Window` bar — three top-level submenus.
+    fn sample_bar(bounds: Rect) -> MenuBar {
+        let menu = Menu::builder()
+            .submenu("~F~ile", alt('f'), |m| m.command("~O~pen", Command::OPEN))
+            .submenu("~E~dit", alt('e'), |m| m.command("~C~ut", Command::CUT))
+            .submenu("~W~indow", alt('w'), |m| m.command("~N~ext", Command::NEXT))
+            .build();
+        MenuBar::new(bounds, menu)
+    }
+
+    fn render(bar: &mut MenuBar, w: u16, h: u16) -> String {
+        let theme = Theme::classic_blue();
+        let (backend, screen) = HeadlessBackend::new(w, h);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = bar.state().get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            bar.draw(&mut dc);
+        });
+        screen.snapshot()
+    }
+
+    // -- ctor ---------------------------------------------------------------
+
+    #[test]
+    fn ctor_sets_grow_and_preprocess() {
+        let bar = sample_bar(Rect::new(0, 0, 30, 1));
+        assert!(bar.mv.state.grow_mode.hi_x, "gfGrowHiX set");
+        assert!(bar.mv.state.options.pre_process, "ofPreProcess set");
+        assert_eq!(bar.mv.current, None, "nothing highlighted at construction");
+    }
+
+    // -- get_item_rect ------------------------------------------------------
+
+    #[test]
+    fn get_item_rect_accumulates_horizontally() {
+        // " File  Edit  Window " — each item is a leading space + name + trailing
+        // space, so item i occupies [x, x + cstrlen + 2).
+        //   File: cstrlen 4 -> [1, 7)
+        //   Edit: cstrlen 4 -> [7, 13)
+        //   Window: cstrlen 6 -> [13, 21)
+        let bar = sample_bar(Rect::new(0, 0, 30, 1));
+
+        let file = bar.get_item_rect(0);
+        assert_eq!((file.a.x, file.b.x), (1, 7), "File occupies cols [1, 7)");
+
+        let edit = bar.get_item_rect(1);
+        // BITE: forgetting the `r.a.x = r.b.x` carry would yield (1, 13) — b.x
+        // still accumulates (7 -> 13), only a.x stays 1. The correct (7, 13) proves
+        // Edit starts where File ended (7), not at 1.
+        assert_eq!(
+            (edit.a.x, edit.b.x),
+            (7, 13),
+            "Edit starts where File ended"
+        );
+
+        let window = bar.get_item_rect(2);
+        assert_eq!(
+            (window.a.x, window.b.x),
+            (13, 21),
+            "Window starts where Edit ended"
+        );
+        // y span is always the single bar row [0, 1).
+        assert_eq!((window.a.y, window.b.y), (0, 1));
+    }
+
+    #[test]
+    fn get_item_rect_separator_consumes_no_x() {
+        // A bar with a separator between two named items: the separator runs
+        // r.a.x = r.b.x but adds nothing, so the item after it starts where the
+        // item before it ended.
+        let menu = Menu::builder()
+            .submenu("~F~ile", alt('f'), |m| m.command("~O~pen", Command::OPEN))
+            .separator()
+            .submenu("~E~dit", alt('e'), |m| m.command("~C~ut", Command::CUT))
+            .build();
+        let bar = MenuBar::new(Rect::new(0, 0, 30, 1), menu);
+
+        // File (idx 0): [1, 7).
+        assert_eq!((bar.get_item_rect(0).a.x, bar.get_item_rect(0).b.x), (1, 7));
+        // Separator (idx 1): r.a.x = r.b.x = 7, no advance -> [7, 7).
+        let sep = bar.get_item_rect(1);
+        assert_eq!(
+            (sep.a.x, sep.b.x),
+            (7, 7),
+            "separator consumes no horizontal space"
+        );
+        // Edit (idx 2): starts at 7 (NOT pushed by the separator).
+        // BITE: a "separator advances x" bug would put Edit at [9, 15) or similar.
+        let edit = bar.get_item_rect(2);
+        assert_eq!(
+            (edit.a.x, edit.b.x),
+            (7, 13),
+            "item after a separator starts where the previous named item ended"
+        );
+    }
+
+    // -- draw snapshots -----------------------------------------------------
+
+    #[test]
+    fn snapshot_bar_highlight_and_disabled() {
+        // Edit is highlighted (current = 1); Window is disabled (greyed).
+        let mut bar = sample_bar(Rect::new(0, 0, 24, 1));
+        bar.mv.current = Some(1);
+        if let crate::menu::MenuItem::SubMenu { disabled, .. } = &mut bar.mv.menu.items[2] {
+            *disabled = true;
+        }
+        insta::assert_snapshot!(render(&mut bar, 24, 1));
+    }
+
+    #[test]
+    fn snapshot_bar_narrow_drops_overflowing_item() {
+        // Width 8: File occupies [1, 7) (x=1, l=4 -> 1+4 < 8 true, drawn). After
+        // File, x = 7; Edit has l=4 -> 7+4 < 8 is FALSE, so Edit is NOT drawn but
+        // x still advances (the `if x+l < size.x` false branch). This exercises the
+        // clipped-item path the wide bar never hits.
+        let menu = Menu::builder()
+            .submenu("~F~ile", alt('f'), |m| m.command("~O~pen", Command::OPEN))
+            .submenu("~E~dit", alt('e'), |m| m.command("~C~ut", Command::CUT))
+            .build();
+        let mut bar = MenuBar::new(Rect::new(0, 0, 8, 1), menu);
+        insta::assert_snapshot!(render(&mut bar, 8, 1));
+    }
+
+    #[test]
+    fn draw_empty_menu_does_not_panic() {
+        // An empty menu: the bar fills its background and the item loop is a no-op.
+        // Cheapest guard against an index/iter edge case.
+        let mut bar = MenuBar::new(Rect::new(0, 0, 12, 1), Menu::builder().build());
+        let _ = render(&mut bar, 12, 1); // completes without panic.
+    }
+}
