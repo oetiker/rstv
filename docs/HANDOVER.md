@@ -12,8 +12,10 @@
 | `3483760` | **TLabel (41)** + focus-by-ViewId deferred tree-op seam |
 | `b6e029b` | docs: HANDOVER disambiguation (prior session) |
 | `43e5c68` | **Validator wave — TValidator (35) + TInputLine (39) + D10 `value`/`set_value`** ← THIS session |
+| `32fbb0e` | docs: validator wave DONE → Batch B COMPLETE; HANDOVER → Phase 4 |
+| `8ea87cb` | test: end-to-end modal `valid()`-veto (exec_view → Dialog → Group → InputLine) |
 
-**Build state:** 439 lib + 3 integration + 2 doctests green; `cargo clippy
+**Build state:** 440 lib + 3 integration + 2 doctests green; `cargo clippy
 --all-targets -- -D warnings` and `cargo fmt --check` clean. Working tree clean.
 (Cargo artifacts land in `/home/oetiker/scratch/cargo-target` — set
 `CARGO_TARGET_DIR`.)
@@ -54,6 +56,17 @@ agents). Brief: `docs/briefs/row35-39-validator-inputline.md`.
   `begin` column-skip), 3 theme roles `Input{Normal,Selected,Arrow}` (provisional
   gray, `TODO(row 34 gray theming)`) + 2 glyphs (◄ U+25C4 / ► U+25BA), `cmValid`,
   `State::cursor_ins`.
+- **End-to-end veto test (`8ea87cb`, advisor-flagged):** the headline
+  `InputLine::valid()` behavior — a modal must NOT close on OK while a child's
+  validator rejects — lived only in isolated widget tests. The actual veto is in
+  `exec_view`'s outer `while !valid(end_state)` loop. New integration test in
+  `program.rs`: a `Dialog` + `InputLine` + `RejectAll` validator, driven through
+  `exec_view` with pre-queued `[cmOK, cmCancel]`, asserts the result is **cmCancel**
+  (cmOK vetoed, modal stayed open) + the `ModalFrame` popped. Bite-verified; **no
+  bug in the veto path** (`exec_view` honors `valid()` correctly). The `[OK,
+  CANCEL]` shape is deliberate — `[OK]` alone loops forever (a permanently-rejecting
+  field can never close, which IS faithful). + a `#[cfg(test)] Dialog::insert_child`
+  hook.
 
 ### Deferred + breadcrumbed THIS session (grep the TODOs)
 - **clipboard** cmCut/cmCopy/cmPaste — no `Context` clipboard seam (backend has
