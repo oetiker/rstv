@@ -1,4 +1,4 @@
-# Session handover — menu **modal layer COMPLETE** (Step-2 stage 3 = `TMenuPopup` 52 DONE, Phase 4). Next: **status line 47/53**, then wire a real menu bar + status line into `Program`
+# Session handover — **status line COMPLETE** (rows 47 `TStatusItem`/`TStatusDef` + 53 `TStatusLine` draw/data slice DONE, Phase 4). Next: **wire a real menu bar + status line into `Program`** (the drivable-app payoff)
 
 > Living handover for the **next** rstv session. Read this, then
 > [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md) (orientation /
@@ -15,6 +15,7 @@
 
 | commit | what |
 |--------|------|
+| `df3b8b9` | **Status line (rows 47 + 53) — `TStatusItem`/`TStatusDef` data + `TStatusLine` draw/data slice** — `src/status/` (`mod.rs` data + builder, `status_line.rs` view). The standalone snapshot-testable view (NOT yet wired into `Program`, mirroring how the menu draw layer landed before the modal/Program wiring). `HelpCtxRange::{All, OneOf(Vec<HelpCtx>)}` replaces C++'s numeric `[min,max]` help-ctx ranges (D1 corollary — string `HelpCtx` has no ordering); `StatusItem.text: Option<String>` (`None` = the hidden global-hotkey item: draws nothing, no width, but the keyDown loop matches it); command-graying via a cached `CommandSet` on the **view** (the `update_menu_commands` broker hook + `cmCommandSetChanged`→`request_update_menu`, NOT a field on `StatusItem` — faithful to C++ computing `commandEnabled` live). 6 `Status*` theme `Role`s. 551→576 tests (FOUNDATION) ← THIS session |
 | `add2947` | **Menu MODAL layer Step-2 stage 3 (52) — `TMenuPopup`** — the LAST modal piece: `put_click_event_on_exit` flag on `MenuSession` (gates the bottom-level exit-click re-post; bar/box `true`, popup `false`), popup level starts `current=None` + clears its menu clone's `default` (`menu->deflt=0`), `popup_menu()` free fn + `auto_place_popup` geometry (faithful `popupMenu`/`autoPlacePopup`); `end_session_with` reworked to a kind-keyed (`is_bar`) teardown (a popup's level 0 IS a box). `TMenuPopup::handleEvent` moot/dropped (Ctrl+letter TODO). 545→551 tests (FOUNDATION) ← THIS session |
 | `93d6d35` | **Menu MODAL layer Step-2 stage 2 (50–52)** — the **mouse** arms of the flattened `execute()`: `track_mouse`/`mouse_in_view`/`mouse_in_owner`/`mouse_in_menus`, `evMouseDown`/`Up`/`Move` step arms + per-level loop-locals (`last_target_item`/`mouse_active`/`first_event`); stage-1 `handle_key` refactored into one shared `run()` loop (kbd+mouse+cmMenu); `evMouseDown` bar activation (`do_a_select`) + `activate_mouse`; cmMenu routed through `run()` (FOUNDATION) |
 | `ed0abfa` | **Menu MODAL layer Step-2 stage 1 (50–52)** — `MenuSession` capture handler = flattened `execute()`; keyboard nav + submenu recursion + the `putEvent`→parent re-apply loop; new `Deferred::OpenMenuBox`/`SetMenuCurrent` + `ctx.put_event` + `Group::insert_with_id` + `View::set_menu_current` (FOUNDATION) |
@@ -25,9 +26,9 @@
 | `3e6645f` | **TApplication (32)** — thin D2 wrapper over `Program` (MECHANICAL) |
 | `47894f0…66ab55f` | **`#[delegate]` proc-macro** — `tvision-macros` crate + workspace, then **adopted** across cluster/Window/Dialog/ParamText/Label/Desktop + the hello example (replaces `cluster_wrapper!`) |
 
-**Build state:** 551 lib (was 545; +6 this session: 3 `program.rs` popup `pump_once`
-tests, 2 `auto_place_popup` geometry unit tests, 1 submenu-popup exit-click carry-up
-test) + 5 integration (3 `render_pipeline` + 2 `delegate_view`) + 2
+**Build state:** 576 lib (was 551; +25 this session: the row-47/53 status-line
+module — `mod.rs` data/builder tests + `status_line.rs` view tests incl. 4
+snapshots) + 5 integration (3 `render_pipeline` + 2 `delegate_view`) + 2
 doctests green; `cargo clippy --workspace --all-targets -- -D warnings` and `cargo
 fmt --all --check` clean (verify clippy with a forced re-lint — a cached run can
 mask a fresh warning). **It is a Cargo workspace**
@@ -37,14 +38,14 @@ artifacts land in `/home/oetiker/scratch/cargo-target` — set `CARGO_TARGET_DIR
 **Phase 2 COMPLETE. Batch B (Phase-3 leaves) COMPLETE. Phase-1 row 32 COMPLETE.**
 **Phase 4 in progress — Row 46 `TMenu` data tree + Row 49 `TMenuView` passive
 layer + Rows 50/51 draw/data + the menu MODAL layer Step-2 stages 1 (keyboard), 2
-(mouse) AND 3 (`TMenuPopup` 52) ALL DONE** (stage 3 = THIS session, see below). **The
-menu modal layer (rows 46/49/50/51/52) is now COMPLETE** — the whole flattened
-`TMenuView::execute()` (bar + box + popup, keyboard + mouse) is ported. (The modal
-layer was advisor-vetted staged: stage 1 keyboard, stage 2 mouse, stage 3
-`TMenuPopup` — each independently testable/committable.) **Next: status line 47/53**,
-then **wire a real menu bar + status line into `Program`** (the drivable-app payoff;
-first emitter of `cmTile`/`cmCascade`/`cmDosShell`). Batch C concrete validators
-58–62 are an available parallel fan-out.
+(mouse) AND 3 (`TMenuPopup` 52) ALL DONE** (a prior session). **The
+menu modal layer (rows 46/49/50/51/52) is COMPLETE** — the whole flattened
+`TMenuView::execute()` (bar + box + popup, keyboard + mouse) is ported. **Status
+line rows 47 (`TStatusItem`/`TStatusDef`) + 53 (`TStatusLine` draw/data slice) are
+now also DONE** (THIS session, see below). **Next: wire a real menu bar + status
+line into `Program`** (the drivable-app payoff; first emitter of
+`cmTile`/`cmCascade`/`cmDosShell`). Batch C concrete validators 58–62 are an
+available parallel fan-out.
 
 > **Worktrees** live under `/scratch/oetiker/claude-worktrees/<project>-<name>`
 > (global CLAUDE.md). A `WorktreeCreate` hook (`~/.claude/settings.json` →
@@ -55,7 +56,76 @@ first emitter of `cmTile`/`cmCascade`/`cmDosShell`). Batch C concrete validators
 > create the worktree manually at the `/scratch` path + dispatch a non-isolated
 > subagent.
 
-## What landed THIS session — menu MODAL layer Step-2 stage 3 (`TMenuPopup` 52) (FOUNDATION)
+## What landed THIS session — status line (rows 47 + 53) (FOUNDATION)
+The **draw/data slice** of the status line — a standalone, snapshot-testable
+`TStatusLine` view (the `TProgram` getEvent/idle wiring is a separate next step,
+mirroring how the menu draw layer landed before its modal/Program wiring). Brief:
+[`docs/briefs/row47-53-status-line.md`](file:///home/oetiker/checkouts/rstv/docs/briefs/row47-53-status-line.md)
+(advisor-vetted) → Opus implementer → **full two-stage review** (SPEC then QUALITY,
+fresh C++-adversarial Opus agents — both PASS, no blockers) → 3 MINOR fixes →
+integrate. New `src/status/` module (`mod.rs` + `status_line.rs` + 4 snapshots) +
+`lib.rs`/`theme.rs` wiring. 551→576 tests.
+
+- **`StatusItem` / `StatusDef` (row 47, `src/status/mod.rs`)** — pure data + a
+  fluent builder (mirrors `MenuBuilder`). **`StatusItem.text: Option<String>`** is
+  load-bearing: `None` (C++ `text == 0`) is a **hidden global-hotkey item** — it
+  draws nothing AND consumes no horizontal space (the `i += l+2` advance is *inside*
+  `if(text != 0)` in both `drawSelect` and `itemMouseIsIn`), but the (deferred)
+  keyDown loop still matches it to fire its command. `key_code: Option<KeyEvent>`
+  (`None` = `kbNoKey`).
+- **`HelpCtxRange::{All, OneOf(Vec<HelpCtx>)}`** — **THE one real deviation** (a D1
+  corollary). C++ `TStatusDef(min, max, items)` selects its items by a **numeric**
+  help-context range `[min,max]`; our `HelpCtx` (D1) is a namespaced `&'static str`
+  with **no ordering**, so contiguous integer ranges become an explicit membership
+  set. `All` = the universal `[0,0xFFFF]` def every real app uses; `OneOf(set)` = the
+  rare context-split (tvdemo `[0,50]`/`[50,0xffff]`). `find_items` = first-match walk;
+  multi-def selection is faithful-but-unexercised this row (nothing sets a non-default
+  help ctx yet) — supported in the data model + unit-tested via `set_help_ctx`.
+- **Command graying via a cached `CommandSet` on the VIEW, NOT a field on
+  `StatusItem`** (the advisor-flagged crux; the menu precedent misleads here).
+  `TMenuItem` has a real `disabled` field the menu broker mutates; **`TStatusItem`
+  has none** — C++ `drawSelect` calls `commandEnabled(T->command)` **live**. So the
+  view caches one `Option<CommandSet>` snapshot (refreshed by the **same**
+  `update_menu_commands` broker hook + the `cmCommandSetChanged`→`request_update_menu`
+  broadcast arm, reused verbatim from the menu); `draw` tests `cmd_set.has(cmd)`,
+  treating an unset cache as all-enabled (the same startup-regray gap menus carry).
+  Status items are **flat** — the hook is non-recursive (unlike the menu's tree walk).
+- **`draw` = `drawSelect(0)`** (faithful `tstatusl.cpp:62`): bg fill in `cNormal`,
+  per-item leading/trailing space + `put_cstr`, the `i+l < size.x` clip, the 2×2
+  color matrix (reuses the menu's `(enabled, selected)` shape via a `StatusColors`
+  helper that mirrors `MenuColors` but reads the 6 new `Status*` roles), and the
+  hint tail (`if i < size.x-2` → `│ ` separator (U+2502) + clipped hint via the
+  `hint` closure). **Themes only, no palettes** — colors resolve from `Theme` via
+  `Role` (`getPalette`/`getColor`/`cpStatusLine` are NOT ported; the C++ palette
+  bytes only seeded the provisional theme colors, `TODO(row 34 gray theming)`).
+- **`hint()` virtual → `Box<dyn Fn(HelpCtx) -> Option<String>>` closure** on the view
+  (default `|_| None`; `with_hint`/`set_hint` setters) — the idiomatic port of the
+  overridable C++ `virtual hint`.
+- **`handle_event`:** the **mouse** arm (single-shot, faithful to the C++
+  press-and-hold deferral): `item_mouse_is_in` hit-test (`mouse.y!=0→None`; `[i,k)`
+  accumulation skipping textless items) → enabled-check → `ctx.post(cmd)` →
+  unconditional `ev.clear()`. The **broadcast** arm: `cmCommandSetChanged` →
+  `ctx.request_update_menu(self_id)` (the menu pattern).
+- **Deferred + breadcrumbed (NOT stubbed):** the **keyDown global-accelerator arm**
+  (deferred to the Program-wiring step — its "transform the event into evCommand
+  in place and `return` WITHOUT clearing, so it propagates" semantics only make sense
+  inside `getEvent`'s pre-routing; it must NOT be ported as `ctx.post`+clear, which
+  double-handles); `TProgram` getEvent pre-routing + `idle()→update()`;
+  `update()`/`TopView::getHelpCtx` auto-refresh (`find_items`/`set_help_ctx` ARE
+  ported + tested; only the auto-trigger is deferred); the press-and-hold
+  drag-highlight (`drawSelect(Some)` hover); streaming (D12); `disposeItems`/dtor (moot,
+  owned `Vec`s).
+- **Verification:** 25 status tests — 4 snapshots (normal+disabled, hint tail,
+  narrow overflow-drop, textless-item-no-width) + bite-checked units for
+  `find_items` (first-match order bite), `item_mouse_is_in` (textless-neighbour
+  unaffected; col-out-of-range→None), the empty-hint skip, and both broker ends
+  (broadcast arm queues `Deferred::UpdateMenu(self_id)`; the hook caches + grays).
+  A full `pump_once` chain test was substituted with the two end-unit-tests (the
+  `Program` test harness is `#[cfg(test)]`-private to the `program` module; the
+  `Deferred::UpdateMenu → update_menu_commands` link is already covered there for
+  menus) — QUALITY review judged the substitution acceptable.
+
+## Prior session — menu MODAL layer Step-2 stage 3 (`TMenuPopup` 52) (FOUNDATION)
 The **last modal piece** of the flattened `TMenuView::execute()` — standalone popup
 menus — mapped onto the single `MenuSession` capture handler as three additive deltas
 (no new seam). Brief: [`docs/briefs/row52-tmenupopup.md`](file:///home/oetiker/checkouts/rstv/docs/briefs/row52-tmenupopup.md)
@@ -100,13 +170,13 @@ integrate. `src/menu/menu_session.rs` + re-exports + 6 tests.
   1 submenu-popup carry-up exit-click (the SPEC-flagged previously-only-reasoned path),
   2 `auto_place_popup` geometry units (below-right; bottom-edge shift-up). 551 lib green.
 
-### NEXT — **status line 47/53**, then wire a real menu bar + status line into `Program`
-The menu modal layer is COMPLETE (bar+box+popup, keyboard+mouse). Next in PORT-ORDER:
+### NEXT — **wire a real menu bar + status line into `Program`**
+The menu modal layer AND the status-line draw/data slice are both COMPLETE. The
+remaining Phase-4 work is the integration that makes a drivable app — and it is the
+home for the status line's deferred arms (the keyDown global accelerator + the
+`getEvent` pre-routing + `idle()→update()`/`TopView` help-ctx refresh, all
+breadcrumbed in `status_line.rs`):
 
-- **Row 47 `TStatusItem`/`TStatusDef`** (MECHANICAL, `menus.h` inline) — status-item
-  data (text/key/cmd, help-ctx ranges). Pure data, mirrors the row-46 `TMenu` shape.
-- **Row 53 `TStatusLine`** (FOUNDATION, `tstatusl.cpp`) — owns `TStatusDef`/`TStatusItem`;
-  `hint()`; help-ctx → hint mapping; draws the bottom bar; posts item commands on click.
 - **Wire a real menu bar + status line into `Program`** (the drivable-app payoff): lets
   `examples/hello.rs` grow a working menu bar + status line. **First emitter of
   `cmTile`/`cmCascade`/`cmDosShell`** → wire the row-32 breadcrumb in
@@ -118,6 +188,17 @@ The menu modal layer is COMPLETE (bar+box+popup, keyboard+mouse). Next in PORT-O
   `program_handle_event` modal-isolation breadcrumb (suppress program-level
   interception while a `MenuSession` is active) and the `ModalFrame`/`DragCapture`
   "(0,0)-desktop absolute-coords" caveats (the bar shifts the desktop down).
+- **Land the status line's deferred arms with this wiring** (all breadcrumbed in
+  `src/status/status_line.rs`): (a) `TProgram::getEvent` pre-routes `evKeyDown`
+  (always) + `evMouseDown` (when the mouse is over the status line) to
+  `statusLine->handleEvent` *before* normal dispatch; (b) the **keyDown
+  global-accelerator arm** — match `event.keyDown == item.key_code &&
+  commandEnabled` over **all** items (incl. textless ones), then transform the
+  event to `evCommand` **in place, propagate** (do NOT `ctx.post`+clear —
+  double-handles); (c) `TProgram::idle → statusLine->update()` reads the modal
+  `TopView`'s `getHelpCtx()` and re-runs the already-ported `find_items`
+  (`set_help_ctx` is the hook); (d) the press-and-hold drag-highlight
+  `drawSelect(Some)` hover loop (D9).
 
 Batch C concrete validators 58–62 (`tvalidat.cpp`) remain an available parallel fan-out.
 
@@ -661,8 +742,9 @@ command-set query" was resolved for menus as the row-49 **`Deferred::UpdateMenu`
 broker** (NOT a `Context` read-accessor — that earlier framing is obsolete; the
 broker is the established pattern). Remaining Phase-4 work, in order:
 
-- **Status line:** `TStatusItem`/`TStatusDef` (47, MECHANICAL data) → `TStatusLine`
-  (53, FOUNDATION — hint()/help-ctx→hint mapping).
+- **Status line:** `TStatusItem`/`TStatusDef` (47) + `TStatusLine` draw/data slice
+  (53) — **DONE** (see "What landed THIS session" above). Same broker pattern,
+  cached on the view. Its interactive arms land with the Program wiring below.
 - **Wire a real menu bar + status line into `Program`** — lets the
   `examples/hello.rs` demo grow a real menu bar + status line (and shifts the desktop
   down — revisit the `ModalFrame`/`DragCapture` "(0,0)-desktop absolute-coords"
