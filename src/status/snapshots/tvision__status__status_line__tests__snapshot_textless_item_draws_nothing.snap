@@ -1,0 +1,13 @@
+---
+source: src/status/status_line.rs
+expression: "render(&mut line, 40, 1)"
+---
+size: 40x1
+cursor: hidden
+text:
+| Visible                                |
+attr:
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(0) bg=BIOS(7)

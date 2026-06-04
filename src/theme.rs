@@ -152,10 +152,29 @@ pub enum Role {
     /// `TMenuView` selected-but-disabled item text: `getColor(0x0505)` → palette
     /// idx 5 for both lo and hi.
     MenuSelectedDisabled,
+    /// `TStatusLine` normal item text (`cpStatusLine`): `cNormal = getColor(0x0301)`
+    /// lo → palette idx 1 (`0x70`, black on lightgray). Also the row background fill.
+    StatusNormal,
+    /// `TStatusLine` normal item shortcut highlight: `cNormal` hi → palette idx 3
+    /// (`0x74`, red on lightgray).
+    StatusShortcut,
+    /// `TStatusLine` selected (hovered) item text: `cSelect = getColor(0x0604)`
+    /// lo → palette idx 4 (`0x20`, black on green).
+    StatusSelect,
+    /// `TStatusLine` selected item shortcut highlight: `cSelect` hi → palette idx 6
+    /// (`0x24`, red on green).
+    StatusShortcutSelect,
+    /// `TStatusLine` disabled (greyed) item text: `cNormDisabled = getColor(0x0202)`
+    /// → palette idx 2 (`0x78`, darkgray on lightgray) for both lo and hi.
+    StatusDisabled,
+    /// `TStatusLine` selected-but-disabled item text: `cSelDisabled =
+    /// getColor(0x0505)` → palette idx 5 (`0x28`, darkgray on green) for both
+    /// lo and hi.
+    StatusSelDisabled,
 }
 
 /// Number of [`Role`] variants — the fixed length of [`Theme`]'s style array.
-const ROLE_COUNT: usize = 50;
+const ROLE_COUNT: usize = 56;
 
 impl Role {
     /// Total mapping of each variant to its index into the style array.
@@ -214,6 +233,12 @@ impl Role {
             Role::MenuSelectedShortcut => 47,
             Role::MenuDisabled => 48,
             Role::MenuSelectedDisabled => 49,
+            Role::StatusNormal => 50,
+            Role::StatusShortcut => 51,
+            Role::StatusSelect => 52,
+            Role::StatusShortcutSelect => 53,
+            Role::StatusDisabled => 54,
+            Role::StatusSelDisabled => 55,
         }
     }
 }
@@ -551,6 +576,21 @@ impl Theme {
         set(&mut styles, Role::MenuDisabled, 0x8, 0x7); // idx 2: darkgray on lightgray
         set(&mut styles, Role::MenuSelectedDisabled, 0x8, 0x2); // idx 5: darkgray on green
 
+        // Status-line family (rows 47/53). Provisional values decoded from the
+        // classic `cpStatusLine` bytes (resolved through `cpAppColor`), each
+        // attr byte being `bg<<4 | fg`: idx1 `0x70` (black on lightgray),
+        // idx2 `0x78` (darkgray on lightgray), idx3 `0x74` (red on lightgray),
+        // idx4 `0x20` (black on green), idx5 `0x28` (darkgray on green), idx6
+        // `0x24` (red on green). Not authoritative — they realign with the
+        // deferred gray theming. TODO(row 34 gray theming): realign provisional
+        // status-line colours.
+        set(&mut styles, Role::StatusNormal, 0x0, 0x7); // 0x70: black on lightgray
+        set(&mut styles, Role::StatusShortcut, 0x4, 0x7); // 0x74: red on lightgray
+        set(&mut styles, Role::StatusSelect, 0x0, 0x2); // 0x20: black on green
+        set(&mut styles, Role::StatusShortcutSelect, 0x4, 0x2); // 0x24: red on green
+        set(&mut styles, Role::StatusDisabled, 0x8, 0x7); // 0x78: darkgray on lightgray
+        set(&mut styles, Role::StatusSelDisabled, 0x8, 0x2); // 0x28: darkgray on green
+
         Theme {
             styles,
             glyphs: Glyphs::default(),
@@ -630,6 +670,12 @@ mod tests {
         Role::MenuSelectedShortcut,
         Role::MenuDisabled,
         Role::MenuSelectedDisabled,
+        Role::StatusNormal,
+        Role::StatusShortcut,
+        Role::StatusSelect,
+        Role::StatusShortcutSelect,
+        Role::StatusDisabled,
+        Role::StatusSelDisabled,
     ];
 
     #[test]

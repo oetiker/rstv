@@ -79,6 +79,7 @@ pub mod frame;
 pub mod help;
 pub mod menu;
 pub mod screen;
+pub mod status;
 pub mod text;
 pub mod theme;
 pub mod timer;
@@ -107,6 +108,7 @@ pub use menu::{
     Menu, MenuBar, MenuBox, MenuBuilder, MenuItem, MenuView, MenuViewState, popup_menu,
 };
 pub use screen::{Buffer, Cell, DrawBuffer};
+pub use status::{HelpCtxRange, StatusColors, StatusDef, StatusItem, StatusLine};
 pub use theme::{Role, Theme};
 pub use timer::{Clock, ManualClock, SystemClock, TimerId, TimerQueue};
 pub use tvision_macros::delegate;
