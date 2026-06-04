@@ -110,13 +110,13 @@ impl Desktop {
         self.background
     }
 
-    /// Test hook: insert an arbitrary view (a window) directly into the embedded
-    /// group, returning its id. Used by the 33d-2 round-trip tests, which must
-    /// place windows *inside the desktop* (the cmNext/cmPrev/Alt-N handlers live
-    /// on the desktop) — there is no production window-insert seam yet
-    /// (`tile`/`cascade` land later).
-    #[cfg(test)]
-    pub(crate) fn insert_view(&mut self, view: Box<dyn View>) -> ViewId {
+    /// Insert an arbitrary view (a window) directly into the embedded group,
+    /// returning its id — the production window-insert seam (faithful to the public
+    /// `TGroup::insert` that `TDeskTop` inherits). Windows must live *inside the
+    /// desktop* because the `cmNext`/`cmPrev`/Alt-N handlers live on it. Used by the
+    /// 33d-2 round-trip tests and by app code that pre-populates the desktop (see
+    /// `examples/hello.rs`); the geometry-laying `tile`/`cascade` helpers land later.
+    pub fn insert_view(&mut self, view: Box<dyn View>) -> ViewId {
         self.group.insert(view)
     }
 }

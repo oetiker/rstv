@@ -105,7 +105,7 @@ pub use event::{
 pub use frame::Frame;
 pub use help::HelpCtx;
 pub use menu::{
-    Menu, MenuBar, MenuBox, MenuBuilder, MenuItem, MenuView, MenuViewState, popup_menu,
+    Menu, MenuBar, MenuBox, MenuBuilder, MenuItem, MenuView, MenuViewState, alt, popup_menu,
 };
 pub use screen::{Buffer, Cell, DrawBuffer};
 pub use status::{HelpCtxRange, StatusColors, StatusDef, StatusItem, StatusLine};

@@ -44,8 +44,13 @@
 //!   `canMoveFocus` == `deskTop.valid(cmReleasedFocus)`). Not a payload broadcast —
 //!   the window number is an integer, not a `ViewId`.
 //! * Status-line / menu-bar real subviews + the `getEvent` status-line
-//!   pre-handling + `statusLine->update()` → **Phase 4** (factories return `None`
-//!   for now).
+//!   pre-handling → **Phase 4, DONE.** A real bar/line are inserted by the factory
+//!   closures (see `examples/hello.rs`), their ids are held
+//!   ([`menu_bar`](Program::menu_bar) / [`status_line`](Program::status_line)) and
+//!   seeded with the initial command-graying in [`Program::new`], and
+//!   [`pump_once`](Program::pump_once) pre-routes keyDown / over-the-line mouseDown
+//!   to the status line before normal dispatch. `statusLine->update()` is
+//!   omit-until-consumer (see the breadcrumb in `pump_once`'s idle arm).
 //! * Timer-id payload (which timer fired) → revisit when a widget needs it (D4
 //!   dropped the `infoPtr` that carried it; several designs are possible — do not
 //!   invent one now).
@@ -230,6 +235,15 @@ pub struct Program {
     command_set: CommandSet,
     /// The inserted desktop child's id (`canMoveFocus` / Alt-N target).
     desktop: Option<ViewId>,
+    /// The inserted menu-bar child's id (`TProgram::menuBar`), if one was created.
+    /// Held so the ctor can seed its initial command-graying and so future rows can
+    /// route to it; the pump itself does not read it (see the `pump_once`
+    /// destructure, where it is bound `_`).
+    menu_bar: Option<ViewId>,
+    /// The inserted status-line child's id (`TProgram::statusLine`), if one was
+    /// created. The `getEvent` pre-routing in [`pump_once`](Self::pump_once) reads
+    /// it to hand keyDown / over-the-line mouseDown events to the line first.
+    status_line: Option<ViewId>,
     /// `TGroup::endState` — `Some(cmd)` ends the (modal) loop.
     end_state: Option<Command>,
     /// `TProgram::commandSetChanged` — set on an enable/disable change, broadcast
@@ -283,14 +297,32 @@ impl Program {
         // Each factory receives the full extent and owns its own shrinking
         // (initDeskTop: r.a.y++; r.b.y--, etc.); for row 31 the factory does it.
         let mut desktop = None;
+        let mut status_line = None;
+        let mut menu_bar = None;
         if let Some(view) = create_desktop(extent) {
             desktop = Some(group.insert(view));
         }
         if let Some(view) = create_status_line(extent) {
-            group.insert(view);
+            status_line = Some(group.insert(view));
         }
         if let Some(view) = create_menu_bar(extent) {
-            group.insert(view);
+            menu_bar = Some(group.insert(view));
+        }
+
+        // INITIAL REGRAY (the carried gap). The menu bar / status line are born
+        // all-enabled and only regray on a `cmCommandSetChanged` broadcast, which
+        // does NOT fire at startup (it is queued only by an enable/disable change).
+        // We hold `group` + the command set here, so seed each view's
+        // command-graying cache directly via the established broker hook
+        // (`View::update_menu_commands`) — no need to defer (the deferred queue is
+        // not drained on the first idle pump anyway). C++ gets this for free because
+        // `commandEnabled` is read live in `drawSelect`; our snapshot cache must be
+        // primed once at construction.
+        let command_set = default_command_set();
+        for id in [menu_bar, status_line].into_iter().flatten() {
+            if let Some(v) = group.find_mut(id) {
+                v.update_menu_commands(&command_set);
+            }
         }
 
         // Make the desktop current so focused (key/command) events route into it.
@@ -312,8 +344,10 @@ impl Program {
             theme,
             out_events,
             deferred,
-            command_set: default_command_set(),
+            command_set,
             desktop,
+            menu_bar,
+            status_line,
             end_state: None,
             command_set_changed: false,
         }
@@ -322,6 +356,17 @@ impl Program {
     /// The desktop child's id, if a desktop was created.
     pub fn desktop(&self) -> Option<ViewId> {
         self.desktop
+    }
+
+    /// The menu-bar child's id, if a menu bar was created (`TProgram::menuBar`).
+    pub fn menu_bar(&self) -> Option<ViewId> {
+        self.menu_bar
+    }
+
+    /// The status-line child's id, if a status line was created
+    /// (`TProgram::statusLine`).
+    pub fn status_line(&self) -> Option<ViewId> {
+        self.status_line
     }
 
     /// `TProgram::endModal` — request the (modal) loop end with `cmd`. Ports
@@ -627,6 +672,11 @@ impl Program {
             deferred,
             command_set,
             desktop,
+            // The menu bar is not read by the pump (its events route through the
+            // normal group dispatch / preProcess phase); bind it `_` so the
+            // exhaustive destructure does not trip `-D warnings`.
+            menu_bar: _,
+            status_line,
             end_state,
             command_set_changed,
         } = self;
@@ -672,15 +722,58 @@ impl Program {
                 for id in timers.collect_expired(now) {
                     out_events.push_back(Event::Timer(id));
                 }
-                // TODO(TStatusLine row): statusLine->update() is a no-op until the
-                // status line lands (Phase 4).
+                // TProgram::idle's statusLine->update() (re-run findItems against
+                // the top view's getHelpCtx + redraw) is OMITTED-UNTIL-CONSUMER: with
+                // the universal TStatusDef(0, 0xFFFF) (`All`) def every real app + our
+                // demo uses, find_items is INVARIANT — it selects the same def for any
+                // help context, so update() is observably inert. Adding it would force
+                // a View::get_help_ctx method + a TopView resolver with no consumer
+                // (the row-34 omit-until-consumer rule). Revisit when a context-split
+                // (`OneOf`) status line lands and the selected def actually depends on
+                // the focused view's help context.
             }
             // 5. Event present -> dispatch.
             Some(mut ev) => {
-                // TODO(TStatusLine row): getEvent's status-line pre-handling — a
-                // keydown, or a mousedown whose firstThat(viewHasMouse) is the
-                // status line, is handed to the status line BEFORE normal routing.
-                // No-op with the status line stubbed; realize it in Phase 4.
+                // getEvent status-line pre-routing (tprogram.cpp:153). keyDown
+                // always; mouseDown only when the status line is the topmost view
+                // under the cursor (firstThat(viewHasMouse) == statusLine) — else
+                // its unconditional clear would eat a click meant for the desktop /
+                // a dialog. This runs BEFORE drop_disabled + captures.dispatch
+                // because C++ getEvent pre-routes regardless of modal state, so
+                // accelerators (F10 → cmMenu, Alt-X → cmQuit) must fire even while a
+                // modal dialog is open. The keyDown arm transforms `ev` into
+                // Event::Command in place (no clear), so the SAME live `ev` flows on
+                // into normal dispatch and routes; the mouseDown arm posts the hit
+                // item's command to `out_events` and clears `ev` (routed next pump).
+                if let Some(sl) = *status_line {
+                    let pre = match &ev {
+                        Event::KeyDown(_) => true,
+                        Event::MouseDown(m) => group.topmost_child_at(m.position) == Some(sl),
+                        _ => false,
+                    };
+                    if pre && let Some(v) = group.find_mut(sl) {
+                        // LATENT COUPLING: the pre-route must not queue a Deferred —
+                        // the deferred drain below is gated on `!ev.is_nothing()`, and
+                        // a cleared mouseDown (the status line always clears) skips it.
+                        // Safe today because the status line only defers from its
+                        // Broadcast arm, which is never pre-routed (pre is keyDown /
+                        // mouseDown only). Revisit if a pre-routed arm ever defers.
+                        //
+                        // Translate a mouse position into the status line's own frame
+                        // before handing it over: normally Group::deliver does this
+                        // (subtract the child's bounds top-left == makeLocal), but the
+                        // pre-route bypasses the group router. A keyDown carries no
+                        // position, so this is a no-op for the accelerator path. The
+                        // status line always clears a MouseDown, so mutating `ev` in
+                        // place is safe (nothing downstream reads the position).
+                        let origin = v.state().get_bounds().a;
+                        if let Event::MouseDown(m) = &mut ev {
+                            m.position -= origin;
+                        }
+                        let mut ctx = Context::new(out_events, timers, now, deferred);
+                        v.handle_event(&mut ev, &mut ctx);
+                    }
+                }
 
                 // Command filtering at the program boundary (D1): drop a disabled
                 // command before routing. Broadcasts/keys/mouse flow regardless.
@@ -4355,5 +4448,337 @@ mod tests {
             0,
             "the session popped (the box returned, the bar's mouse_active arm ended it)"
         );
+    }
+
+    // -- Phase 4: real menu bar + status line wired into Program --------------
+    //
+    // These exercise the FULL factory path (Program::new builds + inserts a real
+    // MenuBar and StatusLine, seeds their initial command graying, and pump_once
+    // pre-routes keyDown / over-the-line mouseDown to the status line BEFORE
+    // normal dispatch). Unlike `program_with_menu_bar` above (which inserts a bar
+    // by hand), this drives the production construction.
+    mod wiring {
+        use super::*;
+        use crate::menu::{Menu, alt};
+        use crate::status::{StatusDef, StatusLine};
+        use crate::view::ViewId;
+
+        /// `Alt-X` — the canonical quit accelerator.
+        fn alt_x() -> Event {
+            Event::KeyDown(KeyEvent::new(
+                Key::Char('x'),
+                KeyModifiers {
+                    alt: true,
+                    ..Default::default()
+                },
+            ))
+        }
+
+        /// `F10` — the menu accelerator.
+        fn f10() -> Event {
+            Event::KeyDown(KeyEvent::new(Key::F(10), KeyModifiers::default()))
+        }
+
+        /// `Alt-X` as a `KeyEvent` (for menu/status accelerators).
+        fn alt_x_key() -> KeyEvent {
+            KeyEvent::new(
+                Key::Char('x'),
+                KeyModifiers {
+                    alt: true,
+                    ..Default::default()
+                },
+            )
+        }
+
+        /// A demo menu: File ▸ Exit (cmQuit), Window ▸ Next (cmNext).
+        fn demo_menu() -> Menu {
+            Menu::builder()
+                .submenu("~F~ile", alt('f'), |m| {
+                    m.command_key("E~x~it", Command::QUIT, alt_x_key(), "Alt-X")
+                })
+                .submenu("~W~indow", alt('w'), |m| m.command("~N~ext", Command::NEXT))
+                .build()
+        }
+
+        /// A demo status line: labelled Alt-X Exit + F10 Menu, plus textless F5
+        /// Zoom (a startup-DISABLED command, for the regray test).
+        fn demo_status() -> Vec<StatusDef> {
+            StatusDef::list()
+                .def_all(|d| {
+                    d.item("~Alt-X~ Exit", alt_x_key(), Command::QUIT)
+                        .item("~F10~ Menu", KeyEvent::from(Key::F(10)), Command::MENU)
+                        .key_item(KeyEvent::from(Key::F(5)), Command::ZOOM)
+                })
+                .build()
+        }
+
+        /// Build a program with a real desktop + status line + menu bar through the
+        /// factory closures (the production path). Returns the program, the
+        /// headless screen handle, and the (status_line, menu_bar) ids.
+        fn program_full(w: u16, h: u16) -> (Program, HeadlessHandle, ViewId, ViewId) {
+            let (backend, handle) = HeadlessBackend::new(w, h);
+            let theme = Theme::classic_blue();
+            let clock = Rc::new(ManualClock::new(0));
+            let program = Program::new(
+                Box::new(backend),
+                Box::new(clock),
+                theme,
+                |r| {
+                    let mut r = r;
+                    r.a.y += 1;
+                    r.b.y -= 1;
+                    Some(Box::new(Desktop::new(r, |br| {
+                        Some(Desktop::init_background(br))
+                    })))
+                },
+                |r| {
+                    let mut r = r;
+                    r.a.y = r.b.y - 1;
+                    Some(Box::new(StatusLine::new(r, demo_status())))
+                },
+                |r| {
+                    let mut r = r;
+                    r.b.y = r.a.y + 1;
+                    Some(Box::new(MenuBar::new(r, demo_menu())))
+                },
+            );
+            let mut program = program;
+            // Drain the startup desktop-focus RECEIVED_FOCUS broadcast that
+            // Program::new queues (program.rs:299), exactly like
+            // `program_with_desktop` (program.rs:1204) — so a test's first injected
+            // event is the one the first pump consumes (else it is off by one).
+            program.out_events.clear();
+            let sl = program.status_line().expect("status line created");
+            let mb = program.menu_bar().expect("menu bar created");
+            (program, handle, sl, mb)
+        }
+
+        // -- 1. Full-screen layout snapshot -----------------------------------
+
+        #[test]
+        fn snapshot_full_screen_layout() {
+            // 40x10: menu bar pinned at row 0, status line at row 9, desktop in
+            // between. Proves the inset (desktop r.a.y++/r.b.y--).
+            let (mut program, handle, _sl, _mb) = program_full(40, 10);
+            program.pump_once();
+            insta::assert_snapshot!(handle.snapshot());
+        }
+
+        // -- 2. F10 -> menu opens (status-line keyDown accelerator) -----------
+
+        #[test]
+        fn f10_enters_menu_via_status_accelerator() {
+            // F10 is pre-routed to the status line, transformed in place to
+            // Event::Command(cmMenu), then propagates through normal dispatch to
+            // the menu bar (preProcess) which activates a session (pushes a
+            // capture). Proves the keyDown accelerator -> propagation.
+            let (mut program, _handle, _sl, _mb) = program_full(40, 10);
+            assert_eq!(program.capture_len(), 0, "no session open at startup");
+            program.out_events.push_back(f10());
+            program.pump_once();
+            assert_eq!(
+                program.capture_len(),
+                1,
+                "F10 -> cmMenu -> the bar activated a menu session (a pushed capture)"
+            );
+        }
+
+        // -- 3. Alt-X -> quit (ONE pump: transform-in-place propagates) -------
+
+        #[test]
+        fn alt_x_quits_in_one_pump() {
+            // Alt-X pre-routed -> transformed to cmQuit IN PLACE -> the SAME live
+            // event flows through drop_disabled (cmQuit is enabled) ->
+            // program_handle_event's cmQuit catch sets end_state. One pump.
+            let (mut program, _handle, _sl, _mb) = program_full(40, 10);
+            program.out_events.push_back(alt_x());
+            program.pump_once();
+            assert_eq!(
+                program.end_state(),
+                Some(Command::QUIT),
+                "Alt-X reaches the status line, becomes cmQuit, ends the loop in one pump"
+            );
+        }
+
+        // -- 4. THE crux: the accelerator fires DURING a modal -----------------
+
+        #[test]
+        fn accelerator_fires_during_a_modal() {
+            // Push a ModalFrame directly (a dialog is open), then inject Alt-X.
+            // Because the getEvent pre-routing runs BEFORE captures.dispatch, the
+            // status line still sees the key, transforms it to cmQuit, and it
+            // routes -> end_state set. BITE: moving the pre-route to AFTER
+            // captures.dispatch makes this fail (the ModalFrame would gate, and the
+            // raw keyDown — not yet a command — would never reach the status line).
+            let (mut program, _handle, _sl, _mb) = program_full(40, 10);
+            // A synthetic modal occupying a central rect.
+            let modal_id = ViewId::next();
+            let bounds = Rect::new(5, 3, 35, 8);
+            program
+                .captures
+                .push(Box::new(ModalFrame::new(modal_id, bounds)));
+            assert_eq!(program.capture_len(), 1, "modal frame pushed");
+
+            program.out_events.push_back(alt_x());
+            program.pump_once();
+            assert_eq!(
+                program.end_state(),
+                Some(Command::QUIT),
+                "Alt-X reaches the status line even with a modal open (pre-route is BEFORE dispatch)"
+            );
+        }
+
+        /// Positive end-to-end: Alt-X pre-queued, then exec_view drives the modal
+        /// loop — the accelerator ends the modal (returns QUIT). Mirrors the C++
+        /// "cmQuit from a modal" path our exec_view documents.
+        #[test]
+        fn alt_x_ends_an_exec_view_modal() {
+            let (mut program, _handle, _sl, _mb) = program_full(40, 10);
+            // Pre-queue Alt-X so the first modal pump pre-routes it -> cmQuit ->
+            // end_state, ending exec_view (else it would spin on headless).
+            program.out_events.push_back(alt_x());
+            let dialog = crate::dialog::Dialog::new(Rect::new(8, 3, 32, 7), Some("Modal".into()));
+            let result = program.exec_view(Box::new(dialog));
+            assert_eq!(
+                result,
+                Command::QUIT,
+                "the modal ended on the Alt-X accelerator"
+            );
+        }
+
+        // -- 5. mouseDown pre-route gating ------------------------------------
+
+        #[test]
+        fn mouse_down_on_status_line_posts_its_command() {
+            // DISCRIMINATING (mirrors the keyDown modal crux): the pre-route's ONLY
+            // observable difference from normal positional routing is that it runs
+            // BEFORE captures.dispatch — so a click on the status line still reaches
+            // it even when a modal capture gate would otherwise swallow it. Push a
+            // ModalFrame whose bounds EXCLUDE the status-line row (rows 0..9, the
+            // line is row 9), then click the line at "Alt-X Exit" (span [0, 12)):
+            // normal routing would be gated out (the click is outside the modal ->
+            // ModalFrame returns Consumed), so only the pre-route can deliver it.
+            // The line posts cmQuit + clears; cmQuit routes next pump.
+            //
+            // BITE: removing the mouseDown pre-route arm makes the modal gate eat the
+            // click -> the line never posts -> end_state stays None -> red.
+            let (mut program, _handle, _sl, _mb) = program_full(40, 10);
+            let modal_id = ViewId::next();
+            // Modal covers rows 0..9 — the whole screen EXCEPT the status-line row.
+            program
+                .captures
+                .push(Box::new(ModalFrame::new(modal_id, Rect::new(0, 0, 40, 9))));
+
+            program.out_events.push_back(mouse_down_at(2, 9));
+            program.pump_once(); // pre-route delivers to the line: posts cmQuit, clears
+            program.pump_once(); // posted cmQuit routes -> cmQuit catch
+            assert_eq!(
+                program.end_state(),
+                Some(Command::QUIT),
+                "a click on the status line is pre-routed even past a modal gate that excludes it"
+            );
+        }
+
+        #[test]
+        fn mouse_down_in_desktop_reaches_the_desktop_not_the_cleared_line() {
+            // DISCRIMINATING: the mouseDown gate's REAL job is preventing the status
+            // line's unconditional ev.clear() from eating a click meant for the
+            // desktop. A desktop-area click (NOT row h-1) must NOT be pre-routed, so
+            // it survives to normal routing and reaches the view under it. We insert
+            // a Probe at the click point and assert it RECEIVED the MouseDown.
+            //
+            // BITE: removing the `topmost_child_at(..) == Some(sl)` guard pre-routes
+            // the desktop click to the status line, whose mouse arm clears it (misses
+            // every item, y translates out of range) -> the cleared event skips
+            // normal routing -> the Probe never sees it -> red.
+            let (mut program, _handle, _sl, _mb) = program_full(40, 10);
+            let log: Rc<RefCell<Vec<Event>>> = Rc::new(RefCell::new(Vec::new()));
+            // A Probe covering a desktop-area rect (rows 1..8, between bar and line).
+            // Inserted into the ROOT group on top of the desktop so it is the topmost
+            // child at the click point (and records the MouseDown it receives).
+            let mut probe = Probe::new(Rect::new(10, 3, 30, 7), 'P', log.clone());
+            // ofFirstClick: deliver the focusing click to the view too (else the
+            // auto-select-on-click in route_event clears it before `deliver`).
+            probe.state_mut().options.first_click = true;
+            program.group_mut().insert(Box::new(probe));
+            program.out_events.clear(); // drop the insert's focus broadcast
+
+            program.out_events.push_back(mouse_down_at(20, 5));
+            program.pump_once();
+            assert!(
+                log.borrow()
+                    .iter()
+                    .any(|e| matches!(e, Event::MouseDown(_))),
+                "a desktop-area click is NOT pre-routed/cleared and reaches the view under it"
+            );
+            assert_eq!(
+                program.end_state(),
+                None,
+                "and it posts no spurious status-line command"
+            );
+        }
+
+        // -- 6. Initial regray (no pump needed) -------------------------------
+
+        #[test]
+        fn initial_regray_greys_startup_disabled_commands() {
+            // cmZoom is NOT in default_command_set (a startup-disabled window
+            // command). After Program::new, the status line's cached command set
+            // must already reflect that (seeded directly in the ctor — no pump),
+            // and the menu has no cmZoom item but the bar's Window>Next (cmNext,
+            // also startup-disabled) must be greyed.
+            let (mut program, _handle, sl, mb) = program_full(40, 10);
+
+            // Status line: cmd_set cached immediately, cmZoom disabled, cmQuit enabled.
+            let cs = program
+                .group_mut()
+                .find_mut(sl)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_ref::<StatusLine>())
+                .expect("status line resolves")
+                .cmd_set()
+                .cloned();
+            let cs = cs.expect("initial regray seeded the status-line command-set cache (no pump)");
+            assert!(cs.has(Command::QUIT), "cmQuit enabled at startup");
+            assert!(
+                !cs.has(Command::ZOOM),
+                "cmZoom is a startup-disabled command -> greyed in the cache"
+            );
+
+            // Menu bar: Window > Next (cmNext, startup-disabled) must be greyed.
+            let next_disabled = program
+                .group_mut()
+                .find_mut(mb)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_ref::<MenuBar>())
+                .map(|bar| {
+                    let window = &bar.menu().items[1]; // index 1 == ~W~indow
+                    match window {
+                        crate::menu::MenuItem::SubMenu { menu, .. } => {
+                            matches!(&menu.items[0], crate::menu::MenuItem::Command { disabled, .. } if *disabled)
+                        }
+                        _ => panic!("expected the Window submenu"),
+                    }
+                })
+                .expect("menu bar resolves");
+            assert!(
+                next_disabled,
+                "cmNext (startup-disabled) is greyed in the bar immediately after Program::new"
+            );
+        }
+
+        /// BITE for the initial regray: without the ctor seeding, the status-line
+        /// cache would stay None (all-enabled). We can't easily disable the ctor
+        /// seed, so this asserts the DISCRIMINATING fact the seed provides: a fresh
+        /// `StatusLine` (never seeded) reports `cmd_set() == None` and treats
+        /// everything as enabled — the gap the ctor closes.
+        #[test]
+        fn bite_unseeded_status_line_is_all_enabled() {
+            let line = StatusLine::new(Rect::new(0, 0, 40, 1), demo_status());
+            assert!(
+                line.cmd_set().is_none(),
+                "an unseeded line has no cache (the startup gap Program::new closes by seeding)"
+            );
+        }
     }
 }

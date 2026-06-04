@@ -1,33 +1,38 @@
 //! `hello` — a minimal Turbo Vision application, written in the shape a
-//! magiblot/tvision (C++) veteran will recognise on sight.
+//! magiblot/tvision (C++) veteran will recognise on sight: a desktop with a
+//! patterned background and a few windows, a menu bar at the top, and a status
+//! line at the bottom, all driven by the real `TProgram::run` event loop.
 //!
 //! The C++ skeleton this mirrors:
 //!
 //! ```cpp
-//! class TAboutDialog : public TDialog {           // a custom dialog subclass
-//! public:
-//!     TAboutDialog(TRect);
-//!     virtual void draw();                         // custom interior painting
-//! };
-//!
 //! class HelloApp : public TApplication {
 //!     static TDeskTop    *initDeskTop(TRect);
-//!     static TStatusLine *initStatusLine(TRect);   // Phase 4 (stubbed below)
-//!     static TMenuBar    *initMenuBar(TRect);      // Phase 4 (stubbed below)
+//!     static TStatusLine *initStatusLine(TRect);
+//!     static TMenuBar    *initMenuBar(TRect);
 //! };
 //!
 //! int main() {
 //!     HelloApp app;
-//!     app.run();                                   // opens dialogs from a menu
+//!     app.run();          // spins the event loop until cmQuit
 //! }
 //! ```
 //!
-//! What is not yet ported (menus, status line, buttons, static text) is stubbed
-//! and flagged. A finished app would spin `app.run()` and open this dialog from a
-//! menu command; until menus land we open it directly with the *same* modal
-//! primitive a menu would use — `execView` (`Program::exec_view`).
+//! Run it:  `cargo run --example hello`
+//!   - `F10` enters the menu bar; arrows + Enter navigate it.
+//!   - `Alt-F`/`Alt-W` open the File / Window menus by hot-key.
+//!   - `Alt-X` (or File → Exit) quits.
+//!   - `F5` zooms the current window, `Alt-F3` closes it, `Ctrl-F6` / `F6` cycle.
+//!   - `Alt-1`..`Alt-3` select a window by number.
 //!
-//! Run it:  `cargo run --example hello`  (Esc or the close box to quit).
+//! **Known limitation:** menu items can only wire commands that already *route*.
+//! Opening a dialog from a menu needs the D9 `OpenModal` async-modal path (row 63),
+//! which is not built yet — so this demo's menu wires only window-management /
+//! quit commands, not a "File → About…" that pops a dialog. Alt-shortcuts reach
+//! the bar via `ofPreProcess` (the menu bar sets `pre_process`, and
+//! `Group::handle_event` runs the preProcess phase before the focused view), and
+//! `F10` enters the menus via the status-line accelerator → both navigation paths
+//! work without a modal-open seam.
 
 use std::io;
 
@@ -40,75 +45,9 @@ use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 
 use tvision::{
-    Backend, Color, Command, CrosstermBackend, Desktop, Dialog, DrawCtx, Program, Rect, Style,
-    SystemClock, Theme, View,
+    Backend, Command, CrosstermBackend, Desktop, Key, KeyEvent, Menu, MenuBar, Program, Rect,
+    StatusDef, StatusLine, SystemClock, Theme, View, Window, alt,
 };
-
-// ---------------------------------------------------------------------------
-// TAboutDialog : public TDialog
-// ---------------------------------------------------------------------------
-
-/// A dialog with custom interior drawing — the canonical TV "About box" shape.
-///
-/// It *is-a* [`Dialog`] (embed-and-delegate, the port's stand-in for C++
-/// inheritance): every [`View`] method is forwarded to the inner dialog by the
-/// `#[delegate(to = dialog)]` macro, except [`draw`](View::draw), which first
-/// lets the dialog paint its frame/title/close box, then fills the interior and
-/// overlays centred text.
-struct AboutDialog {
-    dialog: Dialog,
-}
-
-impl AboutDialog {
-    const W: i32 = 46;
-    const H: i32 = 14;
-
-    /// `TAboutDialog::TAboutDialog` — build the dialog, centred in the desktop.
-    ///
-    /// C++ would set `options |= ofCentered` and let `insertView` centre it;
-    /// ofCentered insertion is a later row, so we compute the centred bounds here.
-    fn new(desktop_w: i32, desktop_h: i32) -> Self {
-        let x = (desktop_w - Self::W) / 2;
-        let y = (desktop_h - Self::H) / 2;
-        let bounds = Rect::new(x, y, x + Self::W, y + Self::H);
-        AboutDialog {
-            dialog: Dialog::new(bounds, Some("About".to_string())),
-        }
-    }
-}
-
-#[tvision::delegate(to = dialog)]
-impl View for AboutDialog {
-    /// `TAboutDialog::draw` — `TDialog::draw()` first (frame, border, title, close
-    /// box), then the interior fill + centred text. The `DrawCtx` is dialog-local
-    /// (origin at the dialog's top-left), so coordinates are `0..W` / `0..H`.
-    fn draw(&mut self, ctx: &mut DrawCtx) {
-        self.dialog.draw(ctx);
-
-        // Classic TV dialog body: black on light-gray. (Real gray-scheme theming
-        // is a deferred row; we pick the colours directly here.)
-        let body = Style::new(Color::Bios(0x0), Color::Bios(0x7));
-        ctx.fill(Rect::new(1, 1, Self::W - 1, Self::H - 1), ' ', body);
-
-        let lines = [
-            "Turbo Vision for Rust",
-            "an idiomatic port of magiblot/tvision",
-            "",
-            "Phase 2 — you are looking at a real",
-            "desktop, window, dialog, frame and the",
-            "modal event loop, all ported from C++.",
-            "",
-            "Drag the title bar to move me.",
-            "Press Esc or click [\u{25A0}] to close.",
-        ];
-        for (i, line) in lines.iter().enumerate() {
-            let len = line.chars().count() as i32;
-            let x = 1 + (Self::W - 2 - len) / 2;
-            ctx.put_str(x, 2 + i as i32, line, body);
-        }
-    }
-    // All other View methods are injected by #[delegate(to = dialog)] above.
-}
 
 // ---------------------------------------------------------------------------
 // HelloApp : public TApplication
@@ -119,15 +58,11 @@ impl View for AboutDialog {
 /// them via [`Program::new`] (the port's `TProgInit` factory-mixin seam).
 struct HelloApp {
     program: Program,
-    /// The full screen extent, kept so `run` can centre the About box (C++ reads
-    /// `deskTop->size`; we have no public desktop-size getter yet).
-    extent: (i32, i32),
 }
 
 impl HelloApp {
     /// `HelloApp::HelloApp` → `TProgInit(initStatusLine, initMenuBar, initDeskTop)`.
     fn new(backend: Box<dyn Backend>) -> Self {
-        let (w, h) = backend.size();
         let program = Program::new(
             backend,
             Box::new(SystemClock::new()),
@@ -136,40 +71,87 @@ impl HelloApp {
             Self::init_status_line,
             Self::init_menu_bar,
         );
-        HelloApp {
-            program,
-            extent: (w as i32, h as i32),
-        }
+        HelloApp { program }
     }
 
-    /// `TApplication::initDeskTop` — the desktop with the default patterned
-    /// background (`TDeskTop::initBackground`).
+    /// `TApplication::initDeskTop` — `r.a.y++; r.b.y--` to inset the desktop one
+    /// row below the menu bar and one row above the status line, the patterned
+    /// background (`TDeskTop::initBackground`), then a few demo windows so the
+    /// window-management commands (zoom / close / next) have something to act on.
     fn init_desktop(r: Rect) -> Option<Box<dyn View>> {
-        Some(Box::new(Desktop::new(r, |br| {
-            Some(Desktop::init_background(br))
-        })))
+        let mut r = r;
+        r.a.y += 1; // below the menu bar
+        r.b.y -= 1; // above the status line
+        let mut desktop = Desktop::new(r, |br| Some(Desktop::init_background(br)));
+        // Insert three staggered demo windows numbered 1..=3 (Alt-1..Alt-3 select
+        // them; the desktop's cmNext/cmPrev cycle them).
+        for num in 1..=3i16 {
+            let x = 4 + (num as i32) * 4;
+            let y = 1 + (num as i32) * 2;
+            let win = Window::new(
+                Rect::new(x, y, x + 28, y + 8),
+                Some(format!("Window {num}")),
+                num,
+            );
+            desktop.insert_view(Box::new(win));
+        }
+        Some(Box::new(desktop))
     }
 
-    /// `TApplication::initStatusLine` — Phase 4 (no status line yet).
-    fn init_status_line(_r: Rect) -> Option<Box<dyn View>> {
-        None
+    /// `TApplication::initStatusLine` — `r.a.y = r.b.y - 1` (pin to the bottom
+    /// row), then the standard line: labelled `Alt-X Exit` (cmQuit) and
+    /// `F10 Menu` (cmMenu), plus hidden hotkey bindings for `Alt-F3` close,
+    /// `F5` zoom, `F6` next — the shape `initStatusLine` builds.
+    fn init_status_line(r: Rect) -> Option<Box<dyn View>> {
+        let mut r = r;
+        r.a.y = r.b.y - 1;
+        let defs = StatusDef::list()
+            .def_all(|d| {
+                d.item("~Alt-X~ Exit", alt('x'), Command::QUIT)
+                    .item("~F10~ Menu", KeyEvent::from(Key::F(10)), Command::MENU)
+                    .item("~F5~ Zoom", KeyEvent::from(Key::F(5)), Command::ZOOM)
+                    .item("~F6~ Next", KeyEvent::from(Key::F(6)), Command::NEXT)
+                    .key_item(alt_f3(), Command::CLOSE)
+            })
+            .build();
+        Some(Box::new(StatusLine::new(r, defs)))
     }
 
-    /// `TApplication::initMenuBar` — Phase 4 (no menu bar yet).
-    fn init_menu_bar(_r: Rect) -> Option<Box<dyn View>> {
-        None
+    /// `TApplication::initMenuBar` — `r.b.y = r.a.y + 1` (pin to the top row),
+    /// then a File / Window menu. **No Tile/Cascade** (their geometry helpers are a
+    /// later row); every item wires a command that already routes.
+    fn init_menu_bar(r: Rect) -> Option<Box<dyn View>> {
+        let mut r = r;
+        r.b.y = r.a.y + 1;
+        let menu = Menu::builder()
+            .submenu("~F~ile", alt('f'), |m| {
+                m.command_key("E~x~it", Command::QUIT, alt('x'), "Alt-X")
+            })
+            .submenu("~W~indow", alt('w'), |m| {
+                m.command_key("~N~ext", Command::NEXT, KeyEvent::from(Key::F(6)), "F6")
+                    .command_key("~Z~oom", Command::ZOOM, KeyEvent::from(Key::F(5)), "F5")
+                    .command_key("~C~lose", Command::CLOSE, alt_f3(), "Alt-F3")
+            })
+            .build();
+        Some(Box::new(MenuBar::new(r, menu)))
     }
 
-    /// `TApplication::run` (the demo's flavour). A finished app would spin
-    /// `program.run()` and open dialogs from a menu via `execView`; until menus
-    /// land we open the About box directly with that same modal primitive. It
-    /// blocks until the dialog ends (Esc / close box → `cmCancel`) and returns the
-    /// end command.
+    /// `TApplication::run` — spin the real event loop until a `cmQuit` ends it.
     fn run(&mut self) -> Command {
-        let (w, h) = self.extent;
-        let about = AboutDialog::new(w, h);
-        self.program.exec_view(Box::new(about))
+        self.program.run()
     }
+}
+
+/// `Alt-F3` — the classic "close window" accelerator (`kbAltF3`).
+fn alt_f3() -> KeyEvent {
+    use tvision::KeyModifiers;
+    KeyEvent::new(
+        Key::F(3),
+        KeyModifiers {
+            alt: true,
+            ..Default::default()
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -184,8 +166,8 @@ fn restore_terminal() {
 }
 
 /// RAII terminal guard: raw mode + alternate screen + mouse capture on entry,
-/// restored on `Drop` — so a panic unwinding through `exec_view` still restores
-/// the terminal. It also installs a signal thread so a `kill` (SIGTERM), a hangup
+/// restored on `Drop` — so a panic unwinding through `run` still restores the
+/// terminal. It also installs a signal thread so a `kill` (SIGTERM), a hangup
 /// (SIGHUP), or SIGINT restores the terminal before exiting — without it the
 /// shell is left in raw mode on the alternate screen. (SIGKILL is uncatchable; a
 /// `kill -9` will still leave the terminal dirty — run `reset` to recover.)

@@ -146,6 +146,22 @@ impl Group {
         self.children[idx].view.state_mut()
     }
 
+    /// `firstThat(viewHasMouse)` over the group's direct children — the id of the
+    /// topmost visible child whose bounds contain `pos` (ports the program's
+    /// status-line mouse-route guard in `TProgram::getEvent`,
+    /// `firstThat(viewHasMouse, &event) == statusLine`). **Not recursive** — it
+    /// scans only the direct children, mirroring the positional router in
+    /// [`route_event`](Self::route_event) (same `visible && get_bounds().contains`
+    /// predicate, same `(0..n).rev()` top-to-bottom scan).
+    pub(crate) fn topmost_child_at(&self, pos: Point) -> Option<ViewId> {
+        // children are stored back-to-front; topmost is last → iterate rev.
+        let n = self.children.len();
+        (0..n).rev().find_map(|i| {
+            let s = self.children[i].view.state();
+            (s.state.visible && s.get_bounds().contains(pos)).then_some(self.children[i].id)
+        })
+    }
+
     /// Mutably borrow child `id`'s view (for an owner→child push that needs the
     /// concrete type via [`View::as_any_mut`], e.g. `TWindow::zoom` reaching its
     /// `TFrame`). `None` for a stale/foreign id.

@@ -1,0 +1,33 @@
+---
+source: src/app/program.rs
+expression: handle.snapshot()
+---
+size: 40x10
+cursor: hidden
+text:
+|  File  Window                          |
+|░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░|
+|░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░|
+|░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░|
+|░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░|
+|░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░|
+|░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░|
+|░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░|
+|░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░|
+| Alt-X Exit  F10 Menu                   |
+attr:
+|aabaaaaabaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|cccccccccccccccccccccccccccccccccccccccc|
+|cccccccccccccccccccccccccccccccccccccccc|
+|cccccccccccccccccccccccccccccccccccccccc|
+|cccccccccccccccccccccccccccccccccccccccc|
+|cccccccccccccccccccccccccccccccccccccccc|
+|cccccccccccccccccccccccccccccccccccccccc|
+|cccccccccccccccccccccccccccccccccccccccc|
+|cccccccccccccccccccccccccccccccccccccccc|
+|abbbbbaaaaaaabbbaaaaaaaaaaaaaaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(0) bg=BIOS(7)
+  b fg=BIOS(4) bg=BIOS(7)
+  c fg=BIOS(7) bg=BIOS(1)

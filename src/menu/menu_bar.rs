@@ -17,10 +17,12 @@
 //!
 //! - `execute()`/navigation/activation → Step 2 (the breadcrumbs live in
 //!   [`menu_view::handle_event`]).
-//! - Initial command regray on insert — the row-49 doc flags that a menu bar
-//!   holding a startup-disabled command would draw it enabled until the first
-//!   `cmCommandSetChanged`. There is **no insert/Program wiring in this row's
-//!   scope** (Step 2 owns it). `TODO(menu insert: trigger initial UpdateMenu)`.
+//! - Initial command regray on insert — a menu bar holding a startup-disabled
+//!   command would draw it enabled until the first `cmCommandSetChanged`. **DONE**
+//!   (Phase 4): [`Program::new`](crate::app::Program::new) seeds each inserted
+//!   bar/line by calling [`update_menu_commands`](View::update_menu_commands)
+//!   directly with the initial command set, since `cmCommandSetChanged` does not
+//!   fire at startup.
 //! - `TStreamable` (`build`) → D12 dropped.
 
 use crate::event::Event;
@@ -152,6 +154,19 @@ impl View for MenuBar {
         menu_view::handle_event(&self.mv, ev, ctx);
     }
 
+    /// The §2 command-graying broker hook (`TMenuView::updateMenu`). The pump
+    /// calls this at apply time (via [`Deferred::UpdateMenu`]) with the live
+    /// [`CommandSet`](crate::command::CommandSet) in hand, and the ctor calls it
+    /// once at startup ([`Program::new`](crate::app::Program::new)) to seed the
+    /// initial graying; it walks the menu tree setting each command item's
+    /// `disabled = !cs.has(command)` (the shared [`menu_view::update_menu_commands`]
+    /// free function). Without this override the broker would silently no-op on the
+    /// trait default (the gap the ctor seed + the `cmCommandSetChanged` broadcast
+    /// both depend on).
+    fn update_menu_commands(&mut self, cs: &crate::command::CommandSet) {
+        menu_view::update_menu_commands(&mut self.mv.menu, cs);
+    }
+
     /// Write the session-owned highlight cache (`TMenuView::current`) — the
     /// pump's [`Deferred::SetMenuCurrent`](crate::view::Deferred::SetMenuCurrent)
     /// broker target. The bar is never focused while a menu session is active
@@ -172,6 +187,14 @@ impl MenuBar {
     /// session-driven highlight cache).
     pub fn current(&self) -> Option<usize> {
         self.mv.current
+    }
+
+    /// Borrow the bar's menu tree (test/inspection hook — lets the program-wiring
+    /// regray tests read a top-level item's `disabled` flag after the broker hook
+    /// runs).
+    #[cfg(test)]
+    pub fn menu(&self) -> &crate::menu::Menu {
+        &self.mv.menu
     }
 }
 

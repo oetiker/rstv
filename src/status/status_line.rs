@@ -23,23 +23,24 @@
 //!
 //! ## Deferrals (faithful, breadcrumbed — NOT stubbed)
 //!
-//! - **`TProgram` integration** — the whole "wire a real status line into
-//!   `Program`" step: `TProgram::getEvent` pre-routes `evKeyDown` (always) and
-//!   `evMouseDown` (when the mouse is over the status line) to
-//!   `statusLine->handleEvent` *before* normal dispatch; `TProgram::idle` calls
-//!   `statusLine->update()`. **Out of scope this row** (matches how the menu draw
-//!   layer landed before the menu was wired into `Program`).
-//!   `TODO(status TProgram integration: getEvent pre-routing of keyDown/mouseDown
-//!   + idle()->update())`.
+//! - **`TProgram` integration** — `TProgram::getEvent` pre-routes `evKeyDown`
+//!   (always) and `evMouseDown` (when the mouse is over the status line) to
+//!   `statusLine->handleEvent` *before* normal dispatch: **DONE** (in
+//!   [`Program::pump_once`](crate::app::Program::pump_once)). `TProgram::idle`'s
+//!   `statusLine->update()` (help-ctx refresh from `TopView::getHelpCtx`) is
+//!   **omit-until-consumer**: with the universal `TStatusDef(0, 0xFFFF)` (`All`)
+//!   def every real app uses, `find_items` is invariant — it selects the same def
+//!   regardless of the top view's help context, so `update()` is observably inert.
+//!   No `View::get_help_ctx`/`TopView` resolver exists yet and no consumer needs
+//!   one; revisit when a context-split (`OneOf`) status line lands.
 //! - **The keyDown arm of `handleEvent`** — the global accelerator (match
 //!   `event.keyDown == item.key_code && commandEnabled` over **all** items incl.
 //!   `text == None`, then transform the event into `evCommand` **in place and
-//!   return WITHOUT clearing** so it propagates). Deferred to the `Program`-wiring
-//!   step because the in-place-transform-and-propagate semantics only make sense
-//!   inside `getEvent`'s pre-routing; it must **not** be ported as `ctx.post` +
-//!   `clear` (that double-handles).
-//!   `TODO(status keyDown global accelerator — lands with TProgram getEvent
-//!   pre-routing; transform-in-place, not ctx.post)`.
+//!   return WITHOUT clearing** so it propagates). **DONE** (transform-in-place;
+//!   pre-routed by `TProgram::getEvent`). The in-place-transform-and-propagate
+//!   semantics only make sense inside `getEvent`'s pre-routing, so it landed with
+//!   the `Program`-wiring step; it is **not** ported as `ctx.post` + `clear` (that
+//!   double-handles).
 //! - **`update()` / help-ctx refresh from `TopView`** (`tstatusl.cpp:209`):
 //!   `update()` reads the modal top view's `getHelpCtx()` and re-runs
 //!   [`find_items`](StatusLine::find_items) + redraw. The `TopView` plumbing is
@@ -377,13 +378,25 @@ impl View for StatusLine {
                 }
                 ev.clear(); // C++ clears unconditionally after the loop.
             }
-            // TODO(status keyDown global accelerator — lands with TProgram getEvent
-            // pre-routing; transform-in-place, not ctx.post). The keyDown arm
-            // matches event.keyDown against EVERY item's key_code (incl.
-            // text==None) and transforms the event into evCommand in place WITHOUT
-            // clearing, so it propagates — semantics that only make sense inside
-            // getEvent's pre-routing. Deliberately NOT ported as ctx.post + clear
-            // (that double-handles).
+            // tstatusl.cpp keyDown arm: match the keyCode against EVERY item (incl.
+            // text == None hidden global hotkeys) and, if enabled, TRANSFORM the
+            // event into evCommand IN PLACE — no clear, no post. The pre-routing in
+            // TProgram::getEvent then lets the transformed command propagate to
+            // normal dispatch (porting it as ctx.post + clear would double-handle).
+            // These transform-in-place-and-propagate semantics only make sense
+            // inside getEvent's pre-routing, which is why this arm landed with the
+            // TProgram wiring step.
+            Event::KeyDown(k) => {
+                // Copy the key out so the `&mut ev` write below does not alias the
+                // `k: &mut KeyEvent` borrow.
+                let key = *k;
+                for item in self.items() {
+                    if item.key_code == Some(key) && self.command_enabled(item.command) {
+                        *ev = Event::Command(item.command);
+                        break;
+                    }
+                }
+            }
             _ => {}
         }
     }
