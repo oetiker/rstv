@@ -59,16 +59,31 @@
 //! the child-pop sets the parent's `lastTargetItem`/`menu.default`/`firstEvent`
 //! (`:385-386,:400`, the "click an open title to close it" mechanism). The bar's
 //! `evMouseDown`-activation branch lives in [`menu_view::handle_event`]
-//! ([`activate_mouse`]). `putClickEventOnExit` is modelled as **always True** here
-//! (the bar/box default); stage 3 gates it for `TMenuPopup`.
+//! ([`activate_mouse`]). `putClickEventOnExit` is the per-session
+//! [`put_click_event_on_exit`](MenuSession) flag (the bottom level's flag — the
+//! bar/box default `true`, a `TMenuPopup` `false`): it gates the bottom-level
+//! exit-click re-post.
 //!
-//! ## What is deferred to stage 3 (`TMenuPopup`, row 52) — breadcrumbed
+//! ## What is implemented (Step-2 stage 3 — `TMenuPopup`, row 52)
 //!
-//! `TMenuPopup`'s `execute`/`handleEvent` overrides: `menu->deflt = 0` (no default
-//! highlight), `putClickEventOnExit = False` (an exit-click is NOT re-posted — the
-//! [`exit_click`](MenuSession) re-post here is unconditional, the bar/box default,
-//! and `TMenuPopup` will gate it off), and the `popupMenu()` free function. Plus
-//! mouse auto-repeat / press-hold (no `evMouseAuto` arm in `execute()`).
+//! `TMenuPopup` (`tmenupop.cpp`, `popupmnu.cpp`) is a `TMenuBox` subclass with two
+//! observable differences, mapped onto the flattened model: `menu->deflt = 0` (no
+//! default highlight on open — the popup level starts `current = None` and clears
+//! its clone's `Menu::default`) and `putClickEventOnExit = False` (an exit-click is
+//! NOT re-posted — the [`popup_menu`] constructor flips
+//! [`put_click_event_on_exit`](MenuSession) to `false`). The `popupMenu()` free
+//! function is [`popup_menu`] (placement via [`auto_place_popup`]). The third C++
+//! difference — `TMenuPopup::handleEvent` (getCtrlChar/hotKey accelerators) — is
+//! **moot** under this model and dropped: a popup created by `popupMenu` is
+//! immediately `execView`'d, so `execute()` owns the event loop via `getEvent` and
+//! `handleEvent` is never routed during the popup's modal life; the accelerators it
+//! adds are already covered by the flattened loop's `step_default_key` (`find_item`
+//! on the active level + `hot_key(levels[0].menu)`, which for a popup IS the popup
+//! box's own tree). The only un-ported sliver is the Ctrl+letter accelerator —
+//! breadcrumbed at [`popup_menu`].
+//!
+//! Still deferred: mouse auto-repeat / press-hold (no `evMouseAuto` arm in
+//! `execute()`).
 
 use crate::capture::{CaptureFlow, CaptureHandler};
 use crate::command::Command;
@@ -207,6 +222,19 @@ pub struct MenuSession {
     /// [`MouseEvent`](crate::event::MouseEvent) passed to `step_mouse`). Unused for
     /// the keyboard path.
     mouse_kind: MouseKind,
+    /// `TMenuView::putClickEventOnExit` (`menus.h`) of the **bottom-most** level —
+    /// the one level whose `execute()` ends the whole session (in our flattened
+    /// model `levels.len() == 1`: the bar for a bar session, the single box for a
+    /// popup). When `true` (the bar/box default — a `TMenuView` member initialized
+    /// inline in the `TMenuView` ctors, `menus.h:222,229`), an exit-click
+    /// (an `evMouseDown` outside the menu that ends the session) is re-posted to the
+    /// view tree so the view under it recovers focus (`tmnuview.cpp:220-222`). A
+    /// [`TMenuPopup`](popup_menu) sets it `false` (`tmenupop.cpp:45`): a popup never
+    /// re-posts its exit-click. Intermediate boxes in a bar+box stack have it `true`
+    /// in C++, but their exit-clicks are carried up by the re-apply loop (not
+    /// re-posted), so only the bottom level's flag matters — modelled as one
+    /// session-wide flag, not a per-[`MenuLevel`] field.
+    put_click_event_on_exit: bool,
 }
 
 /// Which `evMouse*` arm of `execute()` the in-flight event selects — the C++
@@ -248,6 +276,9 @@ impl MenuSession {
             levels,
             owner_size,
             mouse_kind: MouseKind::Down,
+            // The bar/box default (`putClickEventOnExit == True`); `popup_menu`
+            // flips it `false` for a `TMenuPopup` (`tmenupop.cpp:45`).
+            put_click_event_on_exit: true,
         }
     }
 
@@ -566,9 +597,11 @@ impl MenuSession {
     /// calls `clearEvent` (so `cleared == false` for every mouse `doReturn` that
     /// comes from a box — the re-apply loop always carries it up to the parent),
     /// except where noted; `exit_click` flags the evMouseDown **outside** branch so
-    /// the loop tail re-posts the click to the view tree when the **bar** ends from
-    /// it (`putClickEventOnExit`, `tmnuview.cpp:220-222`). Mutates the top level's
-    /// `current` / `auto_select` / `mouse_active` / `last_target_item`.
+    /// the loop tail re-posts the click to the view tree when the bottom level ends
+    /// from it AND that level's [`put_click_event_on_exit`](MenuSession) is set
+    /// (`putClickEventOnExit`, `tmnuview.cpp:220-222`; a `TMenuPopup` clears it).
+    /// Mutates the top level's `current` / `auto_select` / `mouse_active` /
+    /// `last_target_item`.
     fn step_mouse(&mut self, m: MouseEvent) -> (MenuAction, bool, bool) {
         let pos = m.position;
         let is_bar = self.top().is_bar;
@@ -596,10 +629,11 @@ impl MenuSession {
                     // via auto_select for a bar click.)
                 } else {
                     // Click outside this level's bounds and outside the parent item:
-                    // the menu closes. putClickEventOnExit is True for bar+box, so the
-                    // exit click is re-posted to the view tree — but the re-post only
-                    // happens at the BAR (the loop tail handles it via exit_click); a
-                    // box just returns and the re-apply loop carries the click up.
+                    // the menu closes. The exit click is flagged here; the loop tail
+                    // re-posts it to the view tree only when the bottom level ends from
+                    // it AND its `put_click_event_on_exit` is set (the bar/box default;
+                    // a TMenuPopup clears it). An intermediate box just returns and the
+                    // re-apply loop carries the click up to the bottom level.
                     action = MenuAction::Return;
                     exit_click = true;
                 }
@@ -801,13 +835,15 @@ impl MenuSession {
                     // Not cleared → re-apply the SAME event to the new top level.
                     continue;
                 } else {
-                    // The bar returned → end the session. For an exit-click (a
-                    // mouse-down outside the bar), re-post the click to the view tree
-                    // so the view under it recovers focus (putClickEventOnExit at the
-                    // bar, tmnuview.cpp:220-222); the bar's final-tail putEvent does
-                    // NOT fire (parentMenu == 0 && e.what != evCommand).
+                    // The bottom level returned → end the session. For an exit-click
+                    // (a mouse-down outside the menu), re-post the click to the view
+                    // tree so the view under it recovers focus — but ONLY when this
+                    // bottom level's `putClickEventOnExit` is set (the bar/box default;
+                    // a `TMenuPopup` clears it, `tmenupop.cpp:45`, so a popup's
+                    // exit-click is swallowed, `tmnuview.cpp:220-222`). The final-tail
+                    // putEvent does NOT fire (parentMenu == 0 && e.what != evCommand).
                     let r = self.end_session_with(None, ctx);
-                    if exit_click {
+                    if exit_click && self.put_click_event_on_exit {
                         ctx.put_event(ev);
                     }
                     return r;
@@ -873,17 +909,24 @@ impl MenuSession {
         ctx.request_set_menu_current(id, current);
     }
 
-    /// End the whole session: close every open box, clear the bar's highlight,
-    /// restore focus, optionally post `cmd`, and pop the capture handler.
+    /// End the whole session: close every session-owned box, clear the bar's
+    /// highlight, restore focus, optionally post `cmd`, and pop the capture handler.
     fn end_session_with(&mut self, cmd: Option<Command>, ctx: &mut Context) -> CaptureFlow {
-        // Close every open box level (the bar is NOT a session-owned box — it is a
-        // permanent child, so it is only un-highlighted, not removed).
-        for level in self.levels.iter().skip(1) {
-            ctx.request_close(level.view_id);
-        }
-        // Clear the bar's highlight (execute()'s tail: current = 0; drawView()).
-        if let Some(bar) = self.levels.first() {
-            ctx.request_set_menu_current(bar.view_id, None);
+        // Tear down every level by kind: a **bar** (`is_bar`) is a permanent frame
+        // child (C++ `TMenuBar`, reset + redrawn on close), so it is only
+        // un-highlighted (execute()'s tail `current = 0; drawView()`), never removed;
+        // every **box** (C++ `TMenuBox`/`TMenuPopup`, `execView`'d then destroyed) is
+        // closed. A bar session has the bar at `levels[0]` + boxes above; a
+        // [`popup_menu`] session has NO bar — its single level IS a box and must be
+        // closed (the brief's §3 "no change to end_session_with" assumed the popup
+        // would be purely additive, but the popup's level-0-is-a-box teardown needs
+        // this kind-keyed loop, replacing the old `skip(1)`/`first()` bar hard-coding).
+        for level in &self.levels {
+            if level.is_bar {
+                ctx.request_set_menu_current(level.view_id, None);
+            } else {
+                ctx.request_close(level.view_id);
+            }
         }
         // Post the selected command, if any (the pump's drop_disabled filter is
         // the backstop for a stale-enabled command).
@@ -1073,4 +1116,171 @@ pub fn activate_mouse(
     // clicked title's box.
     ctx.push_capture(Box::new(session));
     ctx.put_event(Event::MouseDown(mouse));
+}
+
+// ---------------------------------------------------------------------------
+// TMenuPopup — a standalone popup menu (popupMenu, popupmnu.cpp)
+// ---------------------------------------------------------------------------
+
+/// `popupMenu` (`popupmnu.cpp`) — open a standalone popup [`MenuBox`] near `where_`,
+/// flattened onto the capture stack as a single-box [`MenuSession`].
+///
+/// C++ `popupMenu(where, aMenu, receiver)` builds a `TMenuPopup`, `autoPlacePopup`s
+/// it, `execView`s it (blocking), and on a non-zero result re-posts the command to
+/// `receiver`. Mapped onto our flattened model:
+///
+/// * The popup is a single box level (`is_bar == false`) consuming events on the
+///   capture stack — the same handler as a bar dropdown, minus the bar above it.
+/// * `TMenuPopup::execute` sets `menu->deflt = 0` (`tmenupop.cpp:51`) so the box has
+///   **no default highlight** on open: the level starts `current == None` AND its
+///   cloned [`Menu::default`] is cleared (so the `evMouseUp`-on-margin "highlight the
+///   default, else the first" arm picks the first item, faithful to C++).
+/// * `TMenuPopup` clears `putClickEventOnExit` (`tmenupop.cpp:45`): a click outside
+///   the popup closes it WITHOUT re-posting the click — so the session's
+///   [`put_click_event_on_exit`](MenuSession) is set `false`.
+///
+/// `where_` is in root-group coords (C++ `app->makeLocal(where)`; the root group is
+/// at `(0,0)`, so `makeLocal` is identity in our model). `owner_size` is the root
+/// group size (C++ `app->size`).
+///
+/// **Deviations (D9 async capture-stack model):**
+/// * The C++ synchronous return value (`ushort popupMenu` returns the selected
+///   command) is **dropped**: this function returns immediately, the command arrives
+///   later via [`Context::post`] (in [`end_session_with`](MenuSession::end_session_with))
+///   when the user selects an item.
+/// * The `receiver: TGroup*` argument is **dropped**: our model has no per-receiver
+///   (`TGroup*`) routing seam; the command reaches the active routing, which IS the
+///   receiver for the only C++ consumer (the editor right-click, `teditor1.cpp:536`,
+///   which passes its own group as receiver). The faithful `receiver->putEvent` is
+///   the unconditional `ctx.post(cmd)` on select.
+///
+/// `TMenuPopup::handleEvent`'s Ctrl+letter accelerator is not ported (see the module
+/// docs):
+/// TODO(TMenuPopup Ctrl+letter accel: dead under the execView/capture-stack model;
+/// revive iff a persistent-popup consumer appears).
+pub fn popup_menu(where_: Point, menu: Menu, owner_size: Point, ctx: &mut Context) {
+    let bounds = auto_place_popup(where_, &menu, owner_size);
+    let id = ViewId::next();
+    // The popup box clears its default (`menu->deflt = 0`, tmenupop.cpp:51) — no
+    // highlight on open, and the margin-release arm picks the first item, not a
+    // default.
+    let mut menu = menu;
+    menu.default = None;
+    ctx.request_open_menu_box(id, menu.clone(), bounds);
+    let level = MenuLevel {
+        view_id: id,
+        menu,
+        current: None, // menu->deflt = 0
+        bounds,
+        is_bar: false,
+        auto_select: false,
+        last_target_item: None,
+        mouse_active: false,
+        first_event: true,
+    };
+    let mut session = MenuSession::new(vec![level], owner_size);
+    // (A) TMenuPopup: putClickEventOnExit = False (tmenupop.cpp:45).
+    session.put_click_event_on_exit = false;
+    // No initial highlight (menu->deflt == 0).
+    ctx.request_set_menu_current(id, None);
+    ctx.push_capture(Box::new(session));
+}
+
+/// `autoPlacePopup` (`popupmnu.cpp`) — place a freshly-built popup box near the
+/// click point `p`.
+///
+/// The initial box is `getRect(TRect(p, p), menu)` — our [`menu_box_rect`] with a
+/// zero-size hint at `p`, which sizes the box **above-left** of `p` (`(p-size)..p`,
+/// since `r.a.x + w < r.b.x` is `p.x + w < p.x` → false → `r.a.x = r.b.x - w`).
+/// `autoPlacePopup` then moves it to sit **below-right** of `p` (top-left at
+/// `(p.x, p.y + 1)`), each axis clamped to the desktop bottom-right (`min(size, d)`
+/// where `d = app->size - p`); if it would then cover `p` and there is room above,
+/// it is shifted up so its bottom edge sits at `p.y`.
+fn auto_place_popup(p: Point, menu: &Menu, owner_size: Point) -> Rect {
+    // r = getRect(TRect(p, p), menu) → (p - size)..p (above-left of p).
+    let mut r = menu_box_rect(Rect::new(p.x, p.y, p.x, p.y), menu);
+    let size_x = r.b.x - r.a.x; // m->size.x
+    let size_y = r.b.y - r.a.y; // m->size.y
+    // d = app->size - p.
+    let dx = owner_size.x - p.x;
+    let dy = owner_size.y - p.y;
+    // r.move(min(size.x, d.x), min(size.y + 1, d.y)) → top-left toward (p.x, p.y+1),
+    // clamped so the box stays inside the desktop.
+    r.r#move(size_x.min(dx), (size_y + 1).min(dy));
+    // If the box still covers p and there is room above it (its height fits above
+    // p), shift it up so its bottom edge is exactly at p.y.
+    if r.contains(p) && (r.b.y - r.a.y) < p.y {
+        r.r#move(0, -(r.b.y - p.y));
+    }
+    r
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::command::Command;
+
+    /// A flat two-command menu sized exactly like the program-test `popup_data`:
+    /// every label fits the `menu_box_rect` minimum, so the box is 10 wide and
+    /// `2 + 2 = 4` rows tall (`size_x == 10`, `size_y == 4`).
+    fn popup_data() -> Menu {
+        Menu::builder()
+            .command("~C~ut", Command::CUT)
+            .command("~C~opy", Command::custom("test.copy"))
+            .build()
+    }
+
+    /// `auto_place_popup` with room everywhere puts the box below-right of `p`:
+    /// top-left at `(p.x, p.y + 1)`, and the right edge stays inside the desktop.
+    #[test]
+    fn auto_place_popup_below_right_with_room() {
+        let menu = popup_data();
+        let p = Point::new(5, 2);
+        let owner = Point::new(40, 12);
+        let r = auto_place_popup(p, &menu, owner);
+
+        // size_x = 10, size_y = 4 → box = Rect(5,3,15,7).
+        assert_eq!(r.a, Point::new(p.x, p.y + 1), "top-left at (p.x, p.y+1)");
+        assert_eq!(r, Rect::new(5, 3, 15, 7), "the full below-right box");
+        assert!(r.b.x <= owner.x, "right edge clamped inside the desktop");
+        assert!(
+            !r.contains(p),
+            "with room everywhere the box does NOT cover the click point",
+        );
+    }
+
+    /// `auto_place_popup` near the desktop bottom: the vertical clamp would leave the
+    /// box covering `p`, so (room above) it is shifted up until its bottom edge sits
+    /// at `p.y` — the click row stays visible.
+    ///
+    /// BITE: drop the `if r.contains(p) ...` shift in [`auto_place_popup`] → the box
+    /// stays at `Rect(5,8,15,12)`, covering the click row (`r.b.y == 12 != p.y`),
+    /// failing the `r.b.y == p.y` assert.
+    #[test]
+    fn auto_place_popup_bottom_edge_shifts_up() {
+        let menu = popup_data();
+        let p = Point::new(5, 10);
+        let owner = Point::new(40, 12);
+        let r = auto_place_popup(p, &menu, owner);
+
+        // d = (35, 2); move(min(10,35)=10, min(5,2)=2) → Rect(5,8,15,12) covers p
+        // (y=10 ∈ [8,12)) and height 4 < p.y=10 → shift move(0, -(12-10)) → Rect(5,6,15,10).
+        assert_eq!(
+            r,
+            Rect::new(5, 6, 15, 10),
+            "shifted up to clear the click row"
+        );
+        assert_eq!(
+            r.b.y, p.y,
+            "the box's bottom edge sits exactly at the click row"
+        );
+        assert!(
+            !r.contains(p),
+            "after the shift the box no longer covers the click point",
+        );
+        assert!(
+            r.b.x <= owner.x,
+            "right edge still clamped inside the desktop"
+        );
+    }
 }

@@ -39,7 +39,7 @@ pub mod menu_session;
 pub mod menu_view;
 pub use menu_bar::MenuBar;
 pub use menu_box::MenuBox;
-pub use menu_session::MenuSession;
+pub use menu_session::{MenuSession, popup_menu};
 pub use menu_view::{MenuColors, MenuView, MenuViewState};
 
 /// A single menu entry. Ports `TMenuItem` (`menus.h`) — including the

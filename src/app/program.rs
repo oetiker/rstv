@@ -3957,6 +3957,319 @@ mod tests {
         );
     }
 
+    // -- row 52: TMenuPopup (popup_menu) ---------------------------------------
+    //
+    // A standalone popup menu (no bar). Geometry for `popup_data` opened at
+    // `where_ = (5, 2)` on a 40×12 desktop (auto_place_popup, mirrored here so the
+    // click points are auditable):
+    //
+    //   menu_box_rect(Rect(5,2,5,2), popup_data): w = 10 (every item label fits the
+    //     minimum), h = 2 + 2 items = 4 → size_x = 10, size_y = 4.
+    //   d = (40,12) - (5,2) = (35,10); r.move(min(10,35), min(5,10)) = move(10, 5)
+    //     → box = Rect(5,3,15,7) (top-left at (p.x, p.y+1) = (5,3); room everywhere,
+    //     so the contains-p shift does NOT fire).
+    //   Box rows (item_rect_global, origin (5,3) + item_rect_local Rect(2,1+i,8,2+i)):
+    //       Cut(0)  → Rect(7,4,13,5)  (y=4, x∈[7,13))
+    //       Copy(1) → Rect(7,5,13,6)  (y=5)
+    //   A point well outside the box (and there is no bar): (30, 10).
+
+    /// A flat command popup menu: {Cut(cmCut), Copy(cmCopy)}. Builder-built, so its
+    /// `default` is `Some(0)` — which the popup must CLEAR (no highlight on open).
+    fn popup_data() -> Menu {
+        Menu::builder()
+            .command("~C~ut", Cmd::CUT)
+            .command("~C~opy", Cmd::custom("test.copy"))
+            .build()
+    }
+
+    /// A test-only view whose `handle_event` opens a [`popup_menu`] on a MouseDown —
+    /// the harness equivalent of the editor right-click that is the C++
+    /// `popupMenu`'s only consumer. (Mouse events route positionally to a view's
+    /// `handle_event`; a bare `Event::Command` does not, so the trigger is a click.)
+    struct PopupProbe {
+        st: ViewState,
+        where_: Point,
+        menu: Menu,
+    }
+    impl PopupProbe {
+        fn new(bounds: Rect, where_: Point, menu: Menu) -> Self {
+            PopupProbe {
+                st: ViewState::new(bounds),
+                where_,
+                menu,
+            }
+        }
+    }
+    impl View for PopupProbe {
+        fn state(&self) -> &ViewState {
+            &self.st
+        }
+        fn state_mut(&mut self) -> &mut ViewState {
+            &mut self.st
+        }
+        fn draw(&mut self, _ctx: &mut DrawCtx) {}
+        fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
+            if let Event::MouseDown(_) = ev {
+                crate::menu::popup_menu(self.where_, self.menu.clone(), ctx.owner_size(), ctx);
+                ev.clear();
+            }
+        }
+        fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+            Some(self)
+        }
+    }
+
+    /// Open a popup by clicking a `PopupProbe`. Unlike the bar's `activate_mouse`,
+    /// `popup_menu` does NOT re-post the trigger click, so a SINGLE pump opens the
+    /// box (the probe's `handle_event` queues OpenMenuBox/SetMenuCurrent/PushCapture,
+    /// which the deferred-apply phase of the same pump runs). Returns (program, baseline).
+    fn open_popup(w: u16, h: u16, where_: Point) -> (Program, usize) {
+        let (mut program, _handle, _clock) = program_with_desktop(w, h);
+        program.group_mut().insert(Box::new(PopupProbe::new(
+            Rect::new(0, 0, w as i32, h as i32),
+            where_,
+            popup_data(),
+        )));
+        program.out_events.clear();
+        let baseline = program.group_mut().len();
+        // Click the probe (anywhere) to trigger popup_menu.
+        program.out_events.push_back(m_down(0, 0));
+        program.pump_once();
+        (program, baseline)
+    }
+
+    /// (P1) A popup opens its box with NO highlight (`menu->deflt = 0`,
+    /// `tmenupop.cpp:51`): exactly one MenuBox child exists and its `current == None`.
+    ///
+    /// BITE: revert the popup level to `current: menu.default` (and skip the
+    /// `menu.default = None`) → the builder default `Some(0)` highlights Cut → the
+    /// box reads `Some(Some(0))`, failing the no-highlight assert.
+    #[test]
+    fn popup_opens_box_with_no_highlight() {
+        let (mut program, baseline) = open_popup(40, 12, Point::new(5, 2));
+
+        assert_eq!(
+            program.group_mut().len(),
+            baseline + 1,
+            "popup_menu opened exactly one box (a single pump, no re-posted click)"
+        );
+        assert_eq!(
+            program.capture_len(),
+            1,
+            "the popup MenuSession is armed on the capture stack"
+        );
+        assert_eq!(
+            top_box_current(&mut program),
+            Some(None),
+            "the popup box has NO default highlight on open (menu->deflt = 0)"
+        );
+    }
+
+    /// (P2) THE ANCHOR (the constraint that makes a popup a popup,
+    /// `putClickEventOnExit = False`, `tmenupop.cpp:45`): a click OUTSIDE the popup
+    /// closes it but does NOT re-post the click to the view tree.
+    ///
+    /// Contrast: the identical click-outside on a **bar** session
+    /// (`click_outside_closes_and_reposts`) DOES re-post. The pair is the
+    /// discriminator — dropping `&& self.put_click_event_on_exit` from the run() gate
+    /// makes THIS test fail (popup re-posts) while the bar test still passes; an
+    /// always-false gate breaks the bar test instead. That mutual break proves the
+    /// flag is wired, not a no-op.
+    ///
+    /// BITE: drop `&& self.put_click_event_on_exit` → the popup re-posts → the
+    /// "no MouseDown survives" assert fails.
+    #[test]
+    fn popup_click_outside_does_not_repost() {
+        let (mut program, baseline) = open_popup(40, 12, Point::new(5, 2));
+        assert_eq!(program.group_mut().len(), baseline + 1, "popup box open");
+        program.out_events.clear(); // drop any pending set-current echoes
+
+        // Click well outside the popup box (Rect(5,3,15,7)): (30, 10) is bare desktop.
+        program.out_events.push_back(m_down(30, 10));
+        program.pump_once();
+
+        assert_eq!(
+            program.capture_len(),
+            0,
+            "clicking outside closed the popup session"
+        );
+        assert_eq!(
+            program.group_mut().len(),
+            baseline,
+            "the popup box closed (back to baseline)"
+        );
+        assert!(
+            !program.out_events.iter().any(|e| matches!(
+                e,
+                Event::MouseDown(m) if m.position == Point::new(30, 10)
+            )),
+            "the popup exit-click was NOT re-posted (putClickEventOnExit = False)"
+        );
+    }
+
+    /// (P3) Selecting a command in a popup posts that command and closes the session
+    /// — a MouseDown then MouseUp on the Cut row (the evMouseUp `current !=
+    /// lastTargetItem → doSelect` arm). After: cmCut posted, box gone, capture popped.
+    ///
+    /// BITE: same as `mouseup_on_command_posts` — break the doSelect arm and no
+    /// command posts / the box stays open.
+    #[test]
+    fn popup_select_command_posts_and_closes() {
+        let (mut program, baseline) = open_popup(40, 12, Point::new(5, 2));
+        assert_eq!(program.group_mut().len(), baseline + 1, "popup box open");
+        program.out_events.clear();
+
+        // Press then release on the Cut row (Rect(7,4,13,5), y=4).
+        program.out_events.push_back(m_down(9, 4));
+        program.pump_once();
+        program.out_events.push_back(m_up(9, 4));
+        program.pump_once();
+
+        assert_eq!(
+            program.capture_len(),
+            0,
+            "selecting a command ended the popup session"
+        );
+        assert_eq!(
+            program.group_mut().len(),
+            baseline,
+            "the popup box closed (back to baseline)"
+        );
+        assert!(
+            program
+                .out_events
+                .iter()
+                .any(|e| matches!(e, Event::Command(c) if *c == Cmd::CUT)),
+            "selecting Cut posted cmCut"
+        );
+    }
+
+    // -- row 52: TMenuPopup with a SUBMENU level (multi-level exit-click) -------
+    //
+    // A standalone popup containing a submenu, opened at `where_ = (5, 2)` on a
+    // 40×12 desktop. Geometry (mirrored here so the click points are auditable):
+    //
+    //   popup_submenu_data = {Cut(0), More ▸ {Refresh}(1), Copy(2)}.
+    //   menu_box_rect(Rect(5,2,5,2), …): w = 13 (More's "~M~ore" = 4 chars + 6 + 3
+    //     for the submenu ► marker), h = 2 + 3 items = 5 → size_x = 13, size_y = 5.
+    //   d = (40,12) - (5,2) = (35,10); r.move(min(13,35), min(6,10)) = move(13, 6)
+    //     → popup box = Rect(5,3,18,8) (top-left (p.x, p.y+1) = (5,3); room, no shift).
+    //   Popup box rows (item_rect_global, origin (5,3) + local Rect(2,1+i,11,2+i)):
+    //       Cut(0)  → Rect(7,4,16,5)  (y=4)
+    //       More(1) → Rect(7,5,16,6)  (y=5)   ← the submenu row
+    //       Copy(2) → Rect(7,6,16,7)  (y=6)
+    //   Opening the More submenu (open_submenu, parent origin (5,3), not a bar):
+    //       hint = Rect(2+5, 3+3, 40, 12) = Rect(7,6,40,12);
+    //       submenu {Refresh}: w = 13 (cstrlen("~R~efresh")=7 +6), h = 2+1 = 3;
+    //       menu_box_rect(Rect(7,6,40,12), …) → submenu box = Rect(7,6,20,9).
+    //       Refresh(0) → Rect(9,7,18,8) (y=7).
+    //   A point outside BOTH boxes (popup Rect(5,3,18,8), submenu Rect(7,6,20,9))
+    //     and inside the desktop: (30, 11).
+
+    /// A popup with a SUBMENU: {Cut(cmCut), More ▸ {Refresh}, Copy(test.copy)}.
+    /// Exercises the multi-level popup exit-click path (a deeper box level on top of
+    /// the bottom popup level), which the flat `popup_data` cannot reach.
+    fn popup_submenu_data() -> Menu {
+        Menu::builder()
+            .command("~C~ut", Cmd::CUT)
+            .submenu("~M~ore", alt('m'), |s| {
+                s.command("~R~efresh", Cmd::custom("test.refresh"))
+            })
+            .command("~C~opy", Cmd::custom("test.copy"))
+            .build()
+    }
+
+    /// Like [`open_popup`] but with a caller-supplied `menu` fixture (so the flat
+    /// `popup_data` consumers P1–P3 keep their hardcoded opener untouched). Returns
+    /// (program, baseline).
+    fn open_popup_menu(w: u16, h: u16, where_: Point, menu: Menu) -> (Program, usize) {
+        let (mut program, _handle, _clock) = program_with_desktop(w, h);
+        program.group_mut().insert(Box::new(PopupProbe::new(
+            Rect::new(0, 0, w as i32, h as i32),
+            where_,
+            menu,
+        )));
+        program.out_events.clear();
+        let baseline = program.group_mut().len();
+        program.out_events.push_back(m_down(0, 0));
+        program.pump_once();
+        (program, baseline)
+    }
+
+    /// (P4) THE MULTI-LEVEL EXIT-CLICK (the path the SPEC reviewer proved faithful
+    /// only by reasoning): open a popup, open its SUBMENU box (a second level), then
+    /// click OUTSIDE all boxes. The whole session must collapse in ONE pump (the
+    /// submenu doReturns and re-applies the carried `evMouseDown` down to the bottom
+    /// popup level, which ends the session) AND the exit-click must NOT be re-posted
+    /// — the popup's bottom-level `put_click_event_on_exit == false` swallows it even
+    /// though the click originated while a deeper submenu level was on top. This is
+    /// the C++ putEvent single-slot collapse modelled as one session-wide flag.
+    ///
+    /// BITE (verified): drop `&& self.put_click_event_on_exit` from the run() gate →
+    /// the bottom popup level re-posts the carried exit-click → a `MouseDown` at
+    /// (30,11) survives in `out_events`, failing the "no MouseDown re-posted" assert.
+    /// With the gate present the test passes. (Same gate the flat P2 test bites; the
+    /// added value here is COVERAGE of the multi-level carry-up, not a new mechanism.)
+    #[test]
+    fn popup_submenu_click_outside_collapses_without_repost() {
+        let (mut program, baseline) =
+            open_popup_menu(40, 12, Point::new(5, 2), popup_submenu_data());
+        assert_eq!(
+            program.group_mut().len(),
+            baseline + 1,
+            "popup box open (one level)"
+        );
+
+        // Open the More submenu (idx 1 → Rect(7,5,16,6), y=5): a box hover does NOT
+        // auto-open, so drag to highlight More then RELEASE on it to open the nested
+        // box (the evMouseUp `current != lastTargetItem → doSelect → open` arm).
+        program.out_events.push_back(m_move(10, 5));
+        program.pump_once();
+        assert_eq!(
+            top_box_current(&mut program),
+            Some(Some(1)),
+            "the drag highlighted More in the popup box"
+        );
+        program.out_events.push_back(m_up(10, 5));
+        program.pump_once();
+        assert_eq!(
+            program.group_mut().len(),
+            baseline + 2,
+            "releasing on More opened the nested submenu box (two box levels)"
+        );
+        assert_eq!(
+            program.capture_len(),
+            1,
+            "the session is still armed with the submenu open",
+        );
+        program.out_events.clear(); // drop any pending set-current echoes
+
+        // Click well outside BOTH boxes (popup Rect(5,3,18,8), submenu Rect(7,6,20,9)):
+        // (30, 11) is bare desktop. ONE pump must collapse submenu → popup → end.
+        program.out_events.push_back(m_down(30, 11));
+        program.pump_once();
+
+        assert_eq!(
+            program.capture_len(),
+            0,
+            "the outside click collapsed the WHOLE popup session in one pump"
+        );
+        assert_eq!(
+            program.group_mut().len(),
+            baseline,
+            "both boxes closed (back to baseline child count)"
+        );
+        assert!(
+            !program.out_events.iter().any(|e| matches!(
+                e,
+                Event::MouseDown(m) if m.position == Point::new(30, 11)
+            )),
+            "no MouseDown re-posted: the bottom popup level's \
+             put_click_event_on_exit = False swallows the exit-click even from a \
+             deeper submenu level"
+        );
+    }
+
     /// (9) A MouseUp whose position is on the PARENT title (mouseInOwner) resets the
     /// box highlight to the menu default and keeps the box open — the evMouseUp
     /// `mouseInOwner → current = menu->deflt` arm (`tmnuview.cpp:227-228`). Open File,
