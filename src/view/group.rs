@@ -823,6 +823,16 @@ impl View for Group {
         false
     }
 
+    /// `TGroup::resetCurrent` via the `View` trait — establishes the group's
+    /// internal currency (first visible+selectable child). Delegates to the
+    /// inherent [`Group::reset_current`](Group::reset_current) (the
+    /// `firstMatch`/`setCurrent` body at the top of `impl Group`). Inherent methods
+    /// take resolution priority over same-named trait methods, so the UFCS call
+    /// below is NOT recursion — it dispatches to the inherent fn, not back here.
+    fn reset_current(&mut self, ctx: &mut Context) {
+        Group::reset_current(self, ctx)
+    }
+
     /// `TGroup::valid` — for `cmReleasedFocus`, defer to the current child iff it
     /// has `ofValidate` (else `true`); otherwise every child must be `valid`.
     fn valid(&self, cmd: Command) -> bool {
@@ -2106,6 +2116,48 @@ mod tests {
         // A never-inserted id resolves to None.
         let bogus = ViewId::next();
         assert!(group.find_mut(bogus).is_none(), "unknown id -> None");
+    }
+
+    /// `View::reset_current` (the trait override) establishes a group's internal
+    /// currency through the **trait** dispatch path — the seam `exec_view` uses on a
+    /// freshly-inserted modal (it holds the modal only as `&mut dyn View`). This is
+    /// the DISCRIMINATING guard for the FOUNDATION change: a ctx-less `Group::insert`
+    /// leaves `current == None` (insert never focuses, D3); calling `reset_current`
+    /// via `&mut dyn View` must flip it to the first visible+selectable child. It
+    /// also proves the override dispatches to the inherent `Group::reset_current`
+    /// (UFCS) rather than recursing into itself — infinite recursion would
+    /// stack-overflow this test instead of passing.
+    #[test]
+    fn reset_current_via_trait_sets_current_to_first_selectable() {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let log = Rc::new(RefCell::new(Vec::new()));
+
+        let mut group = Group::new(Rect::new(0, 0, 20, 10));
+        let ida = with_ctx(&mut out, &mut timers, |_ctx| {
+            let mut a = Probe::new(Rect::new(0, 0, 5, 5), 'A', log.clone());
+            a.st.options.selectable = true;
+            // insert (ctx-less, D3) does NOT focus — current stays None.
+            group.insert(Box::new(a))
+        });
+        assert_eq!(
+            group.current(),
+            None,
+            "ctx-less insert leaves current == None (the gap exec_view must close)"
+        );
+
+        // Establish internal currency via the TRAIT method on &mut dyn View — the
+        // exact path exec_view takes (find_mut -> reset_current).
+        with_ctx(&mut out, &mut timers, |ctx| {
+            let v: &mut dyn View = &mut group;
+            v.reset_current(ctx);
+        });
+
+        assert_eq!(
+            group.current(),
+            Some(ida),
+            "reset_current via the trait sets current to the first selectable child"
+        );
     }
 
     #[test]

@@ -55,6 +55,8 @@ fn view(f: &Ident, k: &TokenStream) -> Vec<(&'static str, TokenStream)> {
          quote! { fn remove_descendant(&mut self, id: #k::ViewId, ctx: &mut #k::Context) -> bool { self.#f.remove_descendant(id, ctx) } }),
         ("focus_descendant",
          quote! { fn focus_descendant(&mut self, id: #k::ViewId, ctx: &mut #k::Context) -> bool { self.#f.focus_descendant(id, ctx) } }),
+        ("reset_current",
+         quote! { fn reset_current(&mut self, ctx: &mut #k::Context) { self.#f.reset_current(ctx) } }),
         ("number",
          quote! { fn number(&self) -> ::core::option::Option<i16> { self.#f.number() } }),
         ("grabs_focus_on_click",

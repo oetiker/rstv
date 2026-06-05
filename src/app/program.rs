@@ -635,18 +635,18 @@ impl Program {
         //    current (the desktop stays selected beneath). Build a throwaway
         //    Context over the disjoint fields (the pump's discipline).
         //
-        // FOUNDATIONAL FOLLOW-ON (initial-currency seam): this selects the modal
-        // VIEW within the root group, but does NOT establish the modal's OWN
-        // internal currency (its first selectable child). C++ gets that for free via
-        // `insertView → show → resetCurrent`; rstv's `Group::insert` takes no
-        // `Context`, so it cannot run `reset_current` at open. Consequence: a modal
-        // opened here (e.g. a general `Dialog`) has `current == None` until a nav
-        // event focuses a child — so an immediate Esc/Enter is dead and the inner
-        // loop would spin. Row 57's history popup works around this LOCALLY
-        // (`HistoryWindow` calls `Window::select_child` on first-event setup); a
-        // general fix needs an initial-currency seam (an insert-with-ctx →
-        // reset_current path, or a post-insert reset hook). Build it when the first
-        // general dialog needs first-event keying.
+        // INITIAL-CURRENCY SEAM (now BUILT — `View::reset_current` below). This
+        // selects the modal VIEW within the root group; but the modal's OWN internal
+        // currency (its first selectable child) must also be established. C++ gets
+        // that for free via `insertView → show → resetCurrent`; rstv's `Group::insert`
+        // takes no `Context`, so it cannot run `reset_current` at insert. Without the
+        // seam a modal opened here (e.g. a general `Dialog`) would have `current ==
+        // None` until a nav event — an immediate Esc/Enter would reach no child and
+        // the inner loop would spin. We close the gap by calling `reset_current` on
+        // the freshly-inserted modal here (the post-insert reset hook), BEFORE the
+        // `set_current(Enter)` focus below. Row 57's history popup keeps its LOCAL
+        // `Window::select_child` workaround (belt-and-suspenders; out of scope to
+        // remove).
         {
             let now = self.clock.now_ms();
             let mut ctx = Context::new(
@@ -655,6 +655,17 @@ impl Program {
                 now,
                 &mut self.deferred,
             );
+            // Establish the modal's INTERNAL currency (the show()→resetCurrent
+            // cascade that rstv's ctx-less Group::insert skips — see
+            // View::reset_current). MUST precede the focus below: this sets the
+            // modal's `current` (selected, unfocused) so that when
+            // set_current(Enter) focuses the modal, focus cascades into its first
+            // selectable child. Without this the modal opens keyboard-dead (an
+            // immediate Esc/Enter reaches no child and the inner loop spins — the gap
+            // formerly worked around locally by HistoryWindow::select_child).
+            if let Some(v) = self.group.find_mut(id) {
+                v.reset_current(&mut ctx);
+            }
             self.group
                 .set_current(Some(id), SelectMode::Enter, &mut ctx);
         }
@@ -2529,6 +2540,49 @@ mod tests {
         let result = program.exec_view(Box::new(dialog));
 
         assert_eq!(result, Command::CANCEL, "Esc -> cmCancel ends the modal");
+        assert_eq!(program.capture_len(), 0, "ModalFrame popped");
+    }
+
+    /// Integration SMOKE test for the initial-currency seam: `exec_view` on a plain
+    /// `Dialog` holding a selectable `Button`, driven by Esc as the first event, runs
+    /// to completion (returns cmCancel, frame popped) with NO hang. This exercises
+    /// the `find_mut(id) -> reset_current` call wired into `exec_view`.
+    ///
+    /// NOTE — not the discriminating guard. `TDialog::handleEvent` converts Esc into
+    /// cmCancel at the *dialog* level, independent of internal currency, so this test
+    /// passes even with the seam reverted (verified). The seam itself is guarded by
+    /// `group::tests::reset_current_via_trait_sets_current_to_first_selectable`, which
+    /// asserts the trait dispatch flips `current` from None to the first selectable
+    /// child. This test confirms the wiring path is sound and hang-free end-to-end.
+    #[test]
+    fn plain_dialog_keyboard_live_on_first_event_esc_cancels() {
+        use crate::widgets::{Button, ButtonFlags};
+
+        let (mut program, _screen, _clock) = program_with_desktop(40, 12);
+
+        let mut dialog = Dialog::new(Rect::new(4, 2, 36, 10), Some("Setup".into()));
+        // A single selectable child. With reset_current at open this becomes the
+        // dialog's `current`, making the dialog keyboard-live immediately.
+        dialog.insert_child(Box::new(Button::new(
+            Rect::new(2, 5, 12, 7),
+            "OK",
+            Command::OK,
+            ButtonFlags::new(),
+        )));
+
+        // Esc as the FIRST event, no prior nav: pump 1 routes it to the focused
+        // child / dialog -> posts cmCancel; a later pump routes cmCancel ->
+        // end_modal(Cancel) -> exits. Before the seam this hung.
+        program.out_events.push_back(key(Key::Esc));
+
+        let result = program.exec_view(Box::new(dialog));
+
+        assert_eq!(
+            result,
+            Command::CANCEL,
+            "Esc on a fresh dialog with a selectable child ends the modal with \
+             cmCancel — proves the dialog is keyboard-live on the first event"
+        );
         assert_eq!(program.capture_len(), 0, "ModalFrame popped");
     }
 

@@ -750,6 +750,19 @@ pub trait View {
         false
     }
 
+    /// Establish this view's INTERNAL currency — for a group-bearing view, set its
+    /// `current` to the first visible+selectable child. Ports the C++ insert-time
+    /// cascade `TGroup::insertBefore → p->show() → TView::setState(sfVisible) →
+    /// owner->resetCurrent()` (tview.cpp:723), which rstv's ctx-less `Group::insert`
+    /// (D3) cannot run at insert. `exec_view` calls this on a freshly-inserted modal
+    /// BEFORE focusing it, so the modal's first selectable child is current on open
+    /// (otherwise the modal is keyboard-dead until a nav event — see the seam note in
+    /// `exec_view`). Base: no-op (a leaf has no internal currency); `Group` overrides;
+    /// `Window`/`Dialog` delegate.
+    fn reset_current(&mut self, ctx: &mut Context) {
+        let _ = ctx;
+    }
+
     /// `TView`/`TWindow::number` — the window number for Alt-N selection. Base
     /// views are unnumbered (`None`); [`Window`](crate::window::Window) overrides
     /// to return its number when `> 0` (`wnNoNumber == 0` → `None`).
