@@ -24,9 +24,11 @@ bookkeeping. We port the **observable contract**, not the byte layout.
 
 2. **Index order is OLDEST→NEWEST per id.** `history_str(id, 0)` returns the
    oldest surviving entry for that id; appends go to the back (newest). **Do NOT
-   invert** — row 55 (`THistoryViewer`) owns display-order inversion and depends
-   on this exact convention. (Trace: C++ `startId` → `curRec = front`,
-   `advanceStringPointer` walks forward, `historyStr` advances `index+1` times.)
+   invert** — and note **neither does row 55**: `THistoryViewer::get_text` is a
+   direct `history_str(id, item)` passthrough (no inversion anywhere, faithful to
+   C++). The convention just has to be consistent end-to-end. (Trace: C++
+   `startId` → `curRec = front`, `advanceStringPointer` walks forward,
+   `historyStr` advances `index+1` times.)
 
 3. **`history_add` operation order (load-bearing):**
    1. if `str` is empty → return (add nothing);
