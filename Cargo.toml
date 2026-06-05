@@ -20,6 +20,7 @@ crossterm = "0.29.0"            # backend module: production terminal I/O behind
 unicode-segmentation = "1.13.2" # text module: grapheme clustering (D13, row 8)
 unicode-width = "0.2.2"         # text module: display column widths (D13, row 8)
 tvision-macros = { path = "tvision-macros", version = "0.1.0" }
+regex-automata = { version = "0.4", default-features = false, features = ["std", "syntax", "dfa-build", "dfa-search", "unicode-perl"] }
 
 [dev-dependencies]
 insta = "1.47.2"      # snapshot tests: golden-file verification (D11, row 19)

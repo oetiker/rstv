@@ -27,6 +27,11 @@
 //! (row 59). The slot-in point is breadcrumbed in `InputLine::value`/`set_value`.
 
 use crate::data::FieldValue;
+use regex_automata::{
+    Anchored,
+    dfa::{Automaton, StartKind, dense},
+    util::start::Config as StartConfig,
+};
 
 /// An input validator — `TValidator` (D2: abstract base → trait).
 ///
@@ -945,6 +950,159 @@ impl Validator for PXPictureValidator {
     fn error(&self) {}
 }
 
+// ── RegexValidator (rstv extension) ─────────────────────────────────────────
+
+/// Error returned when compiling a [`RegexValidator`] pattern.
+///
+/// A thin wrapper over the regex-automata build error so the dependency's
+/// exact error type does not leak into the public API.
+#[derive(Debug)]
+pub struct RegexError(String);
+
+impl std::fmt::Display for RegexError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for RegexError {}
+
+/// rstv-original **extension** (NOT a Turbo Vision port): a [`Validator`]
+/// driven by a regular expression, giving the same two-phase behavior as
+/// [`PXPictureValidator`] — `is_valid` = the input fully matches the pattern;
+/// `is_valid_input` = the input is still a *prefix of some complete match*
+/// ("could it still become valid?") — but expressed as a regex so callers can
+/// leverage regex knowledge instead of Paradox picture-mask syntax.
+///
+/// ## Pattern semantics
+/// The pattern describes the **complete field value** and is implicitly fully
+/// anchored. The user pattern is compiled twice (see [`new`](Self::new)); the
+/// effective pattern is `(?:<pattern>)\z` built with an anchored start state.
+/// Three pieces cooperate:
+/// - **Start anchor** comes from the DFA's anchored-start configuration
+///   (`StartKind::Anchored`).
+/// - **End anchor**: for [`is_valid`](Validator::is_valid) it is the
+///   `next_eoi_state` + `is_match_state` step; the `\z` in the wrapped pattern
+///   is what drives [`is_valid_input`](Validator::is_valid_input)'s dead-state
+///   rejection (without it, no trailing input could ever be ruled out).
+/// - The **`(?:…)` non-capturing group** fixes alternation precedence: it
+///   anchors the *whole* alternation, so `cat|dog` means "(cat or dog), then
+///   end" rather than "cat, or (dog then `\z`)".
+///
+/// To stop a malformed pattern from escaping that wrap (e.g. an unbalanced `)`
+/// that would close `(?:…)` early and silently defeat end-anchoring), the bare
+/// user pattern is validated for self-containment before wrapping — see
+/// [`new`](Self::new).
+///
+/// ## Per-keystroke viability (`is_valid_input`)
+/// Uses the DFA **dead-state** test: walk the anchored DFA over the bytes of
+/// the input; if a dead state (one from which no match is ever reachable) is
+/// reached, the input cannot become valid no matter what is appended → reject.
+/// Unlike [`PXPictureValidator`], `RegexValidator` performs **no autofill** and
+/// never mutates the input string.
+///
+/// ## Construction cost and thread safety
+/// The DFA is compiled once in [`new`](Self::new) and is thereafter immutable.
+/// `RegexValidator` is `Send + Sync`. `\d`/`\w`/`\s` and other Perl-compatible
+/// character classes are available (`unicode-perl` feature is enabled).
+///
+/// [`PXPictureValidator`]: crate::PXPictureValidator
+pub struct RegexValidator {
+    dfa: dense::DFA<Vec<u32>>,
+    /// The original user-supplied pattern, retained for [`Debug`] and [`error`](Validator::error).
+    pattern: String,
+}
+
+impl std::fmt::Debug for RegexValidator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The DFA's internal repr is not Debug-friendly to print; show the pattern only.
+        f.debug_struct("RegexValidator")
+            .field("pattern", &self.pattern)
+            .finish()
+    }
+}
+
+impl RegexValidator {
+    /// Compile `pattern` as a description of a complete, valid field value.
+    ///
+    /// The pattern is wrapped as `(?:<pattern>)\z` (end-anchored) and the DFA
+    /// is built with `StartKind::Anchored` (start-anchored). Returns `Err` if
+    /// the pattern is syntactically invalid or its DFA exceeds build limits.
+    ///
+    /// The bare pattern is built and validated *first*, before wrapping: a
+    /// pattern that is not self-contained — e.g. an unbalanced `)` that would
+    /// close the `(?:…)` group early and silently defeat end-anchoring (the
+    /// `\z` binding only part of the pattern) — is rejected here. A balanced
+    /// bare pattern cannot break out of the wrap, so this closes that hole.
+    pub fn new(pattern: &str) -> Result<Self, RegexError> {
+        let cfg = dense::Config::new().start_kind(StartKind::Anchored);
+        // Reject patterns that aren't self-contained (paren-injection guard).
+        dense::Builder::new()
+            .configure(cfg.clone())
+            .build(pattern)
+            .map_err(|e| RegexError(e.to_string()))?;
+        let wrapped = format!(r"(?:{pattern})\z");
+        let dfa = dense::Builder::new()
+            .configure(cfg)
+            .build(&wrapped)
+            .map_err(|e| RegexError(e.to_string()))?;
+        Ok(Self {
+            dfa,
+            pattern: pattern.to_string(),
+        })
+    }
+
+    /// Walk the anchored DFA over the bytes of `s`.
+    ///
+    /// Returns `(dead, state)` where `dead == true` means the DFA reached a
+    /// dead state (no continuation can ever match). `StartKind::Anchored`
+    /// guarantees the anchored start state exists, so the `start_state` call
+    /// never errors — the `expect` documents that build-time invariant.
+    fn walk(&self, s: &str) -> (bool, regex_automata::util::primitives::StateID) {
+        let mut st = self
+            .dfa
+            .start_state(&StartConfig::new().anchored(Anchored::Yes))
+            .expect("anchored start state (DFA built with StartKind::Anchored)");
+        for &b in s.as_bytes() {
+            st = self.dfa.next_state(st, b);
+            if self.dfa.is_dead_state(st) {
+                return (true, st);
+            }
+        }
+        (false, st)
+    }
+}
+
+impl Validator for RegexValidator {
+    /// The whole input matches the pattern (a complete, valid value).
+    ///
+    /// Equivalent to `prComplete` in the picture-validator model: both start
+    /// and end anchors must be satisfied.
+    fn is_valid(&self, s: &str) -> bool {
+        let (dead, st) = self.walk(s);
+        if dead {
+            return false;
+        }
+        let st = self.dfa.next_eoi_state(st);
+        self.dfa.is_match_state(st)
+    }
+
+    /// The input is still a prefix of some complete match — "could it become
+    /// valid if the user keeps typing?".
+    ///
+    /// Equivalent to `prIncomplete` (or better) in the picture-validator model:
+    /// rejects only when the DFA has reached a dead state (no continuation can
+    /// ever lead to a match). Does **not** mutate `s` — unlike
+    /// [`PXPictureValidator`], there is no autofill.
+    fn is_valid_input(&self, s: &mut String, _suppress_fill: bool) -> bool {
+        !self.walk(s).0
+    }
+
+    /// Report an invalid final value.
+    /// TODO(row 63): messageBox(mfError|mfOKButton, "Input does not match pattern: {pattern}")
+    fn error(&self) {}
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1408,5 +1566,124 @@ mod tests {
         assert!(grp.is_valid("123")); // required group satisfied
         assert!(!grp.is_valid("12")); // group short → incomplete
         assert!(!grp.is_valid("12a")); // 'a' not a digit → error
+    }
+
+    // ── RegexValidator (rstv extension) ──────────────────────────────────────
+    //
+    // Golden vectors verified against the working spike implementation.
+    // If a test disagrees with its comment, the implementation is wrong — do
+    // not weaken the assertion.
+
+    /// SSN pattern `\d{3}-\d{2}-\d{4}` — `is_valid` complete/incomplete/too-long.
+    #[test]
+    fn regex_ssn_is_valid() {
+        let v = RegexValidator::new(r"\d{3}-\d{2}-\d{4}").unwrap();
+        assert!(v.is_valid("123-45-6789")); // complete
+        assert!(!v.is_valid("123-45-678")); // incomplete (one digit short)
+        assert!(!v.is_valid("123-45-67890")); // too long
+    }
+
+    /// SSN pattern — `is_valid_input` viable-prefix test.
+    #[test]
+    fn regex_ssn_is_valid_input() {
+        let v = RegexValidator::new(r"\d{3}-\d{2}-\d{4}").unwrap();
+        assert!(v.is_valid_input(&mut "123".into(), false)); // viable prefix
+        assert!(v.is_valid_input(&mut "123-45-678".into(), false)); // one digit still possible
+        assert!(v.is_valid_input(&mut "123-45-6789".into(), false)); // complete is also viable
+        assert!(!v.is_valid_input(&mut "123-45-67890".into(), false)); // 5th trailing digit → dead
+        assert!(!v.is_valid_input(&mut "12a".into(), false)); // letter kills the DFA
+    }
+
+    /// Three-digit pattern `\d{3}` — complete/incomplete/too-long + empty.
+    #[test]
+    fn regex_three_digits_is_valid() {
+        let v = RegexValidator::new(r"\d{3}").unwrap();
+        assert!(v.is_valid("123")); // complete
+        assert!(!v.is_valid("12")); // incomplete
+        assert!(!v.is_valid("1234")); // too long
+    }
+
+    /// Three-digit pattern — `is_valid_input` including empty and 4th-digit dead.
+    #[test]
+    fn regex_three_digits_is_valid_input() {
+        let v = RegexValidator::new(r"\d{3}").unwrap();
+        assert!(v.is_valid_input(&mut "".into(), false)); // empty: still viable
+        assert!(v.is_valid_input(&mut "12".into(), false)); // two digits: still viable
+        assert!(!v.is_valid_input(&mut "1234".into(), false)); // 4th digit → dead
+        assert!(!v.is_valid_input(&mut "12a".into(), false)); // letter → dead
+    }
+
+    /// `cat|dog` — the whole alternation is anchored at both ends. End-anchoring
+    /// for `is_valid` comes from the `next_eoi_state`+`is_match_state` step; the
+    /// `(?:…)` group ensures `\z` binds the *whole* alternation (not just one
+    /// branch), so neither "cat…" nor "dog…" can pass with trailing input.
+    #[test]
+    fn regex_alternation_end_anchored() {
+        let v = RegexValidator::new(r"cat|dog").unwrap();
+        assert!(v.is_valid("cat")); // complete
+        assert!(v.is_valid("dog")); // complete
+        assert!(!v.is_valid("do")); // incomplete
+        assert!(!v.is_valid("cats")); // end-anchored: trailing 's' makes it fail
+    }
+
+    /// Paren-injection guard: a pattern that is not self-contained — e.g. an
+    /// unbalanced `)` that would close the `(?:…)` wrap early and silently
+    /// defeat end-anchoring — is rejected at construction.
+    #[test]
+    fn regex_paren_injection_is_rejected() {
+        // `cat)|(.*` would build `(?:cat)|(.*)\z`, binding `\z` only to the
+        // second branch — accepting arbitrary trailing input. Must be Err.
+        assert!(RegexValidator::new("cat)|(.*").is_err());
+        assert!(RegexValidator::new(")evil(").is_err());
+    }
+
+    /// `cat|dog` — `is_valid_input` viable prefixes.
+    #[test]
+    fn regex_alternation_is_valid_input() {
+        let v = RegexValidator::new(r"cat|dog").unwrap();
+        assert!(v.is_valid_input(&mut "c".into(), false)); // prefix of "cat"
+        assert!(v.is_valid_input(&mut "d".into(), false)); // prefix of "dog"
+        assert!(v.is_valid_input(&mut "ca".into(), false)); // prefix of "cat"
+        assert!(!v.is_valid_input(&mut "x".into(), false)); // not a prefix of either
+    }
+
+    /// Start+end anchoring: a valid sub-match that is not at the start/end must fail.
+    #[test]
+    fn regex_anchoring_both_ends() {
+        let v = RegexValidator::new(r"cat").unwrap();
+        assert!(!v.is_valid("xcat")); // leading 'x' breaks start anchor
+        assert!(!v.is_valid("catx")); // trailing 'x' breaks end anchor
+        assert!(!v.is_valid_input(&mut "xc".into(), false)); // 'x' is not a valid prefix
+    }
+
+    /// No-mutation guarantee: `is_valid_input` must not modify the string.
+    #[test]
+    fn regex_no_mutation() {
+        let v = RegexValidator::new(r"\d{3}").unwrap();
+        let mut s = "12".to_string();
+        v.is_valid_input(&mut s, false);
+        assert_eq!(s, "12");
+    }
+
+    /// Invalid pattern returns `Err` rather than panicking.
+    #[test]
+    fn regex_invalid_pattern_returns_err() {
+        assert!(RegexValidator::new("(").is_err()); // unbalanced paren
+    }
+
+    /// Object safety: `RegexValidator` is storable as `Box<dyn Validator>`.
+    #[test]
+    fn regex_object_safe() {
+        let v: Box<dyn Validator> = Box::new(RegexValidator::new(r"\d+").unwrap());
+        assert!(v.is_valid("42"));
+        assert!(!v.is_valid("4x"));
+    }
+
+    /// `is_status_ok` uses the trait default (true) — construction failure is
+    /// reported via `Err`, not a bad status on a successfully-built validator.
+    #[test]
+    fn regex_status_ok_after_successful_construction() {
+        let v = RegexValidator::new(r"\d+").unwrap();
+        assert!(v.is_status_ok());
     }
 }
