@@ -1,4 +1,4 @@
-# Session handover — **history store (54) + `THistoryViewer` (55) DONE** (Phase 4). Next: **`THistoryWindow` (56) + `THistory` (57)** — but FIRST build the two seams they need: a **production `Window::insert`** (56) and the **view-triggered async-modal path** (57, shared with msgbox 63). Then **Batch C validators 58–62**
+# Session handover — **`THistoryWindow` (56) DONE** (Phase 4). Next: **`THistory` (57)** — the FOUNDATION view-triggered async-modal path (`Deferred::OpenModal` + result flowback, shared with msgbox 63), which ALSO must build the **ModalFrame deliver-outside-to-modal** seam row 56 deferred. Then **Batch C validators 58–62** / **msgbox 63**
 
 > Living handover for the **next** rstv session. Read this, then
 > [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md) (orientation /
@@ -15,6 +15,7 @@
 
 | commit | what |
 |--------|------|
+| `ad41f05` | **`THistoryWindow` (56) — modal recall window hosting the viewer** — faithful `thistwin.cpp`. `HistoryWindow` is a `TWindow` subtype (D2 embed + `#[delegate(to = window)]`, like `Dialog`) assembling a frame + two `standard_scroll_bar`s (h `sbHorizontal\|sbHandleKeyboard`, v `sbVertical\|…`) + a `HistoryViewer` (55) over an extent grown `(-1,-1)`, with `get_selection` = the viewer's focused `get_text` (by id + `as_any_mut` downcast). `flags = wfClose` only (not movable). **Seam promoted (shared foundation touch, also unblocks msgbox 63 + Batch E):** `Window::insert_child`/`Dialog::insert_child` go `#[cfg(test)]`→real `pub(crate)`, + new `pub(crate) Window::child_mut`. **Viewer `setup()` (the Context-needing ctor tail, row 55/ListBox constraint) runs ONCE at the TOP of `handle_event`, BEFORE delegating to `TWindow::handleEvent`** — so the first event reaches an initialized viewer (the bite: misorder → first Down hits a range=0 viewer → focused wrong; verified empirically to fail with focused==1). **DEFERRED (breadcrumbed, NOT a silent drop):** the C++ `evMouseDown && !mouseInView → endModal(cmCancel)` outside-click cancel — our `ModalFrame` (program.rs) **Consumes outside positional events before they reach the modal view**, so the arm is unreachable; delivering outside clicks to the modal view is a **modal-loop change reserved for row 57 / msgbox 63** (`Deferred::OpenModal`). Esc/Enter/double-click confirm/cancel still work (the viewer, row 55). `cpHistoryWindow` palette → provisional Window/Frame + TODO(row 34). **Two-stage review (fresh SPEC + QUALITY Opus, both PASS on production code, no blockers):** the two converged test-quality SHOULD-FIX items fixed — the setup-guard test rewritten into a TRUE bite (new `#[cfg(test)] Window::select_child_for_test` makes the viewer current; deliver Down; assert focused 1→2; empirically confirmed to fail when misordered) + the negative h-bar-max test made non-vacuous (asserts the exact `-32` queued max AND that it drains through `ScrollBar::set_params` in a live `exec_view` pump without panic — the HANDOVER watch-item, now pinned end-to-end). 613→618 tests. MECHANICAL ← THIS session |
 | `6ada1fd` | **`THistoryViewer` (55) — modal recall list over the store** — faithful `thstview.cpp`. A single-column `TListViewer` subclass (mirrors the `TListBox` template: `impl ListViewer` lv/lv_mut + override only `get_text`; `impl View` delegating draw/event/nav to the `list_viewer::` free fns) that reads the row-54 store **live by id**. `get_text(item)` → `history_str(id, item)`; `handle_event`: Enter/double-click → `ctx.end_modal(Command::OK)`, Esc/`cmCancel` → `end_modal(Command::CANCEL)`, **unconditional (no `sfModal` gate** — the viewer only ever lives in a modal `THistoryWindow`, faithful to the C++), else fall through to `list_viewer::handle_event`. `history_width()` = max `text::width` over the channel. The Context-needing ctor tail (`set_range(history_count)`/`focus_item(1)` when range>1/h-bar `setRange(0, historyWidth()-size.x+3)`) moved to a post-insert **`setup(&mut self, ctx)`** (same Context-free-ctor constraint as `ListBox::new`; **does NOT** publish step sizes — the C++ ctor doesn't either). `history_id: u8` throughout (C++ `ushort` truncates to the `uchar` store; explicit `u8` avoids silent aliasing). Palette reuses provisional `Role::List*` + `TODO(row 34): cpHistoryViewer remap` (no new Role variants). **Two-stage review (SPEC + QUALITY, fresh Opus): SPEC PASS no findings; QUALITY PASS + 1 SHOULD-FIX** (added a bite-checked test for the previously-untested h-bar `setRange` branch — exact `max=-12` from `historyWidth-size.x+3`) + 1 cost NIT comment. 601→613 tests (+12 incl. a snapshot proving item-1 focus). MECHANICAL ← THIS session |
 | `121ec67` | **history store (54) — `historyAdd`/`Count`/`Str`/`clearHistory`** — faithful `histlist.cpp` as an idiomatic `Vec`: a single **global 1024-byte budget** with **global FIFO eviction** (NOT per-id), `thread_local! { RefCell<Vec<HistRec>> }` (single-threaded like the C++; per-test isolation falls out of libtest's per-test threads). Four free fns in `src/widgets/history.rs`. Cost/entry = `str.len()+3` (UTF-8 bytes, faithful `TStringView::size`). Index order **oldest→newest per id** (row 55's `get_text` reads it directly — no inversion anywhere, faithful to C++). `history_add`: dedup `(id,str)` FIRST → evict front → push back. **Documented deliberate deviation:** the C++ front-sentinel + always-skip-front bookkeeping is NOT replicated, so every non-evicted entry is readable (C++ hides one globally-oldest entry after the first overflow); C++'s in-band sentinel makes its budget 3 bytes tighter (a byte-boundary nuance, not a new divergence). `initHistory`/`doneHistory` moot (thread-local Vec) — omitted, not stubbed. **Two-stage review (SPEC + QUALITY, fresh Opus): both PASS, no blockers; +3 NITs** (`#[must_use]` getters, single `cost_of()`, doc precision note). 593→601 tests. The shared dependency for rows 55–57. MECHANICAL ← THIS session |
 | `0fc6a9e` | **`Desktop::tile`/`cascade` geometry + `cmTile`/`cmCascade` WIRED — the row-32 `TApplication` breadcrumb is CLOSED** — faithful port of `TDeskTop::tile`/`cascade` (`tdesktop.cpp`): `i_sqr`/`most_equal_divisors`/`divider_loc`/`calc_tile_rect` ported as pure fns (the C++ file statics threaded as params, no globals; `divider_loc` multiply in `i64`), re-added the `tile_columns_first` field (`favorY = !tile_columns_first`; tile now consumes it). **New seam `view::locate` is a FREE FN, NOT a `View` trait method** — a trait method would be forwarded by `#[delegate]` to a wrapper's inner group, whose `size_limits` is 0×0, bypassing e.g. `Window`'s 16×6 min (the advisor-caught trap; the existing inherent `Window::locate` for zoom is left untouched). `tile`/`cascade` are defaulted no-op `View` trait methods **overridden by `Desktop`** (mirrors `select_window_num`; the program drives the desktop by id through `&mut dyn View`, no downcast) + `Group::tileable_ids` (forEach order = `children.iter().rev()` filtered `tileable && visible`) + `child_mut` per child. **Off-by-one pinned** (`tile_num`/`cascade_num` start `n-1`; cascade error check subtracts the full `n`; `lastView` = `ids.last()`). Wired in `program_handle_event` after `group.handle_event`, beside the QUIT catch (`getTileRect()` = desktop child extent, `ev.clear()` after). `examples/hello.rs` opts its 3 demo windows into `ofTileable` + adds Window→Tile/Cascade items (cmTile/cmCascade are default-enabled, so they route + draw enabled). **Full two-stage review (SPEC + QUALITY, fresh C++-adversarial Opus): no blockers, no should-fix** — SPEC verified line-by-line incl. the end-to-end menu-enable path; QUALITY traced the integer geometry panic-free (`i_sqr(1)=1`, no div-by-zero) + tests discriminating. +3 NIT cleanups (closed a latent **`delegate_view` spy gap**: it never exercised `set_menu_current`, count 24→**25**; + column-first `most_equal_divisors` branch test; + cmCascade pump test). 585→593 tests (FOUNDATION) ← THIS session |
@@ -30,9 +31,10 @@
 | `3e6645f` | **TApplication (32)** — thin D2 wrapper over `Program` (MECHANICAL) |
 | `47894f0…66ab55f` | **`#[delegate]` proc-macro** — `tvision-macros` crate + workspace, then **adopted** across cluster/Window/Dialog/ParamText/Label/Desktop + the hello example (replaces `cluster_wrapper!`) |
 
-**Build state:** 613 lib (was 593; +20 this session: +8 row-54 history-store
-tests, +12 row-55 `HistoryViewer` tests incl. 1 snapshot) + 5 integration (3
-`render_pipeline` + 2 `delegate_view`, the latter exercising **25** macro
+**Build state:** 618 lib (was 613; +5 this session: row-56 `HistoryWindow` tests
+— construction, keyboard-routes-after-setup via `exec_view`, `get_selection`, the
+setup-guard TRUE bite, the negative-h-bar-max live-pump end-to-end) + 5 integration
+(3 `render_pipeline` + 2 `delegate_view`, the latter exercising **25** macro
 forwarders) + 2 doctests green;
 `cargo build --example hello` builds the drivable app; `cargo clippy --workspace --all-targets -- -D warnings` and `cargo
 fmt --all --check` clean (verify clippy with a forced re-lint — a cached run can
@@ -50,11 +52,14 @@ line rows 47 (`TStatusItem`/`TStatusDef`) + 53 (`TStatusLine` draw/data slice) a
 DONE** (a prior session). **The menu bar + status line are WIRED INTO `Program`**
 (`examples/hello.rs` is a drivable TV app), and **`Desktop::tile`/`cascade` +
 `cmTile`/`cmCascade` are WIRED** (the row-32 breadcrumb CLOSED) — all prior sessions.
-**THIS session: the history subsystem's first two rows — the store (54) + the
-`THistoryViewer` (55) — are DONE** (see below). **Next: `THistoryWindow` (56) +
-`THistory` (57)**, gated on two seams (see NEXT): a production `Window::insert` and
-the view-triggered async-modal path. Batch C validators 58–62 remain an available
-parallel fan-out; `cmDosShell` still needs a backend suspend seam.
+The history store (54) + `THistoryViewer` (55) landed a prior session; **THIS
+session: `THistoryWindow` (56) is DONE** (top git-table row), including the
+promoted production `Window::insert_child`/`child_mut` seam. **Next: `THistory`
+(57)** — the FOUNDATION view-triggered async-modal path (`Deferred::OpenModal` +
+result flowback), which must ALSO build the **ModalFrame deliver-outside-to-modal**
+seam row 56 deferred (the outside-click cancel). msgbox 63 is the co-consumer of
+the async-modal seam. Batch C validators 58–62 remain an available parallel
+fan-out; `cmDosShell` still needs a backend suspend seam.
 
 > **Worktrees** live under `/scratch/oetiker/claude-worktrees/<project>-<name>`
 > (global CLAUDE.md). A `WorktreeCreate` hook (`~/.claude/settings.json` →
@@ -282,39 +287,39 @@ integrate. `src/menu/menu_session.rs` + re-exports + 6 tests.
   1 submenu-popup carry-up exit-click (the SPEC-flagged previously-only-reasoned path),
   2 `auto_place_popup` geometry units (below-right; bottom-edge shift-up). 551 lib green.
 
-### NEXT — **`THistoryWindow` (56) + `THistory` (57)** (build their two seams first); then **Batch C validators 58–62** / **msgbox 63**
-**History rows 54 (store) + 55 (`THistoryViewer`) are DONE this session** (top two
-git-table rows; briefs `row54-*`/`row55-*`). The lowest-numbered remaining
-in-sequence work is the rest of the history subsystem — but **two seams must be
-built first** (full detail in *What landed THIS session* above):
+### NEXT — **`THistory` (57)** — the FOUNDATION async-modal seam (also build the **ModalFrame outside-delivery** seam row 56 deferred); then **Batch C validators 58–62** / **msgbox 63**
+**Rows 54 (store) + 55 (`THistoryViewer`) + 56 (`THistoryWindow`) are DONE** (54/55
+a prior session, **56 THIS session** — top git-table row). The production
+`Window::insert_child`/`child_mut` seam is now built. The lowest-numbered remaining
+in-sequence work is **row 57** — the FOUNDATION piece of the history cluster:
 
-- **Row 56 `THistoryWindow` (MECHANICAL, but needs a small foundation touch):** a
-  `TWindow` (D2 embed-and-delegate via `#[delegate(to = window)]`, like `Dialog`)
-  that builds two `standard_scroll_bar`s + a `THistoryViewer` and inserts it.
-  **BLOCKER to clear first: there is no production `Window::insert` yet** —
-  `Window::insert_child`/`Dialog::insert_child` are `#[cfg(test)]`-only. Promote
-  `Window::insert_child` to a real `pub(crate)` method (ctx-free, `self.group.
-  insert`) — this also unblocks msgbox 63 + Batch E. Then: ctor sets
-  `flags = wfClose` only (`set_flags`), the `initViewer` factory grows the extent
-  `(-1,-1)` + builds h/v bars + the viewer, inserts it, and the window calls the
-  viewer's post-insert `setup(ctx)`. `getSelection` = the viewer's focused
-  `get_text` (reach by id + `as_any_mut` downcast). `handle_event` = `TWindow::
-  handleEvent` then **mouseDown-outside → endModal(cmCancel)** (the click-outside
-  cancel; testable standalone by feeding an out-of-bounds mouseDown). `cpHistoryWindow`
-  palette → provisional `Window`/`Frame` roles + `TODO(row 34)`. **Watch-item:**
-  row 55's hbar `setRange(0, historyWidth()-size.x+3)` can be **negative** and is
-  only asserted as a *queued* `Deferred` so far (never drained into a live bar).
-  Row 56 is the first to wire a real hbar through the pump — **verify the negative
-  `max` doesn't panic/misbehave when `ScrollBar::set_params` drains it** (almost
-  certainly fine — row-25 `ScrollBar` is a faithful port — but unverified end-to-end).
+- **Row 56 discovery to carry into 57 — the `ModalFrame` outside-delivery seam.**
+  Row 56 **deferred** the C++ `THistoryWindow` `evMouseDown && !mouseInView →
+  endModal(cmCancel)` outside-click cancel because our `ModalFrame`
+  (`src/app/program.rs`, `ModalFrame::handle`) **Consumes positional events outside
+  the modal view's bounds** (a row-34 dialog simplification: delivered-and-ignored
+  == swallowed, *for a dialog*). But `THistoryWindow` needs to **see** the outside
+  click to cancel. Faithfully, the modal view is the top group and receives **every**
+  event (C++ `TGroup::execute` `getEvent`→`handleEvent`); the modal view (a group)
+  routes its *own* children positionally. So the fix is a modal-loop change:
+  **ModalFrame should DELIVER outside positional events to the modal view (by id),
+  not Consume them** — i.e. while a `ModalFrame` is active, route ALL events to the
+  modal view rather than positionally through the root group. Design this with the
+  advisor **alongside** the row-57 async-modal path (both are modal-loop work); once
+  built, un-defer the `HistoryWindow::handle_event` outside-cancel arm (the breadcrumb
+  is in place there).
 - **Row 57 `THistory` (FOUNDATION — design with the advisor):** the dropdown-icon
   `TView` placed next to a `TInputLine` (row 39 done). On its trigger
   (`cmHistoryDropDown`/click), it **`execView`s a `THistoryWindow` from within its
   own `handle_event`** and on `cmOK` writes the picked `getSelection` string into
   the linked input line (+ `recordHistory(s)` = `history_add`). This is the
-  **unbuilt D9 view-triggered async-modal path** the menu sessions reserved
-  (`Deferred::OpenModal` + a posted completion `Command` + reading the modal
-  result). **msgbox 63 is the co-consumer — build the seam once, wire both.**
+  **unbuilt D9 view-triggered async-modal path** the menu sessions reserved — note
+  `exec_view` is currently **top-level-only** (a view holds only `&mut Context`, can't
+  call it inline; doc at `program.rs:466`), so 57 must add `Deferred::OpenModal {
+  view, …, on_close }` (the pump runs `exec_view` at apply-time, then a completion
+  callback reads the modal's `get_selection` + writes it back into the link — the
+  flowback is the design crux; `get_selection` is already built on `HistoryWindow`).
+  **msgbox 63 is the co-consumer — build the seam once, wire both.**
   `THistory::draw` = the down-arrow icon (`▼`, `historyIcon`); `getPalette`
   `cpHistory`. The `link`/`historyId` fields; `shutDown` (drop the link ref, moot
   under Rust ownership).
@@ -324,8 +329,8 @@ built first** (full detail in *What landed THIS session* above):
   re-clamp hazard; `FieldValue::Int` ready). **Available NOW** (independent of the
   history seams) if you'd rather fan out than design the async-modal path.
 - **msgbox 63** — co-consumer of the row-57 async-modal seam (`Deferred::OpenModal`
-  + posted completion `Command`); also needs the production `Window::insert` (row
-  56's seam) to add its `TStaticText`/`TButton`/`TInputLine` children.
+  + posted completion `Command`); uses the now-built production `Window::insert_child`
+  (row 56's seam) to add its `TStaticText`/`TButton`/`TInputLine` children.
 - **`cmDosShell`** is still deferred — needs a backend terminal-suspend seam + SIGTSTP.
 
 Other open follow-ons (lower priority / parallel):
