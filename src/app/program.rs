@@ -499,7 +499,7 @@ impl Program {
     fn pump_and_drive(&mut self) {
         self.pump_once();
         if let Some((view, completion)) = self.pending_modal.take() {
-            self.exec_view_with_completion(view, Some(completion), None);
+            self.exec_view_with_completion(view, Some(completion), None, None);
         }
     }
 
@@ -564,7 +564,7 @@ impl Program {
     /// 8. Pop the frame, `remove` the view, `setCurrent(saveCurrent, leaveSelect)`.
     /// 9. Restore the command set (`setCommands`).
     pub fn exec_view(&mut self, view: Box<dyn View>) -> Command {
-        self.exec_view_with_completion(view, None, None)
+        self.exec_view_with_completion(view, None, None, None).0
     }
 
     // -- message box (row 63, PART 1) ----------------------------------------
@@ -587,7 +587,8 @@ impl Program {
         buttons: crate::dialog::MessageBoxButtons,
     ) -> Command {
         let (d, first_btn) = crate::dialog::build_message_box(r, msg, kind, buttons);
-        self.exec_view_with_completion(Box::new(d), None, first_btn)
+        self.exec_view_with_completion(Box::new(d), None, first_btn, None)
+            .0
     }
 
     /// `messageBox` — build and exec a message-box dialog auto-centered on the
@@ -625,16 +626,99 @@ impl Program {
 
         // Center within the desktop's size; fall back to the root group size.
         // C++: r.move((TProgram::deskTop->size.x - r.b.x) / 2, …)
-        let desk_size = if let Some(id) = self.desktop {
+        let desk_size = self.desktop_size();
+        r.r#move((desk_size.x - base_w) / 2, (desk_size.y - h) / 2);
+        self.message_box_rect(r, msg, kind, buttons)
+    }
+
+    /// `TProgram::deskTop->size` — the desktop view's SIZE, used to center modal
+    /// standard dialogs ([`message_box`](Self::message_box) /
+    /// [`input_box`](Self::input_box)). Falls back to the root group's size if no
+    /// desktop was created. The `r.r#move(...)` centering stays in each caller.
+    fn desktop_size(&mut self) -> Point {
+        if let Some(id) = self.desktop {
             self.group
                 .find_mut(id)
                 .map(|v| v.state().size)
                 .unwrap_or_else(|| self.group.state().size)
         } else {
             self.group.state().size
+        }
+    }
+
+    // -- input box (row 63, PART 2) ------------------------------------------
+
+    /// `inputBoxRect` — build and exec a single-line input dialog at an explicit
+    /// `Rect`. Faithful port of `msgbox.cpp::inputBoxRect` (D1 drop-`T`/`snake_case`;
+    /// D9 `execView`/`destroy` live here in [`Program`]; D10 the value currency
+    /// carries the scatter/gather). Construction is split out into the pure
+    /// [`build_input_box`](crate::dialog::build_input_box) builder.
+    ///
+    /// `label` is the prompt drawn left of the field; `initial` is the starting
+    /// text (C++ `setData(s)` scatters it into the input line and selects-all);
+    /// `limit` caps the field's byte length (`maxLen = limit - 1`, `ilMaxBytes`).
+    ///
+    /// Returns `(cmd, text)` where `cmd` is the end [`Command`] (`Command::OK` /
+    /// `Command::CANCEL`). On a non-cancel result, `text` is the field's final
+    /// contents (C++ `if (c != cmCancel) getData(s)`); on cancel, `text` is the
+    /// unchanged `initial` (faithful — C++ leaves `s` untouched).
+    ///
+    /// **Single-field shortcut (NOT the general D10 group-walk).** `inputBox` has
+    /// exactly one transferable field (the lone [`InputLine`](crate::widgets::InputLine)),
+    /// so scatter = `set_value` on it and gather = `value()` on it. The general
+    /// `Dialog` gather/scatter group-walk stays deferred to its first multi-field
+    /// consumer.
+    pub fn input_box_rect(
+        &mut self,
+        bounds: Rect,
+        title: &str,
+        label: &str,
+        initial: &str,
+        limit: i32,
+    ) -> (Command, String) {
+        let (mut d, input_id) = crate::dialog::build_input_box(bounds, title, label, limit);
+
+        // Scatter (C++ `dialog->setData(s)`): seed the lone input line with the
+        // initial text via the D10 value currency.
+        if let Some(v) = d.find_mut(input_id) {
+            v.set_value(crate::data::FieldValue::Text(initial.to_string()));
+        }
+
+        // initial_focus AND gather are both the input line: selectNext(False)
+        // focuses the first selectable child (the input line), and getData reads
+        // it back out.
+        let (cmd, gathered) =
+            self.exec_view_with_completion(Box::new(d), None, Some(input_id), Some(input_id));
+
+        // On cancel/none, `s` is unchanged (faithful) → return `initial`.
+        let text = match gathered {
+            Some(crate::data::FieldValue::Text(s)) => s,
+            // None = cancel (or no gather); Some(Int) is unreachable — InputLine only yields Text.
+            _ => initial.to_string(),
         };
-        r.r#move((desk_size.x - base_w) / 2, (desk_size.y - h) / 2);
-        self.message_box_rect(r, msg, kind, buttons)
+        (cmd, text)
+    }
+
+    /// `inputBox` — build and exec a single-line input dialog auto-centered on the
+    /// desktop. Faithful port of `msgbox.cpp::inputBox` (base rect `(0, 0, 60, 8)`,
+    /// centered within `deskTop->size`).
+    ///
+    /// **Coordinate note:** like [`message_box`](Self::message_box), centering uses
+    /// the desktop's SIZE (faithful to C++'s `deskTop->size.x/y`); the result may be
+    /// off by the menu-bar offset once the desktop is inset in Phase 4. Minor
+    /// deviation pending Phase 4.
+    pub fn input_box(
+        &mut self,
+        title: &str,
+        label: &str,
+        initial: &str,
+        limit: i32,
+    ) -> (Command, String) {
+        // C++: TRect r(0, 0, 60, 8); r.move((deskTop->size.x - 60)/2, (size.y - 8)/2).
+        let mut r = Rect::new(0, 0, 60, 8);
+        let desk_size = self.desktop_size();
+        r.r#move((desk_size.x - 60) / 2, (desk_size.y - 8) / 2);
+        self.input_box_rect(r, title, label, initial, limit)
     }
 
     /// The unified `exec_view` body (row 57). Identical to the sync `exec_view`
@@ -653,12 +737,19 @@ impl Program {
     ///   `get_selection`). It is a DIRECT `group` mutation, NOT a deferred queue
     ///   entry — the deferred drain in `pump_once` is gated on `!ev.is_nothing()`
     ///   and would never fire from here in a headless test.
+    /// * **the `gather`** seam (row 63, PART 2 — `inputBox`'s `getData`). If
+    ///   `Some(gid)` and the result is not [`Command::CANCEL`], the value of the
+    ///   view with that id is read (`View::value`, the D10 currency) while the
+    ///   modal is still in the tree by id, and returned as the second tuple
+    ///   element. Faithful to C++ `if (c != cmCancel) dialog->getData(s)`; on
+    ///   cancel/`None` the result is `None` (the caller leaves `s` unchanged).
     fn exec_view_with_completion(
         &mut self,
         view: Box<dyn View>,
         completion: Option<ModalCompletion>,
         initial_focus: Option<ViewId>,
-    ) -> Command {
+        gather: Option<ViewId>,
+    ) -> (Command, Option<crate::data::FieldValue>) {
         // 1. getCommands / save the outgoing current.
         let save_current = self.group.current();
         let save_commands = self.command_set.clone();
@@ -806,6 +897,14 @@ impl Program {
             apply_modal_completion(c, retval, &mut self.group, id);
         }
 
+        // C++ inputBox: `if (c != cmCancel) dialog->getData(s)`. Read the gather
+        // target's value while the modal is still in the tree by id, before drop.
+        let gathered = if retval != Command::CANCEL {
+            gather.and_then(|gid| self.group.find_mut(gid).and_then(|v| v.value()))
+        } else {
+            None
+        };
+
         // 8. Pop the frame (it is on top — drags self-pop on MouseUp, so nothing
         //    unbalanced remains when end_state is set), then remove the view.
         self.captures.pop();
@@ -853,7 +952,7 @@ impl Program {
 
         // TheTopView dropped (D8: no occlusion/exposed); no consumer.
 
-        retval
+        (retval, gathered)
     }
 
     /// One iteration of the loop — the heart of D9.
@@ -5894,6 +5993,77 @@ mod tests {
             );
             assert_eq!(r2, Command::OK);
             assert_eq!(program.capture_len(), 0, "frame popped after second dialog");
+        }
+
+        // -- input box (row 63, PART 2) --------------------------------------
+
+        /// Cancel via Esc: `input_box_rect` returns `(CANCEL, initial)` — the
+        /// initial string is left unchanged (faithful: C++ skips `getData` on cancel).
+        #[test]
+        fn input_box_rect_esc_returns_cancel_unchanged() {
+            let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+            // Pre-queue Esc: the dialog converts it → cmCancel → endModal.
+            program.out_events.push_back(key(Key::Esc));
+            let r = crate::view::Rect::new(10, 5, 70, 13);
+            let (cmd, text) = program.input_box_rect(r, "Title", "Name", "hello", 20);
+            assert_eq!(cmd, Command::CANCEL, "Esc → cmCancel ends the input box");
+            assert_eq!(
+                text, "hello",
+                "on cancel the initial string is returned unchanged"
+            );
+            assert_eq!(program.capture_len(), 0, "ModalFrame popped");
+        }
+
+        /// OK path: a direct `Event::Command(cmOK)` ends the modal with OK, and
+        /// since the test types nothing, the gathered text is the scattered
+        /// `initial` (the scatter→gather round-trip on the lone input line).
+        #[test]
+        fn input_box_rect_ok_returns_scattered_initial() {
+            let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+            program.out_events.push_back(Event::Command(Command::OK));
+            let r = crate::view::Rect::new(10, 5, 70, 13);
+            let (cmd, text) = program.input_box_rect(r, "Title", "Name", "hello", 20);
+            assert_eq!(cmd, Command::OK, "direct cmOK ends the input box with OK");
+            assert_eq!(
+                text, "hello",
+                "OK gathers the scattered initial text back out (getData)"
+            );
+            assert_eq!(program.capture_len(), 0, "ModalFrame popped");
+        }
+
+        /// OK path with a TYPED edit — distinguishes a working gather from a
+        /// broken one returning `None`. We scatter "hello", type 'X' into the
+        /// focused input line (the modal's initial focus), then end with OK.
+        /// `set_value` select-all's the scattered text, so the single typed char
+        /// replaces the whole field → the gathered value is "X", which DIFFERS
+        /// from `initial`. If the gather seam were broken (yielding `None`), the
+        /// `input_box_rect` fallback would return the unchanged `initial`
+        /// ("hello") and the `== "X"` assertion would fail — that is the point.
+        #[test]
+        fn input_box_rect_ok_returns_typed_edit() {
+            let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+            // Queue a printable key (delivered to the focused input line) THEN OK.
+            program.out_events.push_back(key(Key::Char('X')));
+            program.out_events.push_back(Event::Command(Command::OK));
+            let r = crate::view::Rect::new(10, 5, 70, 13);
+            let (cmd, text) = program.input_box_rect(r, "Title", "Name", "hello", 20);
+            assert_eq!(cmd, Command::OK, "direct cmOK ends the input box with OK");
+            assert_eq!(
+                text, "X",
+                "the typed edit (replacing the selected scattered text) is gathered \
+                 back out; a broken gather→None would return the unchanged \"hello\""
+            );
+            assert_eq!(program.capture_len(), 0, "ModalFrame popped");
+        }
+
+        /// `input_box` auto-centers on the desktop and round-trips the same way.
+        #[test]
+        fn input_box_centered_ok_round_trip() {
+            let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+            program.out_events.push_back(Event::Command(Command::OK));
+            let (cmd, text) = program.input_box("Enter", "Path", "/tmp", 40);
+            assert_eq!(cmd, Command::OK);
+            assert_eq!(text, "/tmp");
         }
     }
 }

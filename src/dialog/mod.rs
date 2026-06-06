@@ -41,5 +41,5 @@ mod dialog;
 mod msgbox;
 
 pub use dialog::Dialog;
-pub(crate) use msgbox::build_message_box;
 pub use msgbox::{MessageBoxButtons, MessageBoxKind};
+pub(crate) use msgbox::{build_input_box, build_message_box};

@@ -35,6 +35,7 @@ use crate::command::Command;
 use crate::view::{Rect, ViewId};
 use crate::widgets::StaticText;
 use crate::widgets::{Button, ButtonFlags};
+use crate::widgets::{InputLine, Label, LimitMode};
 
 // ---------------------------------------------------------------------------
 // Public option types (D5 — replacing the raw `ushort aOptions` flag word)
@@ -224,6 +225,86 @@ pub(crate) fn build_message_box(
 }
 
 // ---------------------------------------------------------------------------
+// Pure input-box builder (row 63, PART 2)
+// ---------------------------------------------------------------------------
+
+/// Build a [`Dialog`] for `inputBoxRect` without executing it.
+///
+/// Faithful port of the construction half of `inputBoxRect` in `msgbox.cpp` —
+/// everything before `selectNext(False)`/`setData`/`execView`, which live in
+/// [`Program::input_box_rect`](crate::app::Program::input_box_rect).
+///
+/// Layout (faithful, `w = bounds.b.x - bounds.a.x`, `h = bounds.b.y - bounds.a.y`):
+/// * **InputLine** at `(4 + label_size, 2, w - 3, 3)` — inserted FIRST so it is
+///   the first selectable child (`selectNext(False)` initial focus target).
+/// * **Label** at `(2, 2, 3 + label_size, 3)`, linked to the input line.
+/// * **OK** button (`bfDefault`) at `(w - 24, h - 4, w - 14, h - 2)` → [`Command::OK`].
+/// * **Cancel** button (`bfNormal`) at `(w - 12, h - 4, w - 2, h - 2)` →
+///   [`Command::CANCEL`]. (C++ `r.a.x += 12; r.b.x += 12` from the OK rect. The
+///   trailing dead `+= 12` after Cancel — which in C++ set up a never-used third
+///   button — is faithfully dropped.)
+///
+/// Returns `(dialog, input_id)` where `input_id` is the [`ViewId`] of the lone
+/// [`InputLine`]. It doubles as the `selectNext(False)` initial-focus target AND
+/// the single-field gather/scatter target (C++ `setData`/`getData`): the caller
+/// scatters the initial string into it before exec and gathers the final string
+/// out of it on a non-cancel result (the D10 value currency,
+/// [`FieldValue::Text`](crate::data::FieldValue::Text)).
+pub(crate) fn build_input_box(
+    bounds: Rect,
+    title: &str,
+    label: &str,
+    limit: i32,
+) -> (Dialog, ViewId) {
+    let w = bounds.b.x - bounds.a.x; // dialog width  (== size.x)
+    let h = bounds.b.y - bounds.a.y; // dialog height (== size.y)
+
+    // C++ aLabel.size() = byte length of the TStringView; ASCII labels only in practice.
+    let label_size = label.len() as i32;
+
+    let mut dialog = Dialog::new(bounds, Some(title.into()));
+
+    // 1. TInputLine(r, limit) — `new TInputLine(r, limit)` uses ilMaxBytes (the
+    //    default), so maxLen = limit - 1. No validator. Inserted FIRST so it is the
+    //    first selectable child (selectNext(False) focuses it).
+    let input_id = dialog.insert_child(Box::new(InputLine::new(
+        Rect::new(4 + label_size, 2, w - 3, 3),
+        limit,
+        None,
+        LimitMode::MaxBytes,
+    )));
+
+    // 2. TLabel(r, aLabel, control) — linked to the input line.
+    dialog.insert_child(Box::new(Label::new(
+        Rect::new(2, 2, 3 + label_size, 3),
+        label,
+        Some(input_id),
+    )));
+
+    // 3. TButton(okText, cmOK, bfDefault).
+    dialog.insert_child(Box::new(Button::new(
+        Rect::new(w - 24, h - 4, w - 14, h - 2),
+        "O~K~",
+        Command::OK,
+        ButtonFlags {
+            default: true,
+            ..Default::default()
+        },
+    )));
+
+    // 4. TButton(cancelText, cmCancel, bfNormal). C++ `r.a.x += 12; r.b.x += 12`
+    //    from the OK rect → x range [w - 12, w - 2].
+    dialog.insert_child(Box::new(Button::new(
+        Rect::new(w - 12, h - 4, w - 2, h - 2),
+        "~C~ancel",
+        Command::CANCEL,
+        ButtonFlags::new(),
+    )));
+
+    (dialog, input_id)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -304,5 +385,32 @@ mod tests {
             MessageBoxButtons::yes_no_cancel(),
         );
         insta::assert_snapshot!(render_dialog(&mut d, 40, 9));
+    }
+
+    /// Input box (`inputBoxRect`) at 60x8: a "Name" label, an input field, and
+    /// OK + Cancel buttons. Mirrors the C++ `inputBox` default geometry.
+    #[test]
+    fn snapshot_input_box() {
+        let (mut d, _input_id) = build_input_box(Rect::new(0, 0, 60, 8), "Title", "Name", 20);
+        insta::assert_snapshot!(render_dialog(&mut d, 60, 8));
+    }
+
+    /// Scatter unit test: after building + setting the input line's value, its
+    /// `value()` reads back as `FieldValue::Text(initial)` — the gather/scatter
+    /// round-trip used by `Program::input_box_rect` (C++ `setData`/`getData`).
+    #[test]
+    fn input_box_scatter_value_round_trip() {
+        use crate::data::FieldValue;
+        use crate::view::View;
+
+        let (mut d, input_id) = build_input_box(Rect::new(0, 0, 60, 8), "Title", "Name", 20);
+        if let Some(v) = d.find_mut(input_id) {
+            v.set_value(FieldValue::Text("hello".to_string()));
+        }
+        assert_eq!(
+            d.find_mut(input_id).and_then(|v| v.value()),
+            Some(FieldValue::Text("hello".to_string())),
+            "scattered initial text reads back through value()"
+        );
     }
 }

@@ -1,0 +1,32 @@
+---
+source: src/dialog/msgbox.rs
+expression: "render_dialog(&mut d, 60, 8)"
+---
+size: 60x8
+cursor: hidden
+text:
+|┌───────────────────────── Title ──────────────────────────┐|
+|│                                                          │|
+|│  Name                                                    │|
+|│                                                          │|
+|│                                       OK   ▄    Cancel ▄ │|
+|│                                     ▀▀▀▀▀▀▀▀    ▀▀▀▀▀▀▀▀ │|
+|│                                                          │|
+|└──────────────────────────────────────────────────────────┘|
+attr:
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aabbbbbacccccccccccccccccccccccccccccccccccccccccccccccccaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaadeeeefeeedaadefeeeeeedaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaddddddddddaaddddddddddaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(7) bg=BIOS(1)
+  b fg=BIOS(0) bg=BIOS(7)
+  c fg=BIOS(0) bg=BIOS(3)
+  d fg=BIOS(8) bg=BIOS(0)
+  e fg=BIOS(0) bg=BIOS(2)
+  f fg=BIOS(14) bg=BIOS(2)
