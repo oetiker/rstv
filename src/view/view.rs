@@ -644,9 +644,23 @@ pub trait View {
 
     /// `TView::valid` — whether the view is in a valid state for `cmd` (e.g. a
     /// modal end / focus release). Base is always `true`.
-    fn valid(&self, _cmd: Command) -> bool {
+    ///
+    /// **Carries `&mut Context`** (the async-modal-from-a-view seam): a control's
+    /// `valid` may need to pop a modal `messageBox` (a validator error, the
+    /// `FileEditor` modified-save prompt) and observe the answer. A
+    /// downward-borrowed `&mut View` cannot run a nested modal inline, so it
+    /// **requests** one via [`Context::request_message_box`] and re-validates once
+    /// the answer is routed back (see `docs/design/async-modal-from-view.md`).
+    fn valid(&mut self, _cmd: Command, _ctx: &mut Context) -> bool {
         true
     }
+
+    /// Stash the user's choice from an async modal `messageBox` this view
+    /// requested via [`Context::request_message_box`] (the
+    /// `answer_to`/`RouteModalAnswer` round-trip). Default: no-op. Overridden by
+    /// views that drive a Yes/No/Cancel prompt out of `valid` (e.g.
+    /// [`FileEditor`](crate::widgets::FileEditor) caches it for the re-validate).
+    fn set_modal_answer(&mut self, _cmd: Command) {}
 
     /// `TView::getData` — this control's typed value as a [`FieldValue`] (D10),
     /// or `None` for a non-data view. The successor to the untyped `getData`
@@ -1191,11 +1205,15 @@ mod tests {
 
     #[test]
     fn base_valid_is_true() {
-        let v = FillView {
+        let mut v = FillView {
             st: ViewState::new(Rect::new(0, 0, 1, 1)),
             ch: ' ',
         };
-        assert!(v.valid(Command::OK));
+        let mut out = std::collections::VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<crate::view::Deferred> = Vec::new();
+        let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
+        assert!(v.valid(Command::OK, &mut ctx));
     }
 
     /// The mandatory snapshot for this abstract row: the trait drives the render

@@ -27,6 +27,7 @@
 //! (row 59). The slot-in point is breadcrumbed in `InputLine::value`/`set_value`.
 
 use crate::data::FieldValue;
+use crate::view::Context;
 use regex_automata::{
     Anchored,
     dfa::{Automaton, StartKind, dense},
@@ -56,20 +57,22 @@ pub trait Validator {
     }
 
     /// `TValidator::error` — report an invalid final value. Concrete validators
-    /// pop up a message box; the abstract base is a no-op.
+    /// pop up a message box via the async-modal-from-a-view seam
+    /// ([`Context::request_message_box`], `answer_to`/`then_command` both `None` —
+    /// informational, OK-only); the abstract base is a no-op.
     ///
-    /// TODO(msgbox row 63): wire this to a real message box. No-op until then;
-    /// `validate` still returns `false`, so the failure is observable.
-    fn error(&self) {}
+    /// **NOT a `View` method** — no `tvision-macros/src/specs.rs` forwarder.
+    fn error(&self, _ctx: &mut Context) {}
 
     /// `TValidator::validate` — **non-virtual in C++**: report the error and fail
     /// iff [`is_valid`](Validator::is_valid) is false, else succeed. Kept as a
     /// provided method (it dispatches through the overridable `is_valid`/`error`).
-    fn validate(&self, s: &str) -> bool {
+    /// Threads `&mut Context` so a failing validator's `error` can request its box.
+    fn validate(&self, s: &str, ctx: &mut Context) -> bool {
         if self.is_valid(s) {
             true
         } else {
-            self.error();
+            self.error(ctx);
             false
         }
     }
@@ -152,9 +155,17 @@ impl Validator for FilterValidator {
         self.is_valid(s)
     }
 
-    /// `TFilterValidator::error` — C++ calls `messageBox(mfError|mfOKButton, …)`.
-    /// TODO(row 63): messageBox(mfError|mfOKButton, "Invalid character in input")
-    fn error(&self) {}
+    /// `TFilterValidator::error` — `messageBox(mfError|mfOKButton, …)` via the
+    /// async-modal-from-a-view seam (informational, OK-only).
+    fn error(&self, ctx: &mut Context) {
+        ctx.request_message_box(
+            "Invalid character in input".to_string(),
+            crate::dialog::MessageBoxKind::Error,
+            crate::dialog::MessageBoxButtons::ok(),
+            None,
+            None,
+        );
+    }
 }
 
 /// `TLookupValidator` (row 60) — the realized abstract base for lookup-style
@@ -228,9 +239,17 @@ impl Validator for StringLookupValidator {
         self.strings.iter().any(|x| x == s)
     }
 
-    /// `TStringLookupValidator::error` — C++ calls `messageBox(mfError|mfOKButton, …)`.
-    /// TODO(row 63): messageBox(mfError|mfOKButton, "Input is not in list of valid strings")
-    fn error(&self) {}
+    /// `TStringLookupValidator::error` — `messageBox(mfError|mfOKButton, …)` via the
+    /// async-modal-from-a-view seam (informational, OK-only).
+    fn error(&self, ctx: &mut Context) {
+        ctx.request_message_box(
+            "Input is not in list of valid strings".to_string(),
+            crate::dialog::MessageBoxKind::Error,
+            crate::dialog::MessageBoxButtons::ok(),
+            None,
+            None,
+        );
+    }
 }
 
 /// `TRangeValidator` (row 59) — `TRangeValidator : public TFilterValidator`.
@@ -354,9 +373,17 @@ impl Validator for RangeValidator {
     }
 
     /// `TRangeValidator::error` — C++ pops
-    /// `messageBox(mfError|mfOKButton, "Value not in the range %ld to %ld", min, max)`.
-    /// TODO(row 63): messageBox(mfError|mfOKButton, "Value not in the range {min} to {max}")
-    fn error(&self) {}
+    /// `messageBox(mfError|mfOKButton, "Value not in the range %ld to %ld", min, max)`
+    /// via the async-modal-from-a-view seam (informational, OK-only).
+    fn error(&self, ctx: &mut Context) {
+        ctx.request_message_box(
+            format!("Value not in the range {} to {}", self.min, self.max),
+            crate::dialog::MessageBoxKind::Error,
+            crate::dialog::MessageBoxButtons::ok(),
+            None,
+            None,
+        );
+    }
 }
 
 // ── TPXPictureValidator (row 62) ─────────────────────────────────────────────
@@ -945,9 +972,17 @@ impl Validator for PXPictureValidator {
     }
 
     /// `error()` — C++ `messageBox(mfError|mfOKButton, "Error in picture
-    /// format.\n %s", pic)`.
-    /// TODO(row 63): messageBox(mfError|mfOKButton, "Error in picture format.\n {pic}")
-    fn error(&self) {}
+    /// format.\n %s", pic)` via the async-modal-from-a-view seam (informational,
+    /// OK-only).
+    fn error(&self, ctx: &mut Context) {
+        ctx.request_message_box(
+            format!("Error in picture format.\n {}", self.pic),
+            crate::dialog::MessageBoxKind::Error,
+            crate::dialog::MessageBoxButtons::ok(),
+            None,
+            None,
+        );
+    }
 }
 
 // ── RegexValidator (rstv extension) ─────────────────────────────────────────
@@ -1098,14 +1133,33 @@ impl Validator for RegexValidator {
         !self.walk(s).0
     }
 
-    /// Report an invalid final value.
-    /// TODO(row 63): messageBox(mfError|mfOKButton, "Input does not match pattern: {pattern}")
-    fn error(&self) {}
+    /// Report an invalid final value via the async-modal-from-a-view seam
+    /// (informational, OK-only). rstv-original (no C++ counterpart).
+    fn error(&self, ctx: &mut Context) {
+        ctx.request_message_box(
+            format!("Input does not match pattern: {}", self.pattern),
+            crate::dialog::MessageBoxKind::Error,
+            crate::dialog::MessageBoxButtons::ok(),
+            None,
+            None,
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Run `validator.validate(s, ctx)` over a throwaway [`Context`] and return the
+    /// bool (the test never inspects the requested box here — that is covered by the
+    /// program-level async-modal tests). Also returns whether a box was requested.
+    fn vd<V: Validator + ?Sized>(v: &V, s: &str) -> bool {
+        let mut out = std::collections::VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<crate::view::Deferred> = Vec::new();
+        let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
+        v.validate(s, &mut ctx)
+    }
 
     /// The abstract base accepts everything and reports OK.
     struct AcceptAll;
@@ -1127,15 +1181,15 @@ mod tests {
         assert!(v.is_valid_input(&mut s, false));
         assert_eq!(s, "anything", "default is_valid_input does not modify");
         assert!(v.is_valid("x"));
-        assert!(v.validate("x"));
+        assert!(vd(&v, "x"));
         assert!(v.is_status_ok());
     }
 
     #[test]
     fn validate_fails_when_is_valid_false() {
         let v = OnlyExact("ok");
-        assert!(v.validate("ok"));
-        assert!(!v.validate("nope"));
+        assert!(vd(&v, "ok"));
+        assert!(!vd(&v, "nope"));
         assert!(v.is_valid("ok"));
         assert!(!v.is_valid("nope"));
     }
@@ -1144,8 +1198,8 @@ mod tests {
     fn is_object_safe() {
         // Compiles only if Validator is object-safe (the InputLine storage form).
         let v: Box<dyn Validator> = Box::new(OnlyExact("ok"));
-        assert!(v.validate("ok"));
-        assert!(!v.validate("no"));
+        assert!(vd(&*v, "ok"));
+        assert!(!vd(&*v, "no"));
     }
 
     // ── FilterValidator (row 58) ──────────────────────────────────────────────
@@ -1187,8 +1241,8 @@ mod tests {
     #[test]
     fn filter_validate_returns_false_on_rejected() {
         let v = FilterValidator::new("abc");
-        assert!(v.validate("abc"));
-        assert!(!v.validate("abx")); // 'x' not in set
+        assert!(vd(&v, "abc"));
+        assert!(!vd(&v, "abx")); // 'x' not in set
     }
 
     #[test]
@@ -1206,7 +1260,7 @@ mod tests {
         let v = LookupValidator::new();
         assert!(v.is_valid(""));
         assert!(v.is_valid("anything at all"));
-        assert!(v.validate("whatever"));
+        assert!(vd(&v, "whatever"));
         assert!(v.is_status_ok());
     }
 
@@ -1221,7 +1275,7 @@ mod tests {
     #[test]
     fn lookup_validator_object_safe() {
         let v: Box<dyn Validator> = Box::new(LookupValidator::new());
-        assert!(v.validate("foo"));
+        assert!(vd(&*v, "foo"));
     }
 
     // ── StringLookupValidator (row 61) ────────────────────────────────────────
@@ -1268,8 +1322,8 @@ mod tests {
     #[test]
     fn string_lookup_validate_false_on_non_member() {
         let v = StringLookupValidator::new(vec!["ok".into()]);
-        assert!(v.validate("ok"));
-        assert!(!v.validate("bad"));
+        assert!(vd(&v, "ok"));
+        assert!(!vd(&v, "bad"));
     }
 
     #[test]

@@ -136,11 +136,11 @@ impl View for Dialog {
     /// never be vetoed); otherwise defer to the embedded group (`TGroup::valid`,
     /// which aggregates the children — the future `cmCanCloseForm` veto lands
     /// here via a validating control, deferred).
-    fn valid(&self, cmd: Command) -> bool {
+    fn valid(&mut self, cmd: Command, ctx: &mut Context) -> bool {
         if cmd == Command::CANCEL {
             true
         } else {
-            self.window.valid(cmd)
+            self.window.valid(cmd, ctx)
         }
     }
 }
@@ -194,7 +194,7 @@ mod tests {
             &mut self.st
         }
         fn draw(&mut self, _ctx: &mut DrawCtx) {}
-        fn valid(&self, _cmd: Command) -> bool {
+        fn valid(&mut self, _cmd: Command, _ctx: &mut Context) -> bool {
             false
         }
     }
@@ -351,14 +351,25 @@ mod tests {
         d.window
             .insert_child(AlwaysInvalid::boxed(Rect::new(2, 2, 10, 5)));
 
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut deferred = Vec::new();
         // cmCancel bypasses the child and is always valid.
         assert!(
-            View::valid(&d, Command::CANCEL),
+            with_ctx(&mut out, &mut timers, &mut deferred, |ctx| View::valid(
+                &mut d,
+                Command::CANCEL,
+                ctx
+            )),
             "cmCancel always valid (cannot be vetoed)"
         );
         // Any other command defers to the group, which is false here.
         assert!(
-            !View::valid(&d, Command::OK),
+            !with_ctx(&mut out, &mut timers, &mut deferred, |ctx| View::valid(
+                &mut d,
+                Command::OK,
+                ctx
+            )),
             "other command defers to the group (an invalid child vetoes)"
         );
     }

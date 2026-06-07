@@ -1744,7 +1744,7 @@ impl View for Editor {
     }
 
     /// `TEditor::valid` — the buffer allocated successfully.
-    fn valid(&self, _cmd: crate::command::Command) -> bool {
+    fn valid(&mut self, _cmd: crate::command::Command, _ctx: &mut Context) -> bool {
         self.is_valid
     }
 
@@ -2055,18 +2055,23 @@ impl View for Memo {
 /// buffer + save commands).
 ///
 /// Implemented: growable buffer (load grows it), `load_file`/`save_file` over
-/// real `std::fs`, `save()` to an existing file, `handle_event` cmSave, and the
-/// `cmValid → is_valid` case of `valid`.
+/// real `std::fs`, `save()` to an existing file, `handle_event` cmSave, the
+/// full `valid` (including the modified-save `edSaveModify`/`edSaveUntitled`
+/// Yes/No/Cancel prompt) and the `edWriteError` save-error popup — both via the
+/// **async-modal-from-a-view seam** (`docs/design/async-modal-from-view.md`:
+/// `valid` requests an `OpenMessageBox`, caches the answer in
+/// [`set_modal_answer`](View::set_modal_answer), re-validates).
 ///
 /// Deferred (forced by not-yet-ported substrate):
 /// * `saveAs` / `Command::SAVE_AS` / save of an untitled buffer — needs
 ///   `TFileDialog` (not yet ported). `Command::SAVE_AS` is left unhandled (not
 ///   cleared); `save()` on an untitled buffer is a no-op returning `false`.
-/// * Error/confirm dialogs (`edReadError`/`edCreateError`/`edWriteError`/
-///   `edOutOfMemory`) — need the async modal-from-view seam (same blocker as the
-///   validator `error()` path). Each drop is breadcrumbed.
-/// * `valid()` modified-save prompt (`edSaveModify`/`edSaveUntitled`) — same
-///   async-modal blocker; defaults to allow-close (never block forever).
+/// * `edReadError` on **load** — `load_file` is only called from the ctor, which
+///   has no `Context` and no inserted view, so it cannot request a modal; kept
+///   `is_valid = false` with no box. `edCreateError`/`edWriteError` are MERGED:
+///   `std::fs::write` does not separate create-vs-write failure, so both emit the
+///   single "Error writing file …" box (documented in `save_file`). `edOutOfMemory`
+///   has no analogue (the buffer grows fallibly via the OS).
 /// * `efBackupFiles` backup-rename in `saveFile` — deferred (flag defaults off).
 /// * `shutDown` cmSave/cmSaveAs disable-on-close — no rstv `shut_down` View
 ///   analogue exists; dropped.
@@ -2078,6 +2083,11 @@ pub struct FileEditor {
     /// `fileName` — the backing file, or `None` for an untitled buffer
     /// (C++ `*fileName == EOS`).
     pub file_name: Option<std::path::PathBuf>,
+    /// The user's answer to the modified-save prompt, cached by
+    /// [`View::set_modal_answer`] between the `valid()` that requested the box and
+    /// the re-validate that consumes it (the async-modal-from-a-view round-trip).
+    /// `None` until an answer is routed back; consumed (taken) on the next `valid`.
+    pending_save_answer: Option<crate::command::Command>,
 }
 
 impl FileEditor {
@@ -2094,6 +2104,7 @@ impl FileEditor {
         let mut fe = FileEditor {
             editor: Editor::new_file_editor(bounds, h_scroll_bar, v_scroll_bar, indicator),
             file_name: None,
+            pending_save_answer: None,
         };
         if let Some(path) = file_name {
             // C++ fexpand canonicalizes; best-effort here (canonicalize fails for a
@@ -2127,14 +2138,19 @@ impl FileEditor {
                 true
             }
             Err(_) => {
-                // TODO(row 68 edReadError dialog): needs async modal-from-view.
+                // edReadError box stays DEFERRED (no async-modal-from-view here):
+                // load_file is only called from the ctor (`FileEditor::new`), which
+                // has no `Context` and no inserted view, so it cannot request a
+                // modal. Keep is_valid=false with no box (the caller reflects it).
                 false
             }
         }
     }
 
     /// `TFileEditor::saveFile` — write the buffer's logical text to `file_name`.
-    pub fn save_file(&mut self) -> bool {
+    /// On a write failure, pops an informational error `messageBox` via the
+    /// async-modal-from-a-view seam ([`Context::request_message_box`]).
+    pub fn save_file(&mut self, ctx: &mut Context) -> bool {
         let Some(path) = self.file_name.clone() else {
             return false;
         };
@@ -2148,16 +2164,28 @@ impl FileEditor {
                 true
             }
             Err(_) => {
-                // TODO(row 68 edCreateError/edWriteError dialog): async modal-from-view.
+                // DEVIATION: C++ distinguishes edCreateError ("Error creating file
+                // {fileName}.") vs edWriteError ("Error writing file {fileName}.")
+                // by whether the file open succeeded before the write. `std::fs::write`
+                // opens+writes atomically and does not cleanly separate the two, so we
+                // emit the write message for both. Documented merge.
+                let msg = format!("Error writing file {}.", path.display());
+                ctx.request_message_box(
+                    msg,
+                    crate::dialog::MessageBoxKind::Error,
+                    crate::dialog::MessageBoxButtons::ok(),
+                    None,
+                    None,
+                );
                 false
             }
         }
     }
 
     /// `TFileEditor::save` — save to the existing file, or (untitled) saveAs.
-    pub fn save(&mut self) -> bool {
+    pub fn save(&mut self, ctx: &mut Context) -> bool {
         if self.file_name.is_some() {
-            self.save_file()
+            self.save_file(ctx)
         } else {
             // TODO(row 68 saveAs): untitled save needs TFileDialog (not yet ported).
             false
@@ -2177,7 +2205,7 @@ impl View for FileEditor {
         if let Event::Command(cmd) = ev
             && *cmd == Command::SAVE
         {
-            self.save();
+            self.save(ctx);
             // C++ saveFile's update(ufUpdate) flushes inline; publish modified=false
             // to the indicator and re-gray the save commands now (the inner editor
             // already flushed with modified still true, since cmSave isn't an edit).
@@ -2186,18 +2214,64 @@ impl View for FileEditor {
         }
     }
 
-    /// `TFileEditor::valid` — `cmValid` reflects buffer validity; the modified-save
-    /// prompt is deferred (needs async modal-from-view), defaulting to allow-close.
-    fn valid(&self, cmd: crate::command::Command) -> bool {
-        if cmd == crate::command::Command::VALID {
-            return self.editor.valid(cmd);
+    /// `TFileEditor::valid` (`tfiledtr.cpp`) — `cmValid` reflects buffer validity;
+    /// for any other command, a **modified** buffer prompts a Yes/No/Cancel save
+    /// dialog via the async-modal-from-a-view seam, and the answer decides the bool:
+    /// Yes→`save`, No→`clear_modified`+allow, Cancel→veto.
+    ///
+    /// The prompt is asynchronous: the first `valid` call requests the box
+    /// ([`Context::request_message_box`] with `answer_to = self`, `then_command =
+    /// cmClose`) and returns `false` (veto for now). When the user picks, the pump
+    /// routes the answer back through [`View::set_modal_answer`] (caching it in
+    /// `pending_save_answer`) and re-posts `cmClose`, which re-runs this `valid`;
+    /// this time `pending_save_answer` is `Some` and the cached choice is applied.
+    fn valid(&mut self, cmd: crate::command::Command, ctx: &mut Context) -> bool {
+        use crate::command::Command;
+        if cmd == Command::VALID {
+            return self.editor.valid(cmd, ctx);
         }
-        // TODO(row 68 valid prompt): edSaveModify/edSaveUntitled prompt needs the
-        // async modal-from-view seam; default to allow-close (never block forever).
-        // CAUTION: returning true unconditionally silently discards unsaved edits when
-        // a modified file editor is closed during a dialog validation walk — C++
-        // prompts first.
+        // Re-validate pass: consume the cached answer from the async box.
+        if let Some(answer) = self.pending_save_answer.take() {
+            return match answer {
+                Command::YES => self.save(ctx),
+                Command::NO => {
+                    self.editor.clear_modified(); // modified = False; return True
+                    true
+                }
+                // cmCancel (or anything else, e.g. an OK-only box) → veto the close.
+                _ => false,
+            };
+        }
+        // First pass: a modified buffer needs the save prompt.
+        if self.editor.modified() {
+            // self id = self.state().id() (the state delegates to the inner editor,
+            // so this is the id the owning group stored for the FileEditor box). The
+            // close path always runs against an inserted tree; if somehow absent,
+            // fall back to allow-close (cannot route an answer with no id).
+            let Some(my_id) = View::state(self).id() else {
+                return true;
+            };
+            // edSaveUntitled / edSaveModify (msgbox uses Information per editorDialog).
+            let msg = match &self.file_name {
+                None => "Save untitled file?".to_string(),
+                Some(p) => format!("{} has been modified. Save?", p.display()),
+            };
+            ctx.request_message_box(
+                msg,
+                crate::dialog::MessageBoxKind::Information,
+                crate::dialog::MessageBoxButtons::yes_no_cancel(),
+                Some(my_id),
+                Some(Command::CLOSE),
+            );
+            return false; // veto until the answer comes back and re-validates.
+        }
         true
+    }
+
+    /// Cache the user's Yes/No/Cancel choice from the modified-save box for the
+    /// re-validate pass (the async-modal-from-a-view round-trip).
+    fn set_modal_answer(&mut self, cmd: crate::command::Command) {
+        self.pending_save_answer = Some(cmd);
     }
 }
 
@@ -3283,7 +3357,8 @@ mod tests {
         assert!(fe.editor.modified(), "insert marks modified");
 
         fe.file_name = Some(path.clone());
-        assert!(fe.save(), "save() to a named file succeeds");
+        let mut cx = Cx::new();
+        assert!(fe.save(&mut cx.ctx()), "save() to a named file succeeds");
 
         let on_disk = std::fs::read(&path).unwrap();
         assert_eq!(on_disk, fe.editor.text(), "disk bytes equal editor text");
@@ -3325,20 +3400,30 @@ mod tests {
     fn file_editor_save_untitled_is_noop() {
         let mut fe = untitled_fe();
         insert(&mut fe.editor, "unsaved");
-        assert!(!fe.save(), "untitled save is a no-op (saveAs deferred)");
+        let mut cx = Cx::new();
+        assert!(
+            !fe.save(&mut cx.ctx()),
+            "untitled save is a no-op (saveAs deferred)"
+        );
         assert!(fe.editor.modified(), "still modified — nothing was saved");
     }
 
-    /// valid: cmValid reflects is_valid; any other command ⇒ true (deferred allow-close).
+    /// valid: cmValid reflects is_valid; a modified buffer requests the save prompt
+    /// (the async-modal-from-a-view seam) and vetoes (false) until the answer routes;
+    /// an unmodified buffer allows close.
     #[test]
     fn file_editor_valid() {
-        let fe = untitled_fe();
+        let mut fe = untitled_fe();
         assert!(fe.editor.is_valid);
-        assert!(fe.valid(Command::VALID), "cmValid reflects a valid buffer");
-        // A different command bypasses the (deferred) modified prompt ⇒ allow-close.
+        let mut cx = Cx::new();
         assert!(
-            fe.valid(Command::CLOSE),
-            "non-cmValid defers to allow-close"
+            fe.valid(Command::VALID, &mut cx.ctx()),
+            "cmValid reflects a valid buffer"
+        );
+        // Unmodified, non-cmValid ⇒ allow close (no prompt).
+        assert!(
+            fe.valid(Command::CLOSE, &mut cx.ctx()),
+            "unmodified buffer allows close"
         );
     }
 

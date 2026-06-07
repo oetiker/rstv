@@ -53,9 +53,12 @@ impl View for Spy {
     fn set_state(&mut self, _f: StateFlag, _e: bool, _ctx: &mut Context) {
         self.mark("set_state");
     }
-    fn valid(&self, _c: Command) -> bool {
+    fn valid(&mut self, _c: Command, _ctx: &mut Context) -> bool {
         self.mark("valid");
         true
+    }
+    fn set_modal_answer(&mut self, _c: Command) {
+        self.mark("set_modal_answer");
     }
     fn value(&self) -> Option<FieldValue> {
         self.mark("value");
@@ -185,7 +188,16 @@ fn delegate_forwards_every_known_view_method() {
     }
 
     // -- valid --------------------------------------------------------------
-    let _ = d.valid(Command::OK);
+    {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut deferred = Vec::new();
+        let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+        let _ = d.valid(Command::OK, &mut ctx);
+    }
+
+    // -- set_modal_answer ---------------------------------------------------
+    d.set_modal_answer(Command::YES);
 
     // -- value / set_value --------------------------------------------------
     let _ = d.value();
@@ -288,6 +300,7 @@ fn delegate_forwards_every_known_view_method() {
         "handle_event",
         "set_state",
         "valid",
+        "set_modal_answer",
         "value",
         "set_value",
         "awaken",

@@ -15,9 +15,11 @@
 
 ## Current state
 
-- **HEAD `1b46130` (rows 67–74 all committed this session: `TMemo`/`TFileEditor`/`TEditWindow`/`TSortedListBox` + the file-dialog data classes 71–74).** Build: **795 lib tests** green; `cargo clippy --workspace
-  --all-targets -- -D warnings` and `cargo fmt --all --check` clean (verify clippy
-  with a forced re-lint — a cached run can mask a fresh warning).
+- **HEAD = the async-modal-from-a-view seam (a FOUNDATION detour, landed this
+  session — see the IMPLEMENTATION-LOG top section).** Build: **802 lib tests**
+  green; `cargo clippy --workspace --all-targets -- -D warnings` and `cargo fmt
+  --all --check` clean (verify clippy with a forced re-lint — a cached run can mask
+  a fresh warning).
 - **Cargo workspace** (`tvision` + `tvision-macros`) — use `--workspace` for
   test/clippy/fmt. Artifacts land in
   `CARGO_TARGET_DIR=/home/oetiker/scratch/cargo-target` (export it). `cargo build
@@ -62,63 +64,39 @@
   and **rows 71–74 (file-dialog data classes)** — `DirEntry`/`SearchRec` structs,
   `DirCollection = Vec<DirEntry>` alias, and `FileCollection` (`Vec<SearchRec>` +
   verbatim `search_rec_compare` + sorted insert) in `src/dialog/filedlg.rs` (pure
-  data; collections→Vec; batched). The `#[delegate]` proc-macro is landed and adopted codebase-wide.
+  data; collections→Vec; batched),
+  and **the async-modal-from-a-view seam** (FOUNDATION detour) — a downward-borrowed
+  `&mut View` can now request a modal `messageBox` from the pump and observe the
+  choice (`Deferred::OpenMessageBox` + `Context::request_message_box`,
+  `View::set_modal_answer`, `ModalCompletion::{RouteModalAnswer,Informational}`,
+  `apply_modal_completion`→`Option<Event>` re-injected into `out_events`, the inline
+  `validate_modal_close` drive for the event-gated modal-close path, and the
+  `View::valid(&mut self, cmd, ctx)` signature change). **Retired three consumer
+  clusters:** all 5 validator `error()` boxes, `FileEditor::valid`'s Yes/No/Cancel
+  modified-save prompt, and `FileEditor` save-error boxes (design note:
+  `docs/design/async-modal-from-view.md`). The `#[delegate]` proc-macro is landed and adopted codebase-wide.
 
-## Next — DECIDED DETOUR: the async-modal-from-a-view seam (do this BEFORE row 75)
+## Next — resume PORT-ORDER at row 75 `TDirListBox`
 
-**The user has chosen to pause the PORT-ORDER sequence and build the
-async-modal-from-a-view seam next** (deliberate detour — so do NOT default to
-"lowest-numbered row 75" this session; that resumes *after* the seam, see below).
-Rationale: it is the single shared unblocker for **three** already-landed-but-inert
-consumers, so building it once retires three breadcrumb clusters at the same time.
+**The async-modal-from-a-view detour is DONE** (landed this session; design note
+`docs/design/async-modal-from-view.md`, narrative in the IMPLEMENTATION-LOG top
+section). Resume the normal "lowest-numbered incomplete row" rule → **row 75**.
 
-### What to build
-A way for a **downward-borrowed `&mut View`** (which owns no up-pointer and can't
-run a nested modal inline) to **request a modal `messageBox` from the pump** and
-later observe the user's choice. The sync face already exists
-(`Program::message_box`); this is the *async-from-a-view* face.
+**Seam leftovers worth knowing (two documented interims):**
+- **cmQuit veto.** `valid_end`'s app-quit path now *vetoes* close of a modified
+  `FileEditor` **without a prompt** (the orphaned box is dropped, not leaked). C++
+  prompts on quit; doing so needs a **whole-tree inline drive** (every modified
+  editor prompts), not the single-id `validate_modal_close`. Deferred — **latent**
+  (no runnable app wires a `FileEditor` yet). Pick this up when an editor app
+  exists; the fix is a whole-tree analogue of `validate_modal_close`. *(If a quit
+  prompt is wanted before that, the cheap alternative is to gate `FileEditor::valid`'s
+  prompt to `cmd == cmClose` so cmQuit reverts to allow-close — the spec reviewer's
+  advisory.)*
+- **Still breadcrumbed:** `saveAs`/`edSaveAs` (needs `TFileDialog`),
+  `edReadError` on **load** (the ctor has no `ctx`).
 
-**Shape (the row-57 `OpenHistory` precedent is the template — study it first):**
-1. **A new `Deferred` variant**, e.g. `Deferred::OpenMessageBox { text, kind,
-   buttons, .. }` (mirror the existing `Deferred::OpenHistory` async-modal request;
-   grep `pending_modal` in `src/app/program.rs` for how row 57 defers opening a
-   modal from inside event handling and resumes it on the next pump).
-2. **The pump's `pending_modal` async path** runs the messageBox via the existing
-   `exec_view`/`message_box` machinery when the deferred op is drained, then routes
-   the result back to the requester (decide the return-channel: a follow-up
-   deferred/command, or a stored result the requester reads — match how
-   `OpenHistory` returns its pick).
-3. **Thread a deferred handle / `&mut Context` to the requesters** so they can emit
-   the new variant. Two distinct caller sites:
-   - **`Validator::error(&self)`** has **no `Context`** today — this needs a
-     trait-signature change (thread `&mut Context` or a deferred handle through
-     `error()` **and** its `InputLine::valid` caller). All five validators'
-     `error()` bodies are `TODO(row 63)` no-op breadcrumbs that already preserve the
-     **exact C++ strings** — wire them to emit `OpenMessageBox`.
-   - **`FileEditor` (row 68)**: `valid()`'s modified-save prompt
-     (`edSaveModify`/`edSaveUntitled`) and `load_file`/`save_file`'s error popups
-     (`edReadError`/`edWriteError`/`edCreateError`) — all breadcrumbed
-     `TODO(row 68 …)`. `valid()` currently returns `true` (allow-close); the prompt
-     path needs the async modal to actually ask Yes/No/Cancel.
-
-### The three consumers this retires (grep these TODOs to verify coverage)
-- **Validators 58–62** `error()` → `messageBox` (the exact-string breadcrumbs).
-- **`FileEditor::valid()`** modified-save prompt (row 68).
-- **`FileEditor` load/save error dialogs** (row 68).
-
-### Watch-outs
-- This is **FOUNDATION/INFRA** (a new cross-cutting seam + a trait-signature
-  change) → Opus/main-thread design, two-stage review, careful with the
-  `Validator` trait change (it ripples to all five validators + `InputLine::valid`;
-  remember **validator-trait methods are NOT `View` methods** — no `specs.rs`
-  forwarder, per the process reminder below).
-- Decide the **result-return channel** up front (how the user's button choice gets
-  back to the view that asked) — that's the non-obvious part; the `OpenHistory`
-  round-trip is the worked precedent.
-
-### After the seam: resume PORT-ORDER at row 75 `TDirListBox`
-**Row 75 (`tdirlist.cpp`) is NOT mechanical despite its tag — an Opus/main-thread
-design cycle.** Three real problems (confirmed against the C++):
+### Row 75 `TDirListBox` — NOT mechanical despite its tag (an Opus/main-thread design cycle)
+Three real problems (confirmed against the C++):
 1. **Owner-coupled to the unported `TChDirDialog`.** `setState` downcasts the owner
    to poke `chDirButton->makeDefault(...)`; `selectItem` does `message(owner,
    cmChangeDir, list()->at(item))` — **a command carrying a `DirEntry` payload**,

@@ -691,14 +691,17 @@ impl View for InputLine {
     /// `TInputLine::valid` — with a validator: `cmValid` → status OK; any other
     /// non-`cmCancel` command runs the validator and fails if invalid. Without a
     /// validator: always valid.
-    fn valid(&self, cmd: Command) -> bool {
+    fn valid(&mut self, cmd: Command, ctx: &mut Context) -> bool {
         if let Some(validator) = &self.validator {
             if cmd == Command::VALID {
                 return validator.is_status_ok();
-            } else if cmd != Command::CANCEL && !validator.validate(&self.data) {
+            } else if cmd != Command::CANCEL && !validator.validate(&self.data, ctx) {
+                // validator.validate pops the validator's `error()` box (via
+                // ctx.request_message_box) on the way to returning false — faithful
+                // to TInputLine::valid calling validator->valid() which pops error().
                 // TODO(valid-select): C++ valid() calls select() on the bad field
-                // before returning false; needs &mut Context + request_focus.
-                // Return value is faithful; the focus side-effect is deferred.
+                // before returning false; needs request_focus. The error box +
+                // return value are faithful; the focus side-effect is deferred.
                 return false;
             }
         }
@@ -1056,20 +1059,29 @@ mod tests {
             LimitMode::MaxBytes,
         );
         il.data = "x".to_string();
-        // A non-cancel command runs validate → false.
-        assert!(!il.valid(Command::OK), "rejecting validator blocks OK");
+        // A non-cancel command runs validate → false (and requests an error box).
+        assert!(
+            !with_ctx(|ctx| il.valid(Command::OK, ctx)).1,
+            "rejecting validator blocks OK"
+        );
         // cmCancel always passes (no validation).
-        assert!(il.valid(Command::CANCEL), "cmCancel bypasses validation");
+        assert!(
+            with_ctx(|ctx| il.valid(Command::CANCEL, ctx)).1,
+            "cmCancel bypasses validation"
+        );
         // cmValid consults status (RejectAll's status is the default OK).
-        assert!(il.valid(Command::VALID), "cmValid consults status (OK)");
+        assert!(
+            with_ctx(|ctx| il.valid(Command::VALID, ctx)).1,
+            "cmValid consults status (OK)"
+        );
     }
 
     #[test]
     fn valid_without_validator_is_true() {
-        let il = field(12, "anything");
-        assert!(il.valid(Command::OK));
-        assert!(il.valid(Command::CANCEL));
-        assert!(il.valid(Command::VALID));
+        let mut il = field(12, "anything");
+        assert!(with_ctx(|ctx| il.valid(Command::OK, ctx)).1);
+        assert!(with_ctx(|ctx| il.valid(Command::CANCEL, ctx)).1);
+        assert!(with_ctx(|ctx| il.valid(Command::VALID, ctx)).1);
     }
 
     /// A validator that rejects every candidate keystroke (`isValidInput` →

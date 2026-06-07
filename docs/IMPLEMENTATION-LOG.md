@@ -5,6 +5,67 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — the async-modal-from-a-view seam (FOUNDATION detour, before row 75)
+
+A deliberate PORT-ORDER detour (decided in HANDOVER): build the
+**async-modal-from-a-view** seam once to retire **three** inert consumers at
+once. 795→802 lib tests (+7). Design note:
+[`docs/design/async-modal-from-view.md`](file:///home/oetiker/checkouts/rstv/docs/design/async-modal-from-view.md).
+
+**The problem.** C++ `valid()` *blocks* and does I/O: `TInputLine::valid` →
+`validator->valid()` → `error()` pops a `messageBox`; `TFileEditor::valid` pops a
+Yes/No/Cancel box and **uses its answer** to decide the bool. rstv's single loop
+(D9) forbids a downward-borrowed `&mut View` from running a nested modal inline.
+
+**The non-obvious trap (the whole reason it's FOUNDATION).** `valid()` is called
+from sites that are **not symmetric**:
+- **handle_event paths** — focus-leave `valid(cmReleasedFocus)` (`group.rs`
+  `focus_child`) and window-close `valid(cmClose)` (`window.rs`
+  `Window::handle_event`): event in flight → the **deferred queue drains normally**
+  via the pump.
+- **modal-close path** — `valid(endState)` at `program.rs` `exec_view`'s loop:
+  **between** pump iterations, where the deferred drain is **event-gated
+  (`!ev.is_nothing()`)** and would NEVER fire (esp. headlessly). This site must
+  **drive the modal INLINE**, holding `&mut self` (mirrors the `pending_modal`
+  explicit drive) — the new `validate_modal_close` re-validate loop.
+
+**The seam.**
+- `View::valid` signature → `(&mut self, cmd, &mut Context)` (blessed in HANDOVER);
+  ripples to every impl + the `specs.rs` `valid` forwarder + `Group::valid`
+  (manual `iter_mut`, **first-invalid short-circuit kept**) + all call sites.
+- `Deferred::OpenMessageBox { text, kind, buttons, answer_to, then_command }` +
+  `Context::request_message_box` (the **ADD-A-VARIANT** pattern, like
+  `OpenHistory`).
+- `View::set_modal_answer` trait hook (default no-op, `specs.rs` forwarder) —
+  `FileEditor` overrides it to stash into `pending_save_answer`.
+- `ModalCompletion::{RouteModalAnswer, Informational}`; `apply_modal_completion`
+  now returns `Option<Event>` re-injected into `out_events` (the re-post channel —
+  `pump_once` pops `out_events` before polling). `pending_modal` extended to carry
+  the box's first-button **initial-focus** id (so the close prompt defaults to
+  **Yes**, not Cancel — matching C++ `selectNext(False)`).
+
+**Consumers retired (the three breadcrumb clusters):**
+1. **All 5 validator `error()` boxes** (`Validator::error(&self, ctx)` — NOT a
+   `View` method, so **no `specs.rs` forwarder**) — exact C++ strings, `mfError|
+   mfOKButton` → Error kind + OK; fires on cmReleasedFocus + cmOK.
+2. **`FileEditor::valid` modified-save prompt** (`edSaveModify`/`edSaveUntitled`,
+   Yes→`save`, No→clear-modified+true, Cancel→false) — via the window-close
+   handle_event path (queue → `pending_modal` → `RouteModalAnswer` → re-post
+   `cmClose` re-validates with the cached answer).
+3. **`FileEditor` save-error boxes** (`save`/`save_file` thread ctx; write/create
+   failure → `Error writing file …`; create-vs-write merged — `std::fs::write` is
+   atomic). `edReadError` on **load** stays deferred (the ctor has no ctx).
+
+**Reviewed** two-stage (spec PASS, quality PASS). **Two documented interims:**
+(a) the `valid_end`/**cmQuit** path *vetoes* close of a modified editor without a
+prompt (the whole-tree quit-drive is deferred — latent: no runnable app wires a
+FileEditor yet); (b) `saveAs`/`edReadError`/`TFileDialog` paths still breadcrumbed.
+
+**Verification.** 802 lib tests green (+7: FileEditor close Yes/No/Cancel, the
+first-button-focus regression guard, validator-error inline + deferred, the
+quit-veto no-leak guard); `clippy --all-targets -D warnings` (forced) + `fmt
+--check` clean.
+
 ## Session — file-dialog data classes (rows 71–74) — batched, collections→Vec
 
 Rows 71–74 (`TDirEntry`/`TDirCollection`/`TSearchRec`/`TFileCollection`,

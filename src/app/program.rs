@@ -250,13 +250,17 @@ pub struct Program {
     /// once on the next idle, then cleared.
     command_set_changed: bool,
     /// A view-requested modal awaiting top-level execution (row 57). Set by the
-    /// `OpenHistory` apply arm in the `pump_once` deferred drain (a view cannot
-    /// call `exec_view` — top-level only); drained by the outer driver
-    /// [`pump_and_drive`](Self::pump_and_drive) after `pump_once` returns, where a
-    /// whole `&mut self` is held. The boxed view is the modal; the
-    /// [`ModalCompletion`] runs after the modal loop ends but before the view is
-    /// removed/dropped (so it can read the modal's final state).
-    pending_modal: Option<(Box<dyn View>, ModalCompletion)>,
+    /// `OpenHistory` / `OpenMessageBox` apply arms in the `pump_once` deferred drain
+    /// (a view cannot call `exec_view` — top-level only); drained by the outer
+    /// driver [`pump_and_drive`](Self::pump_and_drive) after `pump_once` returns,
+    /// where a whole `&mut self` is held. The tuple is `(modal, completion,
+    /// initial_focus)`: the boxed view is the modal; the [`ModalCompletion`] runs
+    /// after the modal loop ends but before the view is removed/dropped (so it can
+    /// read the modal's final state); `initial_focus` is the child to focus on open
+    /// (C++ `selectNext(False)`) — `Some(first_button)` for a `messageBox` so the
+    /// default button (Yes/OK) is focused, `None` for `OpenHistory` (the
+    /// `HistoryWindow` manages its own focus).
+    pending_modal: Option<(Box<dyn View>, ModalCompletion, Option<ViewId>)>,
 }
 
 /// What to do with a view-triggered modal's result, run AFTER the modal loop ends
@@ -268,6 +272,20 @@ enum ModalCompletion {
     /// `THistory`: on `cmOK`, read the `HistoryWindow`'s selection and `set_value`
     /// it into the linked input line (data + `select_all`). On cancel, nothing.
     HistoryPick { link: ViewId },
+    /// The async-modal-from-a-view `messageBox` completion (handle_event paths):
+    /// route the user's chosen button [`Command`] back to the requesting view via
+    /// [`View::set_modal_answer`], then re-post `then_command` (e.g. `cmClose`) so
+    /// the original action re-runs `valid()` with the cached answer.
+    RouteModalAnswer {
+        /// The view to route the answer to (the `valid()` requester).
+        answer_to: ViewId,
+        /// The focused command to re-post after routing (`None` = no re-post).
+        then_command: Option<Command>,
+    },
+    /// An informational (OK-only) async `messageBox` with no requester to route to
+    /// (a validator `error`, a `FileEditor` save-error popup). The box just shows;
+    /// nothing happens on close.
+    Informational,
 }
 
 impl Program {
@@ -498,15 +516,50 @@ impl Program {
     /// is dismiss-only.
     fn pump_and_drive(&mut self) {
         self.pump_once();
-        if let Some((view, completion)) = self.pending_modal.take() {
-            self.exec_view_with_completion(view, Some(completion), None, None);
+        if let Some((view, completion, initial_focus)) = self.pending_modal.take() {
+            self.exec_view_with_completion(view, Some(completion), initial_focus, None);
         }
     }
 
-    /// `TGroup::execute`'s outer `while( !valid(endState) )` — a modal only ends
-    /// if the tree validates the end command.
-    fn valid_end(&self, cmd: Command) -> bool {
-        self.group.valid(cmd)
+    /// `TGroup::execute`'s outer `while( !valid(endState) )` for the **app run
+    /// loop** ([`run`](Self::run)) — the app only ends if the WHOLE root-group tree
+    /// validates the end command (`cmQuit`). Takes `&mut self` (the async-modal
+    /// `valid` seam threads `&mut Context`); builds a throwaway `Context` over the
+    /// disjoint loop-owned fields, as the pump does.
+    ///
+    /// **DEFERRED — quit-prompt-on-unsaved is NOT wired here (out of scope for the
+    /// async-modal-from-a-view seam).** Because this validates the ENTIRE root group
+    /// (`group.valid` walks every descendant), a modified [`FileEditor`] or an
+    /// invalid `ofValidate` field *does* request an `OpenMessageBox` here (same code
+    /// path as the window-close prompt) and return false. But this is a fourth
+    /// `valid()` site — distinct from the three the seam targets (focus-leave,
+    /// window-close, modal-close) — and driving its box correctly needs a
+    /// **whole-tree** inline drive (not the single-`id`
+    /// [`validate_modal_close`](Self::validate_modal_close), which validates one
+    /// modal view). So we DISCARD any box `group.valid` queued here (clearing it so
+    /// it does not leak into the next pump) and return the bool. Effect: a `cmQuit`
+    /// with an unsaved editor / invalid field is **vetoed** (the run loop re-spins),
+    /// rather than prompting — the faithful "Save before exit?" walk
+    /// (`TApplication::cascade`/`closeAll` valid-walk) is a follow-up. Pre-seam this
+    /// path returned `true` unconditionally for `FileEditor`; the veto is the
+    /// behaviour change the signature ripple introduced.
+    fn valid_end(&mut self, cmd: Command) -> bool {
+        let valid = {
+            let now = self.clock.now_ms();
+            let mut ctx = Context::new(
+                &mut self.out_events,
+                &mut self.timers,
+                now,
+                &mut self.deferred,
+            );
+            self.group.valid(cmd, &mut ctx)
+        };
+        // Drop any OpenMessageBox the tree-walk queued — we cannot drive it here
+        // (whole-tree, not single-id) and must not leak it to the next pump. See
+        // the DEFERRED note above.
+        self.deferred
+            .retain(|d| !matches!(d, Deferred::OpenMessageBox { .. }));
+        valid
     }
 
     // -- exec_view: the blocking modal wrapper (row 34, D9) -----------------
@@ -612,23 +665,16 @@ impl Program {
         kind: crate::dialog::MessageBoxKind,
         buttons: crate::dialog::MessageBoxButtons,
     ) -> Command {
-        // makeRect — faithful port of msgbox.cpp's static makeRect(text).
-        let base_w = 40_i32;
-        let base_h = 9_i32;
-        let char_count = msg.chars().count() as i32;
-        let text_area = (base_w - 7) * (base_h - 6); // (40-7)*(9-6) = 33*3 = 99
-        let h = if char_count > text_area {
-            char_count / (base_w - 7) + 6 + 1
-        } else {
-            base_h
-        };
-        let mut r = Rect::new(0, 0, base_w, h);
-
-        // Center within the desktop's size; fall back to the root group size.
-        // C++: r.move((TProgram::deskTop->size.x - r.b.x) / 2, …)
-        let desk_size = self.desktop_size();
-        r.r#move((desk_size.x - base_w) / 2, (desk_size.y - h) / 2);
+        let r = self.centered_msgbox_rect(msg);
         self.message_box_rect(r, msg, kind, buttons)
+    }
+
+    /// `msgbox.cpp`'s static `makeRect(text)` + the desktop-centering — factored out
+    /// so both [`message_box`](Self::message_box) and the async-modal-from-a-view
+    /// drain ([`Deferred::OpenMessageBox`](crate::view::Deferred::OpenMessageBox))
+    /// build the box at the same centered rect.
+    fn centered_msgbox_rect(&mut self, msg: &str) -> Rect {
+        centered_msgbox_rect_for(&self.group, self.desktop, msg)
     }
 
     /// `TProgram::deskTop->size` — the desktop view's SIZE, used to center modal
@@ -883,7 +929,13 @@ impl Program {
             // hang if a sibling ever vetoed (the outer loop would re-spin with
             // nothing re-issuing the command). The id still resolves here: `remove`
             // happens after this loop.
-            let valid = self.group.find_mut(id).map(|v| v.valid(es)).unwrap_or(true);
+            //
+            // ASYNC-MODAL-FROM-A-VIEW (the modal-close path, §6 of the design note):
+            // the modal view's `valid` may request a `messageBox` (e.g. a FileEditor
+            // modified-save prompt). The deferred drain is event-gated inside
+            // pump_once and would NEVER fire here, so validate_modal_close DRIVES the
+            // box inline (we hold &mut self) and re-validates in a loop.
+            let valid = self.validate_modal_close(id, es);
             if valid {
                 break es;
             }
@@ -894,7 +946,12 @@ impl Program {
         // NOT the deferred queue (that drain is gated on !ev.is_nothing() inside
         // pump_once and would never fire here in a headless test).
         if let Some(c) = completion {
-            apply_modal_completion(c, retval, &mut self.group, id);
+            // RouteModalAnswer returns a `then_command` event to re-post (the async
+            // modal-from-a-view round-trip); push it into the re-inject queue so the
+            // next pump pops it (program.rs pump_once pops out_events before polling).
+            if let Some(reinject) = apply_modal_completion(c, retval, &mut self.group, id) {
+                self.out_events.push_back(reinject);
+            }
         }
 
         // C++ inputBox: `if (c != cmCancel) dialog->getData(s)`. Read the gather
@@ -953,6 +1010,84 @@ impl Program {
         // TheTopView dropped (D8: no occlusion/exposed); no consumer.
 
         (retval, gathered)
+    }
+
+    /// `TGroup::execute`'s `while( !valid(endState) )` for the **modal-close path**
+    /// (§6 of `docs/design/async-modal-from-view.md`) — the asymmetric twin of the
+    /// handle_event paths.
+    ///
+    /// We are BETWEEN pump iterations (called from `exec_view_with_completion`'s
+    /// retval loop, holding `&mut self`), so the event-gated deferred drain inside
+    /// [`pump_once`](Self::pump_once) will NEVER fire here. A modal view's `valid`
+    /// (e.g. a [`FileEditor`](crate::widgets::FileEditor) modified-save prompt) that
+    /// requests a [`OpenMessageBox`](crate::view::Deferred::OpenMessageBox) would
+    /// hang forever waiting for that drain. So this DRIVES the box inline (via the
+    /// re-entrant [`exec_view_with_completion`](Self::exec_view_with_completion)),
+    /// routes the answer through [`View::set_modal_answer`], and re-validates in a
+    /// loop. The `then_command` carried by the request is IGNORED here (we re-loop
+    /// inline instead of re-posting it — the whole two-path asymmetry).
+    fn validate_modal_close(&mut self, id: ViewId, es: Command) -> bool {
+        loop {
+            // 1. Run the modal view's own valid (carries &mut Context for any request).
+            let valid = {
+                let now = self.clock.now_ms();
+                let mut ctx = Context::new(
+                    &mut self.out_events,
+                    &mut self.timers,
+                    now,
+                    &mut self.deferred,
+                );
+                self.group
+                    .find_mut(id)
+                    .map(|v| v.valid(es, &mut ctx))
+                    .unwrap_or(true)
+            };
+
+            // 2. Partition out any OpenMessageBox requests valid() queued. Anything
+            //    else in `deferred` here is unexpected (no event drove it) — keep it
+            //    by re-pushing so the next real pump drains it.
+            let drained = std::mem::take(&mut self.deferred);
+            let mut requests: Vec<Deferred> = Vec::new();
+            for d in drained {
+                match d {
+                    req @ Deferred::OpenMessageBox { .. } => requests.push(req),
+                    other => self.deferred.push(other),
+                }
+            }
+            if requests.is_empty() {
+                return valid;
+            }
+
+            // 3. Drive each requested box INLINE (we hold &mut self), routing the
+            //    answer back to its requester. Re-loop only if an answer was routed
+            //    (an informational `answer_to == None` box just shows, then we keep
+            //    the current — false — valid).
+            let mut revalidate = false;
+            for req in requests {
+                let Deferred::OpenMessageBox {
+                    text,
+                    kind,
+                    buttons,
+                    answer_to,
+                    then_command: _,
+                } = req
+                else {
+                    unreachable!("partitioned to OpenMessageBox only");
+                };
+                let r = self.centered_msgbox_rect(&text);
+                let (d, first) = crate::dialog::build_message_box(r, &text, kind, buttons);
+                let (answer, _) = self.exec_view_with_completion(Box::new(d), None, first, None);
+                if let Some(target) = answer_to {
+                    if let Some(v) = self.group.find_mut(target) {
+                        v.set_modal_answer(answer);
+                    }
+                    revalidate = true;
+                }
+            }
+            if !revalidate {
+                return valid;
+            }
+        }
     }
 
     /// One iteration of the loop — the heart of D9.
@@ -1354,6 +1489,7 @@ impl Program {
                                         *pending_modal = Some((
                                             Box::new(hw),
                                             ModalCompletion::HistoryPick { link },
+                                            None, // HistoryWindow manages its own focus
                                         ));
                                     }
                                 }
@@ -1421,6 +1557,40 @@ impl Program {
                                     {
                                         ed.insert_text(t.as_bytes(), false, &mut ctx);
                                     }
+                                }
+                                // -- the async-modal-from-a-view seam (handle_event paths) --
+                                //
+                                // A downward-borrowed `&mut View`'s valid() requested
+                                // a messageBox. Build the centered box + stash it into
+                                // pending_modal for the outer pump_and_drive to exec at
+                                // top level (a view cannot call exec_view here — same
+                                // structural constraint as OpenHistory). The completion
+                                // routes the answer back (RouteModalAnswer) and re-posts
+                                // then_command. (The modal-close path at 886 drives its
+                                // own box inline — it is NOT on this event-gated drain.)
+                                Deferred::OpenMessageBox {
+                                    text,
+                                    kind,
+                                    buttons,
+                                    answer_to,
+                                    then_command,
+                                } => {
+                                    let r = centered_msgbox_rect_for(group, *desktop, &text);
+                                    let (d, first) =
+                                        crate::dialog::build_message_box(r, &text, kind, buttons);
+                                    let completion = match answer_to {
+                                        Some(answer_to) => ModalCompletion::RouteModalAnswer {
+                                            answer_to,
+                                            then_command,
+                                        },
+                                        // Informational (OK-only) box: nothing to route.
+                                        None => ModalCompletion::Informational,
+                                    };
+                                    // Thread the first-button focus (C++ selectNext(False))
+                                    // so the default button (Yes/OK) is focused on open —
+                                    // matching the sync `message_box_rect` + inline
+                                    // `validate_modal_close` paths.
+                                    *pending_modal = Some((Box::new(d), completion, first));
                                 }
                             }
                         }
@@ -1539,6 +1709,29 @@ fn build_history_bounds(group: &mut Group, link: ViewId) -> Option<Rect> {
     Some(r)
 }
 
+/// `msgbox.cpp`'s static `makeRect(text)` + the desktop-centering, as a free fn so
+/// the pump's destructured-borrow `OpenMessageBox` drain can reuse it (it cannot
+/// call the `&mut self` [`Program::centered_msgbox_rect`]). Centers within the
+/// desktop's SIZE (faithful to C++ `deskTop->size`), falling back to the root group.
+fn centered_msgbox_rect_for(group: &Group, desktop: Option<ViewId>, msg: &str) -> Rect {
+    let base_w = 40_i32;
+    let base_h = 9_i32;
+    let char_count = msg.chars().count() as i32;
+    let text_area = (base_w - 7) * (base_h - 6); // 33*3 = 99
+    let h = if char_count > text_area {
+        char_count / (base_w - 7) + 6 + 1
+    } else {
+        base_h
+    };
+    let mut r = Rect::new(0, 0, base_w, h);
+    let desk_size = desktop
+        .and_then(|id| group.descendant_global_bounds(id, Point::new(0, 0)))
+        .map(|b| Point::new(b.b.x - b.a.x, b.b.y - b.a.y))
+        .unwrap_or_else(|| group.state().size);
+    r.r#move((desk_size.x - base_w) / 2, (desk_size.y - h) / 2);
+    r
+}
+
 /// Run a [`ModalCompletion`] (row 57) as a DIRECT `group` mutation, while the modal
 /// is still in the tree by `modal_id`. NOT a deferred queue entry (that drain is
 /// gated on `!ev.is_nothing()` inside `pump_once` and would never fire from
@@ -1548,7 +1741,7 @@ fn apply_modal_completion(
     result: Command,
     group: &mut Group,
     modal_id: ViewId,
-) {
+) -> Option<Event> {
     match c {
         ModalCompletion::HistoryPick { link } => {
             if result == Command::OK {
@@ -1567,7 +1760,20 @@ fn apply_modal_completion(
                     }
                 }
             }
+            None
         }
+        // Async-modal-from-a-view (handle_event paths): route the answer + re-post.
+        ModalCompletion::RouteModalAnswer {
+            answer_to,
+            then_command,
+        } => {
+            if let Some(v) = group.find_mut(answer_to) {
+                v.set_modal_answer(result);
+            }
+            then_command.map(Event::Command)
+        }
+        // Informational box: nothing to route or re-post.
+        ModalCompletion::Informational => None,
     }
 }
 
@@ -1626,7 +1832,7 @@ fn program_handle_event(
         // the root group's valid().
         let can = desktop
             .and_then(|id| group.find_mut(id))
-            .is_some_and(|dt| dt.valid(Command::RELEASED_FOCUS));
+            .is_some_and(|dt| dt.valid(Command::RELEASED_FOCUS, ctx));
         if can {
             let matched = desktop
                 .and_then(|id| group.find_mut(id))
@@ -2887,7 +3093,7 @@ mod tests {
             &mut self.st
         }
         fn draw(&mut self, _ctx: &mut DrawCtx) {}
-        fn valid(&self, cmd: Command) -> bool {
+        fn valid(&mut self, cmd: Command, _ctx: &mut Context) -> bool {
             cmd != self.veto
         }
     }
@@ -6129,6 +6335,356 @@ mod tests {
             let (cmd, text) = program.input_box("Enter", "Path", "/tmp", 40);
             assert_eq!(cmd, Command::OK);
             assert_eq!(text, "/tmp");
+        }
+    }
+
+    // -- the async-modal-from-a-view seam (messageBox from valid()) -----------
+    //
+    // Three tests for the three structurally-different valid() call sites
+    // (docs/design/async-modal-from-view.md "Verification"):
+    //   1. FileEditor modified-save prompt over the deferred handle_event path
+    //      (window-close → pending_modal → RouteModalAnswer → re-post cmClose).
+    //   2. Validator error box over the INLINE modal-close path (validate_modal_close
+    //      drives the box inline; driven surgically — the full exec_view drive would
+    //      busy-loop headlessly, which is the correct runtime "block for the user").
+    //   3. Validator error box over the deferred focus-leave path (Deferred queued).
+    mod async_modal_from_view {
+        use super::*;
+        use crate::command::Command;
+        use crate::event::{Key, KeyEvent, KeyModifiers};
+        use crate::validate::Validator;
+        use crate::view::{StateFlag, View};
+        use crate::widgets::{EditWindow, Editor, InputLine, LimitMode};
+
+        /// A validator that rejects every final value (so `valid()` fails) AND pops
+        /// an error box — mirrors the concrete validators (whose `error` emits the
+        /// box; the abstract-base default is a no-op, so a test stub must override
+        /// `error` to exercise the seam).
+        struct RejectAll;
+        impl Validator for RejectAll {
+            fn is_valid(&self, _s: &str) -> bool {
+                false
+            }
+            fn error(&self, ctx: &mut Context) {
+                ctx.request_message_box(
+                    "rejected".to_string(),
+                    crate::dialog::MessageBoxKind::Error,
+                    crate::dialog::MessageBoxButtons::ok(),
+                    None,
+                    None,
+                );
+            }
+        }
+
+        /// A unique temp path for a save test (cleaned up by the caller).
+        fn tmp(tag: &str) -> std::path::PathBuf {
+            let pid = std::process::id();
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            std::env::temp_dir().join(format!("rstv_amfv_{tag}_{pid}_{nanos}.txt"))
+        }
+
+        /// Insert an `EditWindow` (backed by `path`) into the desktop's group,
+        /// select + make-current the window so the focused `cmClose` routes to it,
+        /// enable `cmClose`, mark the editor modified (by feeding a key straight to
+        /// the editor — no focus needed), and return the window + editor ids.
+        fn modified_edit_window(
+            program: &mut Program,
+            path: Option<std::path::PathBuf>,
+        ) -> (ViewId, ViewId) {
+            let ew = EditWindow::new(Rect::new(2, 1, 60, 18), path, 1);
+            let editor_id = ew.editor_id;
+            let win_id = program.group_mut().insert(Box::new(ew));
+
+            // Select + current (mirror close_round_trip_removes_window).
+            program.with_ctx(|g, ctx| {
+                g.set_current(Some(win_id), SelectMode::Normal, ctx);
+                g.find_mut(win_id)
+                    .unwrap()
+                    .set_state(StateFlag::Selected, true, ctx);
+            });
+            program.enable_command(Command::CLOSE);
+
+            // Mark modified by feeding a printable key straight to the editor (focus
+            // is about routing; a direct handle_event bypasses it).
+            program.with_ctx(|g, ctx| {
+                let mut ev = Event::KeyDown(KeyEvent::new(Key::Char('Z'), KeyModifiers::default()));
+                g.find_mut(editor_id).unwrap().handle_event(&mut ev, ctx);
+            });
+            // Setup assertion: the buffer is genuinely modified now.
+            let modified = program
+                .group_mut()
+                .find_mut(editor_id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<Editor>())
+                .map(|e| e.modified())
+                .unwrap_or(false);
+            assert!(modified, "setup: the editor must be modified before close");
+
+            program.out_events.clear();
+            (win_id, editor_id)
+        }
+
+        /// Drive `pump_and_drive` a bounded number of times (the box opens via
+        /// `pending_modal`, so a plain `pump_once` is not enough). Never unbounded —
+        /// a headless backend never blocks.
+        fn drive(program: &mut Program, n: usize) {
+            for _ in 0..n {
+                program.pump_and_drive();
+            }
+        }
+
+        /// 1a. cmClose on a modified FileEditor + pre-queued cmYes → file written,
+        /// window removed.
+        #[test]
+        fn file_editor_close_yes_saves_and_closes() {
+            let (mut program, _h, _c) = program_with_desktop(80, 25);
+            let path = tmp("yes");
+            let _ = std::fs::remove_file(&path);
+            let (win_id, _ed) = modified_edit_window(&mut program, Some(path.clone()));
+
+            // cmClose triggers the prompt; cmYes answers it.
+            program.out_events.push_back(Event::Command(Command::CLOSE));
+            program.out_events.push_back(Event::Command(Command::YES));
+            drive(&mut program, 12);
+
+            assert!(
+                program.group_mut().find_mut(win_id).is_none(),
+                "Yes → save succeeds → window removed"
+            );
+            assert!(path.exists(), "Yes → file written to disk");
+            let _ = std::fs::remove_file(&path);
+        }
+
+        /// The pending_modal (handle_event) route must thread the FIRST-button focus
+        /// (C++ `messageBox` selectNext(False)) so the box's default button (Yes for
+        /// yes_no_cancel) is focused on open — NOT `None`, which would let
+        /// `reset_current`'s firstMatch focus the LAST button (Cancel). We use
+        /// `pump_once` (not `pump_and_drive`) so the box is STASHED in `pending_modal`
+        /// but not yet executed, then inspect the carried `initial_focus`.
+        ///
+        /// The proof: `initial_focus` is `Some(id)` (a regressed `None` fails here),
+        /// that `id` resolves inside the stashed box, AND it sits at the FIRST-button
+        /// (Yes) POSITION — not the last (Cancel) a `None`/firstMatch would yield.
+        ///
+        /// Ids cannot be compared across box instances (the global `ViewId::next()`
+        /// counter gives a fresh reference box higher ids), so we compare **layout
+        /// positions** via `descendant_global_bounds`: button layout is deterministic
+        /// from the box RECT, so a reference box built with the stashed box's own
+        /// bounds has a byte-identical interior. The Yes/No/Cancel buttons share a
+        /// y-row and differ in x, so `Rect` equality discriminates first-vs-last. The
+        /// reference's first button is `build_message_box`'s documented first
+        /// (already proven to fire `YES` by
+        /// `focused_space_fires_focused_button_discriminating`); a regressed
+        /// `Some(Cancel)` focus would land at a different x and fail the `assert_eq!`.
+        #[test]
+        fn file_editor_close_prompt_focuses_first_button_on_pending_modal_path() {
+            use crate::dialog::{MessageBoxButtons, MessageBoxKind, build_message_box};
+
+            let (mut program, _h, _c) = program_with_desktop(80, 25);
+            let _ = modified_edit_window(&mut program, Some(tmp("focus")));
+
+            // cmClose triggers the prompt; pump_once stashes the box into
+            // pending_modal WITHOUT driving it (so we can inspect initial_focus).
+            program.out_events.push_back(Event::Command(Command::CLOSE));
+            program.pump_once();
+
+            let (modal, _completion, initial_focus) = program
+                .pending_modal
+                .as_mut()
+                .expect("cmClose on a modified editor stashes the prompt in pending_modal");
+
+            // (a) A real focus target is threaded (the regression was `None`).
+            let focus_id =
+                initial_focus.expect("the first-button focus is threaded (not None / Cancel)");
+
+            // (b) It resolves to a child of the stashed message box (with bounds).
+            let focus_bounds = modal
+                .descendant_global_bounds(focus_id, Point::new(0, 0))
+                .expect("the threaded initial_focus resolves to a descendant with bounds");
+
+            // (c) It sits at the FIRST-button (Yes) position. Layout is deterministic
+            //     from the RECT, so build the reference with the STASHED box's own
+            //     bounds — identical interior — and compare the first-button POSITION.
+            let box_bounds = modal.state().get_bounds();
+            let (ref_box, ref_first) = build_message_box(
+                box_bounds,
+                "Save untitled file?",
+                MessageBoxKind::Information,
+                MessageBoxButtons::yes_no_cancel(),
+            );
+            let ref_first_bounds = ref_box
+                .descendant_global_bounds(
+                    ref_first.expect("yes_no_cancel has a first (Yes) button"),
+                    Point::new(0, 0),
+                )
+                .expect("the reference first button has bounds");
+
+            assert_eq!(
+                focus_bounds, ref_first_bounds,
+                "threaded initial_focus sits at the FIRST-button (Yes) position; a \
+                 regressed last-button (Cancel) focus would be at a different x"
+            );
+        }
+
+        /// 1b. cmNo → window removed, file NOT written, modified cleared.
+        #[test]
+        fn file_editor_close_no_discards_and_closes() {
+            let (mut program, _h, _c) = program_with_desktop(80, 25);
+            let path = tmp("no");
+            let _ = std::fs::remove_file(&path);
+            let (win_id, _ed) = modified_edit_window(&mut program, Some(path.clone()));
+
+            program.out_events.push_back(Event::Command(Command::CLOSE));
+            program.out_events.push_back(Event::Command(Command::NO));
+            drive(&mut program, 12);
+
+            assert!(
+                program.group_mut().find_mut(win_id).is_none(),
+                "No → allow-close → window removed"
+            );
+            assert!(!path.exists(), "No → file NOT written");
+            let _ = std::fs::remove_file(&path);
+        }
+
+        /// 1c. cmCancel → window stays open, still modified.
+        #[test]
+        fn file_editor_close_cancel_keeps_window() {
+            let (mut program, _h, _c) = program_with_desktop(80, 25);
+            let path = tmp("cancel");
+            let _ = std::fs::remove_file(&path);
+            let (win_id, editor_id) = modified_edit_window(&mut program, Some(path.clone()));
+
+            program.out_events.push_back(Event::Command(Command::CLOSE));
+            program
+                .out_events
+                .push_back(Event::Command(Command::CANCEL));
+            drive(&mut program, 12);
+
+            assert!(
+                program.group_mut().find_mut(win_id).is_some(),
+                "Cancel → veto close → window stays"
+            );
+            let still_modified = program
+                .group_mut()
+                .find_mut(editor_id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<Editor>())
+                .map(|e| e.modified())
+                .unwrap_or(false);
+            assert!(still_modified, "Cancel → buffer still modified");
+            assert!(!path.exists(), "Cancel → file NOT written");
+            let _ = std::fs::remove_file(&path);
+        }
+
+        /// Test 2 — validator error box over the INLINE modal-close path. Driven
+        /// surgically via `validate_modal_close` — a full `exec_view` drive would
+        /// busy-loop headlessly (the correct runtime "block for the user"). The
+        /// proof a box was DRIVEN: it consumed the pre-queued cmOK and the field
+        /// stays invalid (returns false).
+        #[test]
+        fn validator_error_box_inline_on_modal_close() {
+            let (mut program, _h, _c) = program_with_desktop(80, 25);
+
+            // A Dialog with a rejecting-validator InputLine, inserted into the root.
+            let mut d = crate::dialog::Dialog::new(Rect::new(5, 3, 55, 15), Some("D".into()));
+            let il = InputLine::new(
+                Rect::new(2, 2, 30, 3),
+                40,
+                Some(Box::new(RejectAll)),
+                LimitMode::MaxBytes,
+            );
+            d.insert_child(Box::new(il));
+            let dialog_id = program.group_mut().insert(Box::new(d));
+
+            // The error box (OK-only) consumes this cmOK when driven inline.
+            program.out_events.push_back(Event::Command(Command::OK));
+            let valid = program.validate_modal_close(dialog_id, Command::OK);
+
+            assert!(!valid, "a rejecting field keeps the dialog invalid");
+            // Proof the box was DRIVEN inline: it consumed the pre-queued cmOK (it
+            // ended the box). If no box had run, the cmOK would still be queued.
+            // (Modal open/close emits focus broadcasts, so the whole queue is not
+            // empty — assert the cmOK specifically is gone, not the whole queue.)
+            assert!(
+                !program
+                    .out_events
+                    .iter()
+                    .any(|e| matches!(e, Event::Command(c) if *c == Command::OK)),
+                "the error box was driven inline (it consumed the queued cmOK)"
+            );
+        }
+
+        /// Test 3 — validator error box over the deferred focus-leave path: tabbing
+        /// out of a bad ofValidate field queues a `Deferred::OpenMessageBox` (and
+        /// refuses the focus switch). Inspected on a bare Group + local ctx — fully
+        /// deterministic, no pump/modal.
+        #[test]
+        fn validator_error_box_deferred_on_focus_leave() {
+            let mut group = Group::new(Rect::new(0, 0, 40, 12));
+            let first = {
+                let mut il = InputLine::new(
+                    Rect::new(2, 1, 30, 2),
+                    40,
+                    Some(Box::new(RejectAll)),
+                    LimitMode::MaxBytes,
+                );
+                let st = View::state_mut(&mut il);
+                st.options.selectable = true;
+                st.options.validate = true; // ofValidate gates the RELEASED_FOCUS branch
+                group.insert(Box::new(il))
+            };
+            let second = {
+                let mut il = InputLine::new(Rect::new(2, 4, 30, 5), 40, None, LimitMode::MaxBytes);
+                View::state_mut(&mut il).options.selectable = true;
+                group.insert(Box::new(il))
+            };
+
+            let mut out = std::collections::VecDeque::new();
+            let mut timers = crate::timer::TimerQueue::new();
+            let mut deferred: Vec<Deferred> = Vec::new();
+
+            // Make `first` current, then try to move focus to `second`.
+            {
+                let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
+                group.set_current(Some(first), SelectMode::Normal, &mut ctx);
+            }
+            deferred.clear();
+            let switched = {
+                let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
+                group.focus_child(second, &mut ctx)
+            };
+
+            assert!(!switched, "a bad ofValidate field refuses the focus switch");
+            assert!(
+                deferred
+                    .iter()
+                    .any(|d| matches!(d, Deferred::OpenMessageBox { .. })),
+                "the validator's error box was queued as Deferred::OpenMessageBox"
+            );
+        }
+
+        /// Breadcrumb guard: `valid_end` (the app-run-loop quit gate) is the FOURTH
+        /// valid() site dragged in by the signature change — quit-prompt-on-unsaved
+        /// is deliberately NOT wired (it needs a whole-tree inline drive). A modified
+        /// FileEditor VETOES the quit (returns false) AND `valid_end` must DISCARD the
+        /// box it queued (no leak into the next pump). Pins the documented deferral.
+        #[test]
+        fn valid_end_quit_vetoes_modified_editor_without_leaking_box() {
+            let (mut program, _h, _c) = program_with_desktop(80, 25);
+            let (_win_id, _ed) = modified_edit_window(&mut program, Some(tmp("quit")));
+
+            let valid = program.valid_end(Command::QUIT);
+            assert!(!valid, "a modified editor vetoes cmQuit (prompt deferred)");
+            assert!(
+                !program
+                    .deferred
+                    .iter()
+                    .any(|d| matches!(d, Deferred::OpenMessageBox { .. })),
+                "valid_end discards the orphaned box (no leak to the next pump)"
+            );
         }
     }
 }

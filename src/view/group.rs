@@ -348,7 +348,7 @@ impl Group {
         // focus(): validate the outgoing current before letting it lose focus.
         if let Some(ci) = self.current.and_then(|c| self.index_of(c)) {
             let validate = self.children[ci].view.state().options.validate;
-            if validate && !self.children[ci].view.valid(Command::RELEASED_FOCUS) {
+            if validate && !self.children[ci].view.valid(Command::RELEASED_FOCUS, ctx) {
                 return false; // focus refused
             }
         }
@@ -835,16 +835,28 @@ impl View for Group {
 
     /// `TGroup::valid` — for `cmReleasedFocus`, defer to the current child iff it
     /// has `ofValidate` (else `true`); otherwise every child must be `valid`.
-    fn valid(&self, cmd: Command) -> bool {
+    ///
+    /// Threads `&mut Context` (the async-modal-from-a-view seam): a child's
+    /// `valid` may request a modal `messageBox`. The `else` branch is a manual
+    /// `iter_mut` loop that keeps the **first-invalid short-circuit** (C++
+    /// `firstThat` stops at the first invalid child) — which also ensures only the
+    /// first invalid child enqueues an error box, matching C++'s single-box
+    /// behavior.
+    fn valid(&mut self, cmd: Command, ctx: &mut Context) -> bool {
         if cmd == Command::RELEASED_FOCUS {
             match self.current.and_then(|id| self.index_of(id)) {
                 Some(i) if self.children[i].view.state().options.validate => {
-                    self.children[i].view.valid(cmd)
+                    self.children[i].view.valid(cmd, ctx)
                 }
                 _ => true,
             }
         } else {
-            self.children.iter().all(|c| c.view.valid(cmd))
+            for child in self.children.iter_mut() {
+                if !child.view.valid(cmd, ctx) {
+                    return false; // firstThat: stop at the first invalid child
+                }
+            }
+            true
         }
     }
 
@@ -1068,7 +1080,7 @@ mod tests {
             &mut self.st
         }
         fn draw(&mut self, _ctx: &mut DrawCtx) {}
-        fn valid(&self, _cmd: Command) -> bool {
+        fn valid(&mut self, _cmd: Command, _ctx: &mut Context) -> bool {
             self.valid
         }
     }
@@ -1581,7 +1593,7 @@ mod tests {
         });
         // Generic command: every child must be valid.
         assert!(
-            !group.valid(Command::OK),
+            !with_ctx(&mut out, &mut timers, |ctx| group.valid(Command::OK, ctx)),
             "an invalid child fails group valid"
         );
     }
@@ -1606,7 +1618,8 @@ mod tests {
             group.set_current(Some(id), SelectMode::Normal, ctx)
         });
         assert!(
-            !group.valid(Command::RELEASED_FOCUS),
+            !with_ctx(&mut out, &mut timers, |ctx| group
+                .valid(Command::RELEASED_FOCUS, ctx)),
             "validating invalid current blocks focus release"
         );
 
@@ -1626,7 +1639,8 @@ mod tests {
             group2.set_current(Some(id2), SelectMode::Normal, ctx)
         });
         assert!(
-            group2.valid(Command::RELEASED_FOCUS),
+            with_ctx(&mut out2, &mut timers, |ctx| group2
+                .valid(Command::RELEASED_FOCUS, ctx)),
             "non-validating current: focus release always allowed"
         );
     }

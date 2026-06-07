@@ -218,7 +218,7 @@ impl View for Desktop {
         if let Event::Command(cmd) = *ev {
             match cmd {
                 Command::NEXT => {
-                    if self.group.valid(Command::RELEASED_FOCUS) {
+                    if self.group.valid(Command::RELEASED_FOCUS, ctx) {
                         // selectNext(False): findNext + select. `focus_next` is that
                         // (focus_child raises ofTopSelect windows == C++ select();
                         // its outgoing validation is already gated by valid() above,
@@ -231,7 +231,7 @@ impl View for Desktop {
                     ev.clear();
                 }
                 Command::PREV => {
-                    if self.group.valid(Command::RELEASED_FOCUS)
+                    if self.group.valid(Command::RELEASED_FOCUS, ctx)
                         && let Some(cur) = self.group.current()
                     {
                         // current->putInFrontOf(background): send current to the

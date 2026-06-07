@@ -288,6 +288,36 @@ pub enum Deferred {
     /// [`Editor`](crate::widgets::Editor), and inserts the text. Touches the
     /// **view-tree** family + the backend.
     EditorPaste(ViewId),
+
+    // -- the async-modal-from-a-view seam (messageBox from valid()) -----------
+    /// **View-triggered modal `messageBox`** (the async-modal-from-a-view seam —
+    /// `docs/design/async-modal-from-view.md`). A downward-borrowed `&mut View`
+    /// (a validator `error`, the `FileEditor` modified-save prompt) cannot run a
+    /// nested modal inline (it holds only `&mut Context`), so it requests one here.
+    /// The pump builds the centered box, stashes it into `Program::pending_modal`
+    /// with a [`RouteModalAnswer`](crate::app) completion, and the outer
+    /// `pump_and_drive` runs it at top level (mirroring [`OpenHistory`](Self::OpenHistory)).
+    ///
+    /// Touches the **view-tree** family + **loop state** (`pending_modal`), like
+    /// `OpenHistory` + `EndModal`, so the insertion-order drain stays
+    /// order-equivalent.
+    OpenMessageBox {
+        /// The message text (already-formatted, exact-string).
+        text: String,
+        /// Picks the box title (Error / Information / …).
+        kind: crate::dialog::MessageBoxKind,
+        /// Which buttons to show (OK-only for informational; Yes/No/Cancel for a prompt).
+        buttons: crate::dialog::MessageBoxButtons,
+        /// Route the chosen [`Command`](crate::command::Command) to this view (via
+        /// [`View::set_modal_answer`](crate::view::View::set_modal_answer)) after the
+        /// box closes. `None` = informational (OK-only) — no routing.
+        answer_to: Option<ViewId>,
+        /// After routing the answer, re-post this focused command so the original
+        /// action (e.g. cmClose) re-runs `valid()` with the cached answer. `None`
+        /// for informational boxes and for the inline modal-close path (which
+        /// re-validates inline).
+        then_command: Option<crate::command::Command>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -782,6 +812,35 @@ impl<'a> Context<'a> {
     pub fn request_record_history(&mut self, link: ViewId, history_id: u8) {
         self.deferred
             .push(Deferred::RecordHistory { link, history_id });
+    }
+
+    /// Request a modal `messageBox` be opened from inside a downward-borrowed
+    /// `&mut View` — **deferred** ([`Deferred::OpenMessageBox`]; the
+    /// async-modal-from-a-view seam, `docs/design/async-modal-from-view.md`). A
+    /// `valid()` (a validator `error`, the `FileEditor` modified-save prompt) holds
+    /// only `&mut Context` and cannot run a nested modal inline, so it requests one;
+    /// the pump builds + drives it.
+    ///
+    /// `answer_to = Some(id)` routes the chosen button [`Command`] back to that view
+    /// via [`View::set_modal_answer`](crate::view::View::set_modal_answer), and
+    /// `then_command = Some(cmd)` re-posts a focused command afterwards so the
+    /// original action re-runs `valid()` with the cached answer. Both `None` for an
+    /// informational (OK-only) box.
+    pub fn request_message_box(
+        &mut self,
+        text: String,
+        kind: crate::dialog::MessageBoxKind,
+        buttons: crate::dialog::MessageBoxButtons,
+        answer_to: Option<ViewId>,
+        then_command: Option<Command>,
+    ) {
+        self.deferred.push(Deferred::OpenMessageBox {
+            text,
+            kind,
+            buttons,
+            answer_to,
+            then_command,
+        });
     }
 
     /// Request the `TEditor` `editor` re-read its scrollbars' values and update its

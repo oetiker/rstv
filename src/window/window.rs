@@ -678,7 +678,7 @@ impl View for Window {
             if self.group.state().state.modal {
                 // sfModal: re-issue as cmCancel (row 34 owns modal teardown).
                 ctx.post(Command::CANCEL);
-            } else if self.valid(Command::CLOSE) {
+            } else if self.valid(Command::CLOSE, ctx) {
                 // close(): if valid(cmClose). The loop drains the request and runs
                 // `remove_descendant` (the close-removal channel, replacing the old
                 // "needs a close-removal channel" breadcrumb).
