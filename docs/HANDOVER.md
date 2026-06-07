@@ -15,7 +15,7 @@
 
 ## Current state
 
-- **HEAD `90833e5`.** Build: **704 lib tests** green; `cargo clippy --workspace
+- **HEAD `1281840`+ (row 64 lands this session).** Build: **712 lib tests** green; `cargo clippy --workspace
   --all-targets -- -D warnings` and `cargo fmt --all --check` clean (verify clippy
   with a forced re-lint — a cached run can mask a fresh warning).
 - **Cargo workspace** (`tvision` + `tvision-macros`) — use `--workspace` for
@@ -32,16 +32,20 @@
   initial-modal-currency seam** (`View::reset_current`), and **all of row 63
   (`messageBox`/`messageBoxRect`/`inputBox`/`inputBoxRect`)** — the latter via the
   **single-input scatter/gather seam** (`exec_view_with_completion`'s `gather`
-  param). The `#[delegate]` proc-macro is landed and adopted codebase-wide.
+  param), and **row 64 (`StringList`)** — a D12 minimal port (`BTreeMap<u16,String>`
+  wrapper in `src/text.rs`; the `TStreamable` resource-stream machinery dropped).
+  The `#[delegate]` proc-macro is landed and adopted codebase-wide.
 
 ## Next — lowest-numbered remaining work
 
-**Row 63 is fully ✅ this session** (both halves). The natural next work is the
-**validator-`error()` → `messageBox` wiring** (item 2 below — its seam is now
-*partly* unblocked: the sync `Program::message_box` exists; what's missing is the
-async-from-a-view face), then **row 64**. The `ModalFrame` outside-to-modal seam
-(item 1) remains open but is not gating; tackle it when a modal needs
-outside-click cancel.
+**Rows 63 and 64 are ✅ this session.** Row 65 is not a porting row, so the next
+porting row is **66 `TEditor`** (FOUNDATION — gap-buffer text editor; takes
+2×`TScrollBar`+`TIndicator`; clipboard D11; search/replace) — design-heavy,
+Opus/main-thread work. Two non-gating seams remain available as smaller wins
+before tackling the editor: the **validator-`error()` → `messageBox` wiring**
+(item 2 below — partly unblocked: the sync `Program::message_box` exists; what's
+missing is the async-from-a-view face), and the `ModalFrame` outside-to-modal
+seam (item 1; tackle when a modal needs outside-click cancel).
 
 1. **The `ModalFrame` deliver-outside-to-modal seam** (row 56/57 deferred — STILL
    OPEN). Un-defers the `HistoryWindow` outside-click `endModal(cmCancel)`. **NOT a

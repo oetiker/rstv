@@ -5,6 +5,33 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — `StringList` (row 64) — D12 keyed-string-table minimal port
+
+Row 64 (`TStringList`/`TStrListMaker`/`TStrIndexRec`, `tstrlist.cpp`). 704→712 lib
+tests. **Row 64 is now ✅.**
+
+- **It is a pure D12 case, not a literal translation.** All three C++ classes exist
+  *entirely* to serialize a compressed keyed-string table to/from a resource (`.res`)
+  stream via `TStreamable`/`ipstream`/`opstream` — machinery **D12 drops wholesale**.
+  The classes have **zero in-framework consumers** (only the streaming/registration
+  boilerplate `sstrlst.cpp`/`nmstrlst.cpp` reference them). So only the *observable
+  contract* — a keyed lookup `u16 key → string` — was ported; the storage format
+  (`TStrIndexRec` key/count/offset index, `MAXKEYS=16` run-length grouping,
+  byte-length-prefixed blob, `build`/`read`/`write`) is dropped.
+- **One type, not three.** `StringList` in `src/text.rs`, backed by
+  `BTreeMap<u16, String>`. The maker/list split existed only for the read/write
+  streaming asymmetry (gone under D12), so it collapses to one type. BTreeMap is the
+  faithful choice — C++ `get()` linear-scans index records assuming ascending keys —
+  and derives serde trivially if D12 persistence is ever revived (more serde-ready
+  than the faithful index would have been).
+- **API:** `new`/`Default`, `insert(key, impl Into<String>)` (← `TStrListMaker::put`),
+  `get(key) -> Option<&str>` (← `TStringList::get`), `len`/`is_empty`,
+  `FromIterator<(u16, S: Into<String>)>`. **Deviation noted in doc:** C++ `get()`
+  writes an empty-string sentinel (`*dest = EOS`) for a missing key; we return `None`.
+- Renders nothing → **unit tests only**, no snapshot (8 tests: round-trip, missing→None,
+  overwrite, ordered iteration, len/is_empty, FromIterator borrowed+owned, Default).
+  Not re-exported at crate root (matches existing `text` module convention).
+
 ## Session — `inputBox` (row 63, PART 2) — the single-input scatter/gather seam
 
 Completes row 63: the `inputBox`/`inputBoxRect` half of msgbox. 698→704 lib tests.

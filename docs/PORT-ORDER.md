@@ -40,9 +40,9 @@ first-time work), `MECHANICAL` (leaf/transcription once foundation exists),
 **Status:** **✅ in the `#` column = ported & on `main`** (per-row detail in
 [`docs/IMPLEMENTATION-LOG.md`](file:///home/oetiker/checkouts/rstv/docs/IMPLEMENTATION-LOG.md)).
 Unmarked rows are the remaining work — the **lowest-numbered unmarked row is
-next**. As of this writing rows **1–62 are done**; **63 (`messageBox`/`inputBox`)
-is next**. (Rows 65, and 77+ are not in this excerpt's range — keep marking as
-they land.) **Beyond the ladder:** `RegexValidator` (in `validate`) is an
+next**. As of this writing rows **1–64 are done** (63 = msgbox/inputBox, 64 =
+`StringList`); **66 (`TEditor`, FOUNDATION) is next** (65 is not a porting row).
+(Rows 77+ are not in this excerpt's range — keep marking as they land.) **Beyond the ladder:** `RegexValidator` (in `validate`) is an
 **rstv-original extension** — a regex-driven validator alongside the faithful
 `TPXPictureValidator` (62) — not a Turbo Vision class, so it has no row here.
 
@@ -165,7 +165,7 @@ concrete validators (Phase 5). Split accordingly.
 | 61 ✅ | `TStringLookupValidator` | `TLookupValidator` | `tvalidat.cpp` | `validate` | MECHANICAL | owns string list |
 | 62 ✅ | `TPXPictureValidator` | `TValidator` | `tvalidat.cpp` | `validate` | MECHANICAL | Paradox picture-mask state machine |
 | 63 ✅ | `messageBox`/`messageBoxRect`/`inputBox`/`inputBoxRect` | — | `msgbox.cpp` | `dialog` (msgbox) | MECHANICAL | **all four ✅.** `Program::message_box`/`message_box_rect` (PART 1); `Program::input_box`/`input_box_rect` (PART 2) via the **single-input scatter/gather seam** (`exec_view_with_completion` gained a `gather: ViewId` + `(Command, Option<FieldValue>)` return; scatter = `set_value` pre-exec, gather = `value()` pre-drop gated on `!= CANCEL`). The general D10 dialog group-walk (`Dialog::value`/`set_value`) stays DEFERRED to its first multi-field consumer (Batch E). |
-| 64 | `TStringList`/`TStrListMaker`/`TStrIndexRec` | `TObject` | `tstrlist.cpp`, `sstrlst.cpp` | `text` (resource) | MECHANICAL | string-resource lists; mostly D12-adjacent — minimal port |
+| 64 ✅ | `TStringList`/`TStrListMaker`/`TStrIndexRec` | `TObject` | `tstrlist.cpp`, `sstrlst.cpp` | `text` (resource) | MECHANICAL | **✅ minimal port.** Pure D12 case (all three classes are streaming-only, zero in-framework consumers) → ported only the observable contract: `StringList` in `src/text.rs`, a `BTreeMap<u16,String>` wrapper (`insert`/`get→Option`/`len`/`FromIterator`). Storage format + `TStreamable` machinery dropped. Renders nothing → unit tests only. |
 | 66 | `TEditor` | `TView` | `teditor1.cpp`, `teditor2.cpp`, `edits.cpp` | `widgets::editor` | FOUNDATION | gap-buffer text editor; takes 2×`TScrollBar`+`TIndicator`; clipboard (D11); search/replace |
 | 67 | `TMemo` | `TEditor` | `tmemo.cpp` | `widgets::editor` | MECHANICAL | single-field editor; typed value (D10) |
 | 68 | `TFileEditor` | `TEditor` | `tfiledtr.cpp` | `widgets::editor` | MECHANICAL | load/save file backing |

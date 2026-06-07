@@ -23,6 +23,7 @@
 
 use crate::color::Style;
 use crate::screen::Cell;
+use std::collections::BTreeMap;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthChar;
 
@@ -263,6 +264,87 @@ pub fn draw_str(
     draw_str_ex(cells, indent, text, text_indent, |s| *s = style)
 }
 
+// ---------------------------------------------------------------------------
+// StringList — row 64 port of TStringList / TStrListMaker (tstrlist.cpp)
+// ---------------------------------------------------------------------------
+
+/// A keyed lookup of strings (`u16 key → String`).
+///
+/// **C++ origin:** `TStringList` / `TStrListMaker` (`tstrlist.cpp`).
+///
+/// The original classes exist *entirely* to serialize a compressed keyed-string
+/// table to/from a resource (`.res`) stream via `TStreamable`/`ipstream`/
+/// `opstream`.  Deviation **D12** drops the entire streaming/persistence
+/// machinery — `TStrIndexRec`, the `MAXKEYS=16` run-length index, the
+/// byte-length-prefixed string blob, and `build`/`read`/`write` — because
+/// there are zero in-framework consumers of that contract.
+///
+/// Only the *observable contract* is preserved: a keyed lookup of strings.
+/// `BTreeMap<u16, String>` provides that with ascending-key iteration (which
+/// the original's index scan assumed), and it derives serde trivially should
+/// persistence ever be revived (D12 scope note).
+///
+/// **Deviation on missing keys:** C++ `TStringList::get()` writes an
+/// empty-string sentinel (`*dest = EOS`) for a key that is not in the table.
+/// We return `Option<&str>` instead — idiomatic Rust.  This is intentional,
+/// not an oversight; callers that relied on the sentinel can pattern-match on
+/// `None` or use `.unwrap_or("")`.
+pub struct StringList {
+    map: BTreeMap<u16, String>,
+}
+
+impl StringList {
+    /// Create an empty `StringList`.
+    pub fn new() -> Self {
+        StringList {
+            map: BTreeMap::new(),
+        }
+    }
+
+    /// Insert or replace the string for `key`.
+    ///
+    /// Successor to `TStrListMaker::put`.  The maker/list split existed only
+    /// for the streaming asymmetry (write vs. read), which is gone under D12.
+    pub fn insert(&mut self, key: u16, value: impl Into<String>) {
+        self.map.insert(key, value.into());
+    }
+
+    /// Return the string for `key`, or `None` when absent.
+    ///
+    /// Successor to `TStringList::get`.
+    /// **Deviation:** C++ writes `*dest = EOS` for a missing key; we return
+    /// `None` (idiomatic Rust — see type-level doc).
+    pub fn get(&self, key: u16) -> Option<&str> {
+        self.map.get(&key).map(String::as_str)
+    }
+
+    /// Number of entries in this `StringList`.
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    /// `true` when the `StringList` contains no entries.
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+}
+
+impl Default for StringList {
+    fn default() -> Self {
+        StringList::new()
+    }
+}
+
+impl<S: Into<String>> FromIterator<(u16, S)> for StringList {
+    fn from_iter<I: IntoIterator<Item = (u16, S)>>(iter: I) -> Self {
+        let mut list = StringList::new();
+        for (key, value) in iter {
+            list.insert(key, value);
+        }
+        list
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,5 +517,85 @@ mod tests {
         assert!(cells[0].style().modifiers.bold);
         assert!(cells[1].style().modifiers.bold); // trail too
         assert!(cells[2].style().modifiers.bold);
+    }
+
+    // --- StringList tests ---
+
+    #[test]
+    fn string_list_insert_and_get_round_trip() {
+        let mut sl = StringList::new();
+        sl.insert(10, "hello");
+        sl.insert(20, "world");
+        assert_eq!(sl.get(10), Some("hello"));
+        assert_eq!(sl.get(20), Some("world"));
+    }
+
+    #[test]
+    fn string_list_missing_key_returns_none() {
+        let sl = StringList::new();
+        assert_eq!(sl.get(42), None);
+    }
+
+    #[test]
+    fn string_list_overwrite_keeps_latest_value() {
+        let mut sl = StringList::new();
+        sl.insert(5, "first");
+        sl.insert(5, "second");
+        assert_eq!(sl.get(5), Some("second"));
+        assert_eq!(sl.len(), 1);
+    }
+
+    #[test]
+    fn string_list_ordered_iteration() {
+        let mut sl = StringList::new();
+        // Insert out of order.
+        sl.insert(30, "c");
+        sl.insert(10, "a");
+        sl.insert(20, "b");
+        // BTreeMap guarantees ascending key order.
+        let pairs: Vec<(&u16, &String)> = sl.map.iter().collect();
+        assert_eq!(*pairs[0].0, 10);
+        assert_eq!(*pairs[1].0, 20);
+        assert_eq!(*pairs[2].0, 30);
+    }
+
+    #[test]
+    fn string_list_len_and_is_empty() {
+        let mut sl = StringList::new();
+        assert!(sl.is_empty());
+        assert_eq!(sl.len(), 0);
+        sl.insert(1, "x");
+        assert!(!sl.is_empty());
+        assert_eq!(sl.len(), 1);
+        sl.insert(2, "y");
+        assert_eq!(sl.len(), 2);
+    }
+
+    #[test]
+    fn string_list_from_iterator() {
+        let entries: Vec<(u16, &str)> = vec![(1, "one"), (2, "two"), (3, "three")];
+        let sl: StringList = entries.into_iter().collect();
+        assert_eq!(sl.len(), 3);
+        assert_eq!(sl.get(1), Some("one"));
+        assert_eq!(sl.get(2), Some("two"));
+        assert_eq!(sl.get(3), Some("three"));
+        assert_eq!(sl.get(4), None);
+    }
+
+    #[test]
+    fn string_list_from_iterator_owned_strings() {
+        let entries: Vec<(u16, String)> = vec![
+            (100, "hundred".to_string()),
+            (200, "two hundred".to_string()),
+        ];
+        let sl: StringList = entries.into_iter().collect();
+        assert_eq!(sl.get(100), Some("hundred"));
+        assert_eq!(sl.get(200), Some("two hundred"));
+    }
+
+    #[test]
+    fn string_list_default_is_empty() {
+        let sl = StringList::default();
+        assert!(sl.is_empty());
     }
 }
