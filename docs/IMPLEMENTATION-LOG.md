@@ -5,6 +5,51 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — `TSortedListBox` (row 70) — type-to-search list, no collection
+
+Row 70 (`TSortedListBox`, `stddlg.cpp`). 773→781 lib tests (+8). **Row 70 ✅.**
+Begins the standard/file-dialog family (70–75). A `ListBox` with incremental
+type-to-search; the design interest is two C++ subtleties + the collection cut.
+
+- **`SortedListBox`** is a D2 embed-delegate over `ListBox`
+  (`#[delegate(to = inner)]`, overriding only `handle_event` + `cursor_request`).
+- **No generic `TSortedCollection`.** rstv already replaced `TCollection` with a
+  `Vec<String>` inside `ListBox`; so `SortedListBox::new_list` keeps that Vec
+  **case-insensitively sorted** and the search is a binary search (`partition_point`
+  by `ci_cmp`) over `0..range` via `get_text(i)`. Rows 72/74 (`TDirCollection`/
+  `TFileCollection`) will each hold their own typed sorted Vec with their own
+  comparator — there likely never is one generic collection. Breadcrumbed.
+- **Trap 1 — `curString` is the FOCUSED item's text, re-seeded every keystroke;
+  `search_pos` indexes into it** (NOT an accumulated typed buffer). The
+  state machine re-reads `get_text(focused)` each event, then the Backspace/'.'/char
+  branch mutates it. This is load-bearing for the `'.'` branch: pressing '.' does
+  `strchr` over the focused item's *full* text to jump to its extension separator.
+  Ported as a `Vec<char>` (UTF-8-safe; C++'s 256-byte `curString` cap dropped).
+- **Trap 2 — the sequence:** save `old_value = focused` → delegate to
+  `inner.handle_event` FIRST → reset `search_pos = -1` on focus-change OR a
+  `cmReleasedFocus` broadcast → THEN gate on `ev` still being `KeyDown`. The base
+  `ListBox` clears the keys it handles (Space/arrows/Page/Home/End), so only
+  passed-through keys (letters/'.'/Backspace) drive search, and arrow-nav cancels an
+  in-progress search by moving `focused`.
+- **Comparator coherence (deviation).** Sort, binary search, and the prefix-confirm
+  (`ci_prefix_eq`) are all case-insensitive so the search lands where the confirm
+  accepts. C++ leaves ordering to the injected collection's `compare`; this is a
+  deliberate rstv choice, documented.
+- **Spec-review blocker, caught + fixed (TDD):** the `'.'` branch must pass the
+  **full** focused-item text to `search` (only the *confirm* uses `search_pos+1`).
+  The first cut truncated the key for all branches, so on items sharing a basename
+  (`file.bak`/`file.txt`) pressing '.' wrongly jumped to the sibling. Fix: pass the
+  whole `cur` to `get_key` (the char/back branches already truncate `cur` in place,
+  mirroring C++'s in-place `curString[searchPos+1]=EOS`; the dot branch leaves it
+  full). The dot test was strengthened with a same-basename sibling and shown to
+  fail-then-pass.
+- **Deferrals (breadcrumbed):** `get_key` identity (C++ virtual; file/dir subclasses
+  override at row 75), `shift_state` stored-but-unused (C++ captures
+  `controlKeyState`), the `curString` cap, `TStreamable` (D12).
+- **Verification.** 781 lib tests green; `clippy --all-targets -D warnings` (forced)
+  + `fmt --check` clean. No snapshot (draws identically to `ListBox` — `draw`
+  delegates).
+
 ## Session — `TEditWindow` (row 69) — the editor window (assembly row)
 
 Row 69 (`TEditWindow`, `teditwnd.cpp`). 768→773 lib tests (+5). **Row 69 ✅.** A

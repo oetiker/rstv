@@ -15,7 +15,7 @@
 
 ## Current state
 
-- **HEAD `57d220a`+ (rows 67 `TMemo` + 68 `TFileEditor` + 69 `TEditWindow` land this session).** Build: **773 lib tests** green; `cargo clippy --workspace
+- **HEAD `c382205`+ (rows 67–70 land this session: `TMemo`/`TFileEditor`/`TEditWindow`/`TSortedListBox`).** Build: **781 lib tests** green; `cargo clippy --workspace
   --all-targets -- -D warnings` and `cargo fmt --all --check` clean (verify clippy
   with a forced re-lint — a cached run can mask a fresh warning).
 - **Cargo workspace** (`tvision` + `tvision-macros`) — use `--workspace` for
@@ -54,17 +54,26 @@
   wiring order; `ofTileable`; `size_limits` {24,6} with the mandatory `calc_bounds`
   skip; hidden aux children excluded from `reset_current` so the editor is current).
   **The `TEditor` family (66–69) is now complete** modulo the breadcrumbed
-  editor sub-features. The `#[delegate]` proc-macro is landed and adopted codebase-wide.
+  editor sub-features,
+  and **row 70 (`TSortedListBox`)** — a D2 embed-delegate `SortedListBox` over
+  `ListBox` with type-to-search incremental search over a case-insensitively-sorted
+  `Vec<String>` (no generic `TSortedCollection`; the `curString`-re-seed model +
+  delegate→reset→gate sequence ported faithfully). Begins the std/file-dialog family.
+  The `#[delegate]` proc-macro is landed and adopted codebase-wide.
 
 ## Next — lowest-numbered remaining work
 
-**Rows 67 `TMemo` + 68 `TFileEditor` + 69 `TEditWindow` are ✅ this session — the
-`TEditor` family (66–69) is complete.** The next porting row is **70
-`TSortedListBox`** (`stddlg.cpp` member code + `sfilelst.cpp` — a `TListBox` with
-incremental search, owning a `TSortedCollection`), which begins the **standard /
-file-dialog family** (70 `TSortedListBox`, then 71–75: `TDirEntry`/`TDirCollection`/
-`TSearchRec`/`TFileCollection`/`TDirListBox` — the `TFileDialog` support classes).
-`TFileDialog` itself, once it lands, **un-blocks** `FileEditor::saveAs` and thereby
+**Rows 67–70 are ✅ this session** (the `TEditor` family 66–69 is complete; row 70
+`TSortedListBox` begins the std/file-dialog family). The next porting row is **71
+`TDirEntry`** (`stddlg.h` inline — a tiny dir-display/path pair), then **72
+`TDirCollection`** (owns `TDirEntry`s), **73 `TSearchRec`** (file-metadata record),
+**74 `TFileCollection`** (owns `TSearchRec`s), **75 `TDirListBox`** (a
+`TSortedListBox` subclass over `TDirCollection`, with tree glyphs). These are the
+`TFileDialog` support classes. Row 75 is where `SortedListBox`'s `get_key`/`get_text`
+override hooks get exercised (it currently has identity `get_key` + the inner
+`ListBox`'s string `get_text` — a subclass needing a different sort-key vs display
+will need those made overridable; **breadcrumb to revisit at row 75**). Once
+`TFileDialog` itself lands, it **un-blocks** `FileEditor::saveAs` and thereby
 `EditWindow`'s dynamic-title (`cmUpdateTitle`) path.
 
 > **Highest-leverage seam to pick up (noted, not a redirect): the
@@ -111,9 +120,9 @@ relevant prerequisites land):
    `EditWindow::close`'s `isClipboard→hide` branch is breadcrumbed for it.
 5. `TStreamable` write/read/build (D12).
 
-Phase 5 then continues in PORT-ORDER with **69** (`TEditWindow`), then the
-std-dialog / file / color / outline families. `cmDosShell` is still deferred —
-needs a backend terminal-suspend seam + SIGTSTP.
+Phase 5 then continues in PORT-ORDER with **71–75** (the `TFileDialog` support
+classes), then `TFileDialog`/`TChDirDialog` and the color / outline families.
+`cmDosShell` is still deferred — needs a backend terminal-suspend seam + SIGTSTP.
 
 ## What this session left available / changed
 
