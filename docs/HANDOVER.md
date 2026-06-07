@@ -15,7 +15,7 @@
 
 ## Current state
 
-- **HEAD `b1c608c`+ (rows 67 `TMemo` + 68 `TFileEditor` land this session).** Build: **768 lib tests** green; `cargo clippy --workspace
+- **HEAD `57d220a`+ (rows 67 `TMemo` + 68 `TFileEditor` + 69 `TEditWindow` land this session).** Build: **773 lib tests** green; `cargo clippy --workspace
   --all-targets -- -D warnings` and `cargo fmt --all --check` clean (verify clippy
   with a forced re-lint — a cached run can mask a fresh warning).
 - **Cargo workspace** (`tvision` + `tvision-macros`) — use `--workspace` for
@@ -48,16 +48,24 @@
   `set_buf_size(&mut)` grow branch, `new_file_editor` ctor) — base/`Memo`
   fixed-buffer behavior provably unchanged; `load_file`/`save_file`/`save` over real
   `std::fs`, `handle_event` cmSave, `valid` cmValid (saveAs + error/confirm dialogs +
-  the modified-prompt forced-deferred on `TFileDialog`/async-modal-from-view).
-  The `#[delegate]` proc-macro is landed and adopted codebase-wide.
+  the modified-prompt forced-deferred on `TFileDialog`/async-modal-from-view),
+  and **row 69 (`TEditWindow`)** — a D2 embed-delegate `EditWindow` over `Window`
+  assembling hidden `ScrollBar`×2 + `Indicator` + a `FileEditor` (ViewId-at-insertion
+  wiring order; `ofTileable`; `size_limits` {24,6} with the mandatory `calc_bounds`
+  skip; hidden aux children excluded from `reset_current` so the editor is current).
+  **The `TEditor` family (66–69) is now complete** modulo the breadcrumbed
+  editor sub-features. The `#[delegate]` proc-macro is landed and adopted codebase-wide.
 
 ## Next — lowest-numbered remaining work
 
-**Rows 67 `TMemo` + 68 `TFileEditor` are ✅ this session.** The next porting row is
-**69 `TEditWindow`** (`teditwnd.cpp` — a `TWindow` owning a `FileEditor` (row 68) +
-two scrollbars + a `TIndicator`, wiring the editor's deferred row-66
-clipboard-editor branch and the find/replace dialogs). It builds on the editor
-family now in place; the standard window/scrollbar/indicator pieces all exist.
+**Rows 67 `TMemo` + 68 `TFileEditor` + 69 `TEditWindow` are ✅ this session — the
+`TEditor` family (66–69) is complete.** The next porting row is **70
+`TSortedListBox`** (`stddlg.cpp` member code + `sfilelst.cpp` — a `TListBox` with
+incremental search, owning a `TSortedCollection`), which begins the **standard /
+file-dialog family** (70 `TSortedListBox`, then 71–75: `TDirEntry`/`TDirCollection`/
+`TSearchRec`/`TFileCollection`/`TDirListBox` — the `TFileDialog` support classes).
+`TFileDialog` itself, once it lands, **un-blocks** `FileEditor::saveAs` and thereby
+`EditWindow`'s dynamic-title (`cmUpdateTitle`) path.
 
 > **Highest-leverage seam to pick up (noted, not a redirect): the
 > async-modal-from-a-view seam.** It is the shared unblocker for *three* pending
@@ -98,7 +106,9 @@ relevant prerequisites land):
    handler (precedent: `window.rs DragCapture`; also deferred for scrollbar, `TODO(row 31)`).
 3. **Right-click context menu** (`initContextMenu` + `popupMenu`).
 4. **Internal-clipboard `TEditor` branch** (`insertFrom` from a sibling editor) —
-   deferred to row 69 (`TEditWindow` wires the clipboard editor).
+   STILL deferred (row 69 `EditWindow` landed but does **not** wire a clipboard
+   editor; that needs a dedicated clipboard `EditWindow` + the `insertFrom` branch).
+   `EditWindow::close`'s `isClipboard→hide` branch is breadcrumbed for it.
 5. `TStreamable` write/read/build (D12).
 
 Phase 5 then continues in PORT-ORDER with **69** (`TEditWindow`), then the

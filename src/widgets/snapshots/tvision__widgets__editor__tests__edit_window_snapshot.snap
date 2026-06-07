@@ -1,0 +1,28 @@
+---
+source: src/widgets/editor.rs
+expression: screen.snapshot()
+---
+size: 30x8
+cursor: hidden
+text:
+|┌───────── Untitled ───1─────┐|
+|│                            │|
+|│                            │|
+|│                            │|
+|│                            │|
+|│                            │|
+|│                            │|
+|└────────────────────────────┘|
+attr:
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|abbbbbbbbbbbbbbbbbbbbbbbbbbbba|
+|abbbbbbbbbbbbbbbbbbbbbbbbbbbba|
+|abbbbbbbbbbbbbbbbbbbbbbbbbbbba|
+|abbbbbbbbbbbbbbbbbbbbbbbbbbbba|
+|abbbbbbbbbbbbbbbbbbbbbbbbbbbba|
+|abbbbbbbbbbbbbbbbbbbbbbbbbbbba|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(7) bg=BIOS(1)
+  b fg=BIOS(8) bg=BIOS(2)

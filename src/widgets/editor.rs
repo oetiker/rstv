@@ -56,6 +56,7 @@ use crate::theme::Role;
 use crate::view::{
     Context, DrawCtx, GrowMode, Options, Point, Rect, StateFlag, View, ViewId, ViewState,
 };
+use crate::widgets::{Indicator, ScrollBar};
 
 // ---------------------------------------------------------------------------
 // module-private flag constants (kept off Command — these are bit words)
@@ -2201,6 +2202,119 @@ impl View for FileEditor {
 }
 
 // ---------------------------------------------------------------------------
+// EditWindow — TEditWindow (teditwnd.cpp), row 69
+// ---------------------------------------------------------------------------
+
+/// `TEditWindow` (`teditwnd.cpp`) — a [`Window`] hosting a [`FileEditor`] with two
+/// scrollbars and an [`Indicator`]. D2 embed-delegate over [`Window`]; the
+/// constructor wires the editor to the (initially hidden) scrollbars/indicator by
+/// id, mirroring the C++ ctor.
+///
+/// Deferrals (breadcrumbed):
+/// * Dynamic `getTitle` refresh on save — the C++ `cmUpdateTitle` broadcast is
+///   fired only by `FileEditor::saveAs`, which needs `TFileDialog` (deferred).
+///   The title is derived once at construction; the refresh path lands with
+///   saveAs. No `handle_event` override and no `cmUpdateTitle` handler now.
+/// * `close()` clipboard branch (`isClipboard()→hide()`) — the internal-clipboard
+///   editor (row-66 deferral) is not wired, so close is always the base
+///   `TWindow::close` (cmClose → request_close). `close()` is not a View method.
+/// * The editor's own deferred sub-features (find/replace dialogs, drag-select,
+///   context menu, internal-clipboard branch) belong to the editor row, not here.
+pub struct EditWindow {
+    /// The embedded window (frame + children).
+    pub window: crate::window::Window,
+    /// The inserted [`FileEditor`]'s id (for reachability / tests).
+    pub editor_id: ViewId,
+    /// The (initially hidden) horizontal scrollbar — C++ `hScrollBar` member.
+    pub h_scroll_bar_id: ViewId,
+    /// The (initially hidden) vertical scrollbar — C++ `vScrollBar` member.
+    pub v_scroll_bar_id: ViewId,
+    /// The (initially hidden) indicator — C++ `indicator` member.
+    pub indicator_id: ViewId,
+}
+
+impl EditWindow {
+    /// `TEditWindow::TEditWindow(bounds, fileName, aNumber)`.
+    ///
+    /// Faithful to the C++ ctor: inserts the (hidden) scrollbars and indicator
+    /// FIRST to obtain their [`ViewId`]s, then constructs [`FileEditor`] wired to
+    /// those ids, then inserts the editor. Title: filename / "Untitled" (the
+    /// clipboard title is deferred with the clipboard editor).
+    pub fn new(bounds: Rect, file_name: Option<std::path::PathBuf>, number: i16) -> Self {
+        // Title: filename or "Untitled" (isClipboard branch deferred).
+        let title = match &file_name {
+            Some(p) => p.to_string_lossy().into_owned(),
+            None => "Untitled".to_string(),
+        };
+        let mut window = crate::window::Window::new(bounds, Some(title), number);
+
+        // options |= ofTileable (faithful to C++).
+        View::state_mut(&mut window).options.tileable = true;
+
+        let size = View::state(&window).size;
+
+        // Horizontal scrollbar — hidden, row-bottom, columns 18..size.x-2.
+        let mut h = ScrollBar::new(Rect::new(18, size.y - 1, size.x - 2, size.y));
+        h.state.hide();
+        let h_scroll_bar_id = window.insert_child(Box::new(h));
+
+        // Vertical scrollbar — hidden, right column, rows 1..size.y-1.
+        let mut v = ScrollBar::new(Rect::new(size.x - 1, 1, size.x, size.y - 1));
+        v.state.hide();
+        let v_scroll_bar_id = window.insert_child(Box::new(v));
+
+        // Indicator — hidden, row-bottom, columns 2..16.
+        let mut ind = Indicator::new(Rect::new(2, size.y - 1, 16, size.y));
+        ind.state.hide();
+        let indicator_id = window.insert_child(Box::new(ind));
+
+        // FileEditor over the inner extent, wired to the three ids.
+        let mut r = View::state(&window).get_extent();
+        r.grow(-1, -1);
+        let editor = FileEditor::new(
+            r,
+            Some(h_scroll_bar_id),
+            Some(v_scroll_bar_id),
+            Some(indicator_id),
+            file_name,
+        );
+        let editor_id = window.insert_child(Box::new(editor));
+
+        EditWindow {
+            window,
+            editor_id,
+            h_scroll_bar_id,
+            v_scroll_bar_id,
+            indicator_id,
+        }
+    }
+}
+
+#[crate::delegate(
+    to = window,
+    skip(
+        apply_list_scroll,
+        as_any_mut,
+        calc_bounds,
+        grabs_focus_on_click,
+        select_window_num,
+        set_value,
+        size_limits,
+        value
+    )
+)]
+impl View for EditWindow {
+    /// `TEditWindow::sizeLimits` — minimum window size is {24, 6}
+    /// (`minEditWinSize`). `calc_bounds` is in the skip list so an
+    /// owner-driven resize routes through this override (via the trait default
+    /// of `calc_bounds`) instead of the Window's 16×6 floor.
+    fn size_limits(&self, owner_size: Point) -> (Point, Point) {
+        let (_min, max) = View::size_limits(&self.window, owner_size);
+        (Point::new(24, 6), max)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests — the real oracle is logical buffer state (not just snapshots).
 // ---------------------------------------------------------------------------
 #[cfg(test)]
@@ -3226,5 +3340,99 @@ mod tests {
             fe.valid(Command::CLOSE),
             "non-cmValid defers to allow-close"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // EditWindow tests (row 69)
+    // -----------------------------------------------------------------------
+
+    /// 1a. Title is the filename stem when a path is given.
+    #[test]
+    fn edit_window_title_from_path() {
+        let ew = EditWindow::new(
+            Rect::new(0, 0, 40, 15),
+            Some(std::path::PathBuf::from("/tmp/foo.txt")),
+            1,
+        );
+        let t = ew.window.title().unwrap_or("");
+        assert!(
+            t.contains("foo.txt"),
+            "title should contain the filename; got {t:?}"
+        );
+    }
+
+    /// 1b. Title is "Untitled" when no path is given.
+    #[test]
+    fn edit_window_title_untitled() {
+        let ew = EditWindow::new(Rect::new(0, 0, 40, 15), None, 0);
+        assert_eq!(
+            ew.window.title(),
+            Some("Untitled"),
+            "untitled edit window title"
+        );
+    }
+
+    /// 2. size_limits returns (24,6) as the minimum.
+    #[test]
+    fn edit_window_size_limits_min() {
+        let ew = EditWindow::new(Rect::new(0, 0, 40, 15), None, 0);
+        let (min, _max) = View::size_limits(&ew, Point::new(80, 25));
+        assert_eq!(min, Point::new(24, 6), "minEditWinSize = {{24, 6}}");
+    }
+
+    /// 3. Construction invariants: editor child is visible+selectable; the
+    ///    scrollbars/indicator start hidden (load-bearing — `reset_current`
+    ///    picks the first visible+selectable child, so a stray-visible scrollbar
+    ///    would steal currency from the editor); ofTileable is set.
+    #[test]
+    fn edit_window_child_visibility_invariant() {
+        let mut ew = EditWindow::new(Rect::new(0, 0, 40, 15), None, 0);
+        let editor_id = ew.editor_id;
+
+        // Editor child is visible and selectable.
+        {
+            let fe = ew.window.child_mut(editor_id).expect("editor child exists");
+            let st = fe.state();
+            assert!(st.state.visible, "editor child is visible");
+            assert!(
+                st.options.selectable,
+                "editor child is selectable (reset_current picks it)"
+            );
+        }
+
+        // The scrollbars and indicator start hidden.
+        for id in [ew.h_scroll_bar_id, ew.v_scroll_bar_id, ew.indicator_id] {
+            let v = ew.window.child_mut(id).expect("aux child exists");
+            assert!(
+                !v.state().state.visible,
+                "aux child {id:?} must start hidden"
+            );
+        }
+
+        // The tileable flag was set.
+        assert!(
+            View::state(&ew).options.tileable,
+            "ofTileable set on EditWindow"
+        );
+    }
+
+    /// 4. Snapshot: an untitled EditWindow renders as a framed window.
+    #[test]
+    fn edit_window_snapshot() {
+        use crate::backend::{HeadlessBackend, Renderer};
+        use crate::screen::Buffer;
+        use crate::theme::Theme;
+
+        let theme = Theme::classic_blue();
+        let ew = EditWindow::new(Rect::new(0, 0, 30, 8), None, 1);
+        let mut view: Box<dyn View> = Box::new(ew);
+        let (backend, screen) = HeadlessBackend::new(30, 8);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = view.state().get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            view.draw(&mut dc);
+        });
+        insta::assert_snapshot!(screen.snapshot());
     }
 }

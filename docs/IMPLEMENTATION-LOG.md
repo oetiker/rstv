@@ -5,6 +5,53 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — `TEditWindow` (row 69) — the editor window (assembly row)
+
+Row 69 (`TEditWindow`, `teditwnd.cpp`). 768→773 lib tests (+5). **Row 69 ✅.** A
+pure **integration** row — it assembles already-ported pieces (`Window`,
+`ScrollBar`, `Indicator`, `FileEditor`) into a window; no shared-type surgery. The
+only subtleties are rstv-model mechanics, not C++ behavior.
+
+- **`EditWindow`** is a D2 embed-delegate over `Window` (like `Dialog`), holding the
+  window + the four child ids (`editor_id` + the three aux ids, mirroring C++
+  `TEditWindow`'s public `hScrollBar`/`vScrollBar`/`indicator` members).
+- **ViewId-at-insertion drove the wiring order.** rstv assigns a view's `ViewId` at
+  **insertion**, not construction (`Group::insert` stamps it). The C++ ctor wires the
+  editor to the scrollbars/indicator by pointer; here we must **insert the three
+  (hidden) aux views first to obtain their ids**, then construct
+  `FileEditor::new(r, Some(h), Some(v), Some(ind), file)` with those ids and insert
+  it. Child bounds, `ofTileable`, and the inner extent (`get_extent().grow(-1,-1)`)
+  are verbatim from C++.
+- **Hidden aux children are load-bearing twice.** `state.hide()` on the two
+  scrollbars + indicator before insert is (a) faithful to C++ `hide()`, and (b) the
+  reason the **editor** becomes the window's current view: `reset_current` selects
+  the first *visible*-and-selectable child, so the hidden bars are skipped and the
+  visible+selectable `FileEditor` wins — and `Editor::set_state(Active)` (row 66)
+  then shows the bars/indicator when the window activates. A regression assertion
+  pins all three aux children hidden (a visible-but-empty bar would pass the
+  snapshot yet silently steal currency).
+- **Manual `ScrollBar::new` (not `Window::standard_scroll_bar`).** `ScrollBar::new`
+  already sets the exact C++ `TScrollBar` growMode and `selectable`; C++ `TEditWindow`
+  builds bare bars (no `ofPostProcess`), so manual construct + `state.hide()` +
+  `insert_child` is the faithful path (`standard_scroll_bar` would add keyboard
+  postprocess the edit-window bars don't have).
+- **`size_limits` min {24,6} + the `calc_bounds` skip.** Overriding `size_limits`
+  is not enough: `calc_bounds` must also be in the delegate `skip(...)` (exactly as
+  `Window` does for its own 16×6) so an owner-driven resize routes through the
+  virtual `size_limits` minimum instead of the group's 0×0 floor — a silent-failure
+  trap the spec review specifically checked.
+- **Forced deferrals (breadcrumbed).** The dynamic `getTitle`/`cmUpdateTitle`
+  frame-refresh (C++ `getTitle` is a virtual the frame calls each draw; rstv stores
+  the title string at construction) is deferred because its only trigger,
+  `FileEditor::saveAs`, is itself deferred on `TFileDialog` — so the title is derived
+  once at construction (`file_name` / "Untitled"), with **no** `handle_event`
+  override yet. `close()`'s `isClipboard→hide` branch is breadcrumbed (no rstv
+  `close()` View method; the internal-clipboard editor is unported). `TStreamable`
+  dropped (D12).
+- **Verification.** 773 lib tests green; `clippy --all-targets -D warnings` (forced
+  re-lint) + `fmt --check` clean. One snapshot of the assembled framed "Untitled"
+  window (clean frame glyphs confirm the three aux children render hidden).
+
 ## Session — `TFileEditor` (row 68) — file-backed editor + growable-buffer seam
 
 Row 68 (`TFileEditor`, `tfiledtr.cpp`). 758→768 lib tests (+10). **Row 68 ✅
