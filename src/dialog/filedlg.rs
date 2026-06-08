@@ -1067,11 +1067,17 @@ impl FileInputLine {
         // drawView() dropped (D8 — whole-tree redraw + diff).
     }
 
-    /// Update the cached owner `wildCard` (row 79 drives this via a deferred push
-    /// when the dialog re-reads the directory with a new mask).
-    // TODO(row 79): driven by the dialog's wildCard-change push.
+    /// Update the cached owner `wildCard` ([`FileDialog::valid`]'s isWild branch
+    /// drives this when the dialog re-reads the directory with a new mask, so the
+    /// next dir-focus appends the fresh mask rather than the stale one).
     pub fn set_wild_card(&mut self, w: impl Into<String>) {
         self.wild_card = w.into();
+    }
+
+    /// The current field text (the C++ `fileName->data`) — the filename the
+    /// dialog resolves in [`FileDialog::get_file_name`].
+    pub fn text(&self) -> &str {
+        &self.inner.data
     }
 }
 
@@ -1258,9 +1264,9 @@ impl FileInfoPane {
         self.file_block = rec;
     }
 
-    /// Update the cached owner `directory` / `wildCard` (row 79 drives this via a
-    /// deferred push when the dialog re-reads the directory with a new mask).
-    // TODO(row 79): driven by the dialog's directory/wildCard-change push.
+    /// Update the cached owner `directory` / `wildCard` ([`FileDialog`]'s
+    /// `reset_current` and [`FileDialog::valid`]'s navigate branches drive this
+    /// when the dialog (re-)reads the directory).
     pub fn set_dir_info(&mut self, directory: impl Into<String>, wild_card: impl Into<String>) {
         self.directory = directory.into();
         self.wild_card = wild_card.into();
@@ -1385,6 +1391,152 @@ fn cstrlen(s: &str) -> i32 {
 
 /// `MAXPATH` — the filename field's byte cap (DOS `MAXPATH`; rstv uses 255).
 const MAXPATH: i32 = 255;
+
+// ---------------------------------------------------------------------------
+// Path helpers (D14 — native `/` paths). Pure, FS-independent unless noted.
+// ---------------------------------------------------------------------------
+
+/// `fexpand(buf, directory)` (D14) — resolve `input` against `dir`, lexically.
+///
+/// If `input` is absolute (starts with `/`) it stands alone; otherwise it is
+/// joined onto `dir`. The result is then **lexically normalized** — `.` is
+/// dropped, `..` pops the previous component, and `//` collapses — by walking
+/// [`Path::components`]. This is **not** [`std::fs::canonicalize`]: it does no
+/// FS access and does not resolve symlinks (faithful `fexpand` is purely
+/// textual). A trailing `/` on the input is preserved in the returned string so
+/// the bare-directory test ([`split_dir_file`] / [`FileDialog::get_file_name`])
+/// can detect a directory-only path.
+///
+/// An **empty `dir`** with a relative `input` yields a *relative* path (the join
+/// is just `input`). That is only reachable before a caller sets `directory`
+/// (e.g. under `FD_NO_LOAD_DIR`, where `reset_current`'s initial read is
+/// skipped) — matching C++'s empty initial `directory`.
+fn expand_path(dir: &str, input: &str) -> String {
+    use std::path::{Component, Path, PathBuf};
+
+    let joined: PathBuf = if Path::new(input).is_absolute() {
+        PathBuf::from(input)
+    } else {
+        Path::new(dir).join(input)
+    };
+
+    let mut out = PathBuf::new();
+    for comp in joined.components() {
+        match comp {
+            Component::Prefix(_) => {} // no Windows prefixes under D14
+            Component::RootDir => out.push("/"),
+            Component::CurDir => {} // "." — drop
+            Component::ParentDir => {
+                // Pop the previous Normal component. At/above an absolute root,
+                // `..` is absorbed (a `/..`-walk stays at `/`), matching fexpand.
+                match out.components().next_back() {
+                    Some(Component::Normal(_)) => {
+                        out.pop();
+                    }
+                    Some(Component::RootDir) => {} // `/..` → `/`
+                    _ => out.push(".."),           // relative leading `..`
+                }
+            }
+            Component::Normal(seg) => out.push(seg),
+        }
+    }
+
+    let mut s = out.to_string_lossy().into_owned();
+    if s.is_empty() {
+        s.push('/');
+    }
+    // Preserve a trailing slash from the input (a directory-only path) so the
+    // wildcard-append in get_file_name fires. `components()` strips it.
+    if (input.ends_with('/') || input.is_empty()) && !s.ends_with('/') {
+        s.push('/');
+    }
+    s
+}
+
+/// `isWild(s)` — `s` contains a `*` or `?` glob metacharacter.
+fn is_wild(s: &str) -> bool {
+    s.contains('*') || s.contains('?')
+}
+
+/// Whether `path` is **directory-only** — has no filename part (the C++ `name`
+/// AND `ext` both empty). True when `path` ends with `/`, is `/`, is empty, or
+/// its final component is `.`/`..`.
+///
+/// NOTE: [`Path::file_name`] alone is **wrong** here — it strips a trailing
+/// slash, so `Path::new("/a/b/").file_name()` is `Some("b")`. We test the
+/// trailing slash explicitly first.
+fn is_dir_only(path: &str) -> bool {
+    use std::path::{Component, Path};
+    if path.is_empty() || path.ends_with('/') {
+        return true;
+    }
+    matches!(
+        Path::new(path).components().next_back(),
+        Some(Component::RootDir | Component::CurDir | Component::ParentDir) | None
+    )
+}
+
+/// `fnsplit` (the dir-vs-file split, D14) — split an absolute, normalized path
+/// into its directory part (with a trailing `/`) and its filename part.
+///
+/// A path that ends with `/` (or whose final component is `.`/`..`) has an empty
+/// filename — equivalently [`Path::file_name`] is `None`. The dir part always
+/// ends with `/` so it satisfies [`FileList::read_directory`]'s precondition.
+fn split_dir_file(path: &str) -> (String, String) {
+    use std::path::Path;
+    if is_dir_only(path) {
+        // Directory-only path — the whole thing is the dir, empty file.
+        let mut d = path.to_string();
+        if !d.ends_with('/') {
+            d.push('/');
+        }
+        return (d, String::new());
+    }
+    let p = Path::new(path);
+    let file = p
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let dir = match p.parent() {
+        Some(par) => {
+            let mut d = par.to_string_lossy().into_owned();
+            if !d.ends_with('/') {
+                d.push('/');
+            }
+            d
+        }
+        None => "/".to_string(),
+    };
+    (dir, file)
+}
+
+/// `isDir(s)` — `s` names an existing directory (stat-follows-symlinks, like the
+/// C++ `stat`). FS-dependent.
+fn is_dir(s: &str) -> bool {
+    std::fs::metadata(s).map(|m| m.is_dir()).unwrap_or(false)
+}
+
+/// `pathValid(str)` — the directory `str` exists and is a directory. FS-dependent.
+/// (D14 simplification of the C++ `pathValid`, which validated DOS drive letters.)
+fn path_valid(s: &str) -> bool {
+    std::fs::metadata(s).map(|m| m.is_dir()).unwrap_or(false)
+}
+
+/// `validFileName(s)` (D14 simplification) — `s` has a non-empty filename
+/// component and no interior NUL. The C++ `validFileName` enforced DOS 8.3 /
+/// charset rules we do not need on Linux; a non-empty name with a real parent is
+/// plausible enough, and the OS rejects a truly invalid name at open time.
+fn valid_file_name(s: &str) -> bool {
+    if s.is_empty() || s.contains('\0') {
+        return false;
+    }
+    // A directory-only path (trailing `/`, or final `.`/`..`) has no filename.
+    !is_dir_only(s)
+}
+
+// Validation message text (tfildlg.cpp).
+const INVALID_DRIVE_TEXT: &str = "Invalid drive or directory";
+const INVALID_FILE_TEXT: &str = "Invalid file name";
 
 /// `fdOKButton` — insert an "OK" button (`cmFileOpen`).
 pub const FD_OK_BUTTON: u16 = 0x0001;
@@ -1518,10 +1670,8 @@ fn button_specs(options: u16) -> Vec<(&'static str, crate::command::Command, boo
 /// `getCurDir`), normalized to end with `/` (the [`FileList::read_directory`]
 /// trailing-slash precondition). No drive letters, no `\`.
 ///
-/// ## Deferrals (the B1 skeleton — B2 follows)
+/// ## Deferrals
 ///
-/// - `getFileName`/`valid`/`checkDirectory` path-validation + their messageBoxes
-///   — `TODO(row 79 B2)`.
 /// - The "21st-century percentages" screen-relative resize block in the ctor —
 ///   `TODO(row 79 B2)`; the dialog keeps its base 49×19 size.
 /// - `wfGrow` — `TODO(row 79 B2)`; `WindowFlags` is private behind `Dialog` and
@@ -1535,11 +1685,9 @@ pub struct FileDialog {
     /// `directory` — set by `reset_current`'s initial `readDirectory` (D14,
     /// `/`-terminated).
     directory: String,
-    /// The [`FileInputLine`] child's id.
-    // TODO(row 79 B2): read by getFileName/valid (the filename the dialog
-    // returns); stored now (links the label + history at ctor time), unread
-    // until B2 lands the path-validation + result-gathering.
-    #[allow(dead_code)]
+    /// The [`FileInputLine`] child's id — read by
+    /// [`get_file_name`](FileDialog::get_file_name)/[`valid`](FileDialog::valid)
+    /// (the filename the dialog returns).
     file_name_id: crate::view::ViewId,
     /// The [`FileList`] child's id.
     file_list_id: crate::view::ViewId,
@@ -1547,6 +1695,14 @@ pub struct FileDialog {
     info_pane_id: crate::view::ViewId,
     /// One-time guard for the `reset_current` initial `readDirectory`.
     needs_read_directory: bool,
+    /// Cache of the last [`get_file_name`](FileDialog::get_file_name) result, so
+    /// the `&self` [`value`](FileDialog::value) (D10 `getData`) can return the
+    /// resolved filename. `get_file_name` needs `&mut self` (it reads the input
+    /// line via `child_mut`), and an immutable `child` accessor would live
+    /// outside this module — so `valid()` (the gate the modal gather runs right
+    /// before reading `value()`) refreshes this cache. Invariant: the cache is
+    /// current after any `valid()` call.
+    resolved_name: String,
 }
 
 impl FileDialog {
@@ -1683,6 +1839,107 @@ impl FileDialog {
             file_list_id,
             info_pane_id,
             needs_read_directory: options & FD_NO_LOAD_DIR == 0,
+            resolved_name: String::new(),
+        }
+    }
+
+    /// `TFileDialog::getFileName` — resolve the input-line text into an absolute,
+    /// normalized filename relative to `directory`.
+    ///
+    /// Faithful: `trim` (a no-op under `__FLAT__`) → `fexpand(buf, directory)` →
+    /// `fnsplit`; when the resolved path is a **bare directory** (no filename
+    /// part) the wildcard's filename is appended. Under D14 the wildcard *is* its
+    /// own filename (no drive/ext split), so we append `self.wild_card` directly.
+    ///
+    /// `&mut self` (not `&self`): it reads the [`FileInputLine`] via `child_mut`.
+    /// It is only called from [`valid`](FileDialog::valid) (which has `&mut self`)
+    /// and refreshes [`resolved_name`](FileDialog::resolved_name) so the `&self`
+    /// [`value`](FileDialog::value) can return the result without `child_mut`.
+    pub fn get_file_name(&mut self) -> String {
+        let field_text = self
+            .dialog
+            .child_mut(self.file_name_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<FileInputLine>())
+            .map(|fil| fil.text().to_string())
+            .unwrap_or_default();
+
+        let expanded = expand_path(&self.directory, &field_text);
+
+        // fnsplit name+ext-empty check → append the wildcard's filename when the
+        // resolved path is directory-only (see `is_dir_only` — `Path::file_name`
+        // alone is wrong, it strips a trailing slash).
+        let resolved = if is_dir_only(&expanded) {
+            let mut s = expanded;
+            if !s.ends_with('/') {
+                s.push('/');
+            }
+            s.push_str(&self.wild_card);
+            s
+        } else {
+            expanded
+        };
+
+        self.resolved_name = resolved.clone();
+        resolved
+    }
+
+    /// `TFileDialog::checkDirectory` — `pathValid(path)` ? true : (pop the
+    /// "invalid drive/dir" box + refocus the filename field + false).
+    ///
+    /// The box is informational (`mfError|mfOKButton`, no answer routing) via the
+    /// async-modal-from-a-view seam: `valid()` requests it and returns false;
+    /// `validate_modal_close` drives it inline and keeps the (false) valid.
+    fn check_directory(&mut self, path: &str, ctx: &mut crate::view::Context) -> bool {
+        if path_valid(path) {
+            true
+        } else {
+            ctx.request_message_box(
+                format!("{INVALID_DRIVE_TEXT}: '{path}'"),
+                crate::dialog::MessageBoxKind::Error,
+                crate::dialog::MessageBoxButtons::ok(),
+                None,
+                None,
+            );
+            ctx.request_focus(self.file_name_id);
+            false
+        }
+    }
+
+    /// Re-read `directory` into the [`FileList`] and refresh the info pane /
+    /// input-line caches — the navigation tail shared by the isWild and isDir
+    /// branches of [`valid`](FileDialog::valid). Direct child mutation (the dialog
+    /// owns the group), like `reset_current`.
+    fn navigate(&mut self, ctx: &mut crate::view::Context) {
+        let dir = self.directory.clone();
+        let wild = self.wild_card.clone();
+        if let Some(fl) = self
+            .dialog
+            .child_mut(self.file_list_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<FileList>())
+        {
+            fl.read_directory(&dir, &wild, ctx);
+        }
+        if let Some(fip) = self
+            .dialog
+            .child_mut(self.info_pane_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<FileInfoPane>())
+        {
+            fip.set_dir_info(&dir, &wild);
+        }
+        // Refresh the input line's cached wildCard (the C++ reads owner->wildCard
+        // live on each dir-focus; without this the next dir-focus would append
+        // the stale mask). The isDir branch leaves wild_card unchanged, so this is
+        // a no-op there.
+        if let Some(fil) = self
+            .dialog
+            .child_mut(self.file_name_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<FileInputLine>())
+        {
+            fil.set_wild_card(&wild);
         }
     }
 }
@@ -1716,8 +1973,10 @@ impl crate::view::View for FileDialog {
         self.dialog.handle_event(ev, ctx);
 
         match *ev {
-            // TODO(row 79 B2): valid() path-check before accepting; for now end
-            // the modal directly with the result command.
+            // The path-check gate is `valid()`, NOT a manual call here: the modal
+            // loop runs `validate_modal_close → valid(endState)` on this
+            // `end_modal`, so implementing `valid()` *is* the gate. A manual
+            // pre-check would double-validate.
             Event::Command(c)
                 if matches!(
                     c,
@@ -1803,6 +2062,125 @@ impl crate::view::View for FileDialog {
     /// so `as_any_mut` returns `self`, NOT the inner `Dialog`.
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         Some(self)
+    }
+
+    /// `TFileDialog::valid` — the navigate/accept gate, ported faithfully.
+    ///
+    /// The nested structure mirrors the C++:
+    /// - `cmValid` (rstv `Command::VALID`, the C++ `command == 0`) → `true`
+    ///   immediately, *before* the base call.
+    /// - else run the base `TDialog::valid` (group children) first; on its `false`
+    ///   → `false` (keep open).
+    /// - on base-valid, for the accept commands (NOT `cmCancel`/`cmFileClear`):
+    ///   resolve the filename, then
+    ///   - **isWild** → NAVIGATE: split into dir+wildcard, `checkDirectory`, on
+    ///     success set `directory`/`wild_card` + re-read; always fall through to
+    ///     `false` (keep open).
+    ///   - **isDir** → NAVIGATE into it: `checkDirectory`, on success append `/`,
+    ///     set `directory`, re-read; `false`.
+    ///   - **validFileName** → ACCEPT (`true`).
+    ///   - else → "invalid file name" box + `false`.
+    /// - `cmCancel`/`cmFileClear` → `true` (always valid, *after* the base call —
+    ///   `cmFileClear` must still pass the group).
+    ///
+    /// Refreshes [`resolved_name`](FileDialog::resolved_name) via `get_file_name`
+    /// for every non-VALID command (faithful to C++ `getData`'s unconditional
+    /// `getFileName`), so the `&self` `value()` is current after any such call —
+    /// including the cmCancel/cmFileClear path that returns before the branches.
+    fn valid(&mut self, cmd: crate::command::Command, ctx: &mut crate::view::Context) -> bool {
+        use crate::command::Command;
+
+        // cmValid → True immediately (the C++ `command == 0`), before the base.
+        if cmd == Command::VALID {
+            return true;
+        }
+
+        // TDialog::valid (group children) first.
+        if !self.dialog.valid(cmd, ctx) {
+            return false;
+        }
+
+        // Resolve the filename UNCONDITIONALLY (faithful to C++ `getData`, which
+        // calls `getFileName` for every command). Its side effect — refreshing
+        // `self.resolved_name` — is what keeps the `&self` `value()` current even
+        // on the cmCancel/cmFileClear path that returns before the navigate/accept
+        // branches. Harmless for those commands (it only reads the field + caches).
+        let f_name = self.get_file_name();
+
+        // cmCancel / cmFileClear are always valid (after the base group-valid).
+        if cmd == Command::CANCEL || cmd == Command::FILE_CLEAR {
+            return true;
+        }
+
+        if is_wild(&f_name) {
+            // NAVIGATE: change the wildcard + directory, re-read. Falls through
+            // to `false` (keep the dialog open) regardless of checkDirectory.
+            let (dir, file) = split_dir_file(&f_name);
+            if self.check_directory(&dir, ctx) {
+                self.directory = dir;
+                self.wild_card = file;
+                if cmd != Command::FILE_INIT {
+                    ctx.request_focus(self.file_list_id);
+                }
+                self.navigate(ctx);
+            }
+            false
+        } else if is_dir(&f_name) {
+            // NAVIGATE into an existing directory.
+            if self.check_directory(&f_name, ctx) {
+                let mut dir = f_name;
+                if !dir.ends_with('/') {
+                    dir.push('/'); // D14: append '/' (the C++ '\\')
+                }
+                self.directory = dir;
+                if cmd != Command::FILE_INIT {
+                    ctx.request_focus(self.file_list_id);
+                }
+                self.navigate(ctx);
+            }
+            false
+        } else if valid_file_name(&f_name) {
+            // ACCEPT — a real filename.
+            true
+        } else {
+            ctx.request_message_box(
+                format!("{INVALID_FILE_TEXT}: '{f_name}'"),
+                crate::dialog::MessageBoxKind::Error,
+                crate::dialog::MessageBoxButtons::ok(),
+                None,
+                None,
+            );
+            false
+        }
+    }
+
+    /// `TFileDialog::getData` → `getFileName` (D10): the resolved filename. Reads
+    /// the [`resolved_name`](FileDialog::resolved_name) cache, which any non-VALID
+    /// `valid()` call refreshes unconditionally (it runs `get_file_name` before
+    /// any early-return), so the cache is current after the modal gather's
+    /// `valid(endState)` — including the cmCancel/cmFileClear paths.
+    fn value(&self) -> Option<crate::data::FieldValue> {
+        Some(crate::data::FieldValue::Text(self.resolved_name.clone()))
+    }
+
+    /// `TFileDialog::setData` (D10) — load the field text from a `FieldValue::Text`.
+    ///
+    /// The C++ `setData` also runs `valid(cmFileInit)` when the input is wild (to
+    /// navigate into the new mask on open) and then `fileName->select()`. Neither
+    /// is done here: `set_value` has **no `&mut Context`**, so it cannot drive the
+    /// navigate (which needs `read_directory(…, ctx)`) nor request focus.
+    /// BREADCRUMB(row 79): the on-wild navigate-on-load + select are deferred until
+    /// a ctx-bearing setData seam exists (no current consumer needs them — the
+    /// dialog opens with the ctor's wildcard and `reset_current` does the initial
+    /// read).
+    fn set_value(&mut self, v: crate::data::FieldValue) {
+        // Forward to the FileInputLine, whose View::set_value delegates (D2) to
+        // the embedded InputLine::set_value — the faithful `TInputLine::setData`
+        // (copy text + `selectAll(True)`). We resolve by id rather than
+        // downcasting to a concrete type so the delegation runs.
+        if let Some(fil) = self.dialog.child_mut(self.file_name_id) {
+            crate::view::View::set_value(fil, v);
+        }
     }
 }
 
@@ -3406,5 +3784,381 @@ mod tests {
             view.draw(&mut dc);
         });
         insta::assert_snapshot!(screen.snapshot());
+    }
+
+    // =========================================================================
+    // FileDialog — row 79 B2: path logic + valid + messageBoxes
+    // =========================================================================
+
+    // -- 6a. pure path helpers -------------------------------------------------
+
+    #[test]
+    fn expand_path_absolute_passthrough() {
+        // Absolute input ignores `dir`.
+        assert_eq!(expand_path("/home/oetiker/", "/etc/hosts"), "/etc/hosts");
+        assert_eq!(expand_path("/some/where/", "/"), "/");
+    }
+
+    #[test]
+    fn expand_path_relative_joins_dir() {
+        assert_eq!(
+            expand_path("/home/oetiker/", "foo.txt"),
+            "/home/oetiker/foo.txt"
+        );
+        assert_eq!(
+            expand_path("/home/oetiker/", "sub/bar"),
+            "/home/oetiker/sub/bar"
+        );
+    }
+
+    #[test]
+    fn expand_path_dotdot_and_dot_normalize() {
+        // `..` pops a component; `.` is dropped.
+        assert_eq!(expand_path("/home/oetiker/", "../foo"), "/home/foo");
+        assert_eq!(expand_path("/home/oetiker/", "./bar"), "/home/oetiker/bar");
+        assert_eq!(expand_path("/a/b/c/", "../../x"), "/a/x");
+        // `..` past the root stays at the root (never pops the RootDir).
+        assert_eq!(expand_path("/", "../../etc"), "/etc");
+    }
+
+    #[test]
+    fn expand_path_collapses_double_slash() {
+        // `//` collapses (components() ignores empty segments).
+        assert_eq!(expand_path("/home//oetiker/", "x"), "/home/oetiker/x");
+        assert_eq!(expand_path("/home/oetiker/", "a//b"), "/home/oetiker/a/b");
+    }
+
+    #[test]
+    fn expand_path_preserves_trailing_slash_for_bare_dir() {
+        // A trailing slash (directory-only input) is preserved so get_file_name
+        // can detect the bare-dir case.
+        assert_eq!(expand_path("/home/oetiker/", "sub/"), "/home/oetiker/sub/");
+        // An empty field resolves to the directory itself (trailing slash).
+        assert_eq!(expand_path("/home/oetiker/", ""), "/home/oetiker/");
+    }
+
+    #[test]
+    fn is_wild_detects_glob() {
+        assert!(is_wild("*.txt"));
+        assert!(is_wild("foo?.rs"));
+        assert!(!is_wild("plain.txt"));
+        assert!(!is_wild("/a/b/c"));
+    }
+
+    #[test]
+    fn split_dir_file_splits() {
+        assert_eq!(
+            split_dir_file("/home/oetiker/foo.txt"),
+            ("/home/oetiker/".to_string(), "foo.txt".to_string())
+        );
+        // Wildcard pattern: dir + the `*.txt` "filename".
+        assert_eq!(
+            split_dir_file("/home/oetiker/*.txt"),
+            ("/home/oetiker/".to_string(), "*.txt".to_string())
+        );
+        // Bare directory (trailing slash) → empty file part.
+        assert_eq!(
+            split_dir_file("/home/oetiker/"),
+            ("/home/oetiker/".to_string(), String::new())
+        );
+        // Root.
+        assert_eq!(split_dir_file("/"), ("/".to_string(), String::new()));
+    }
+
+    #[test]
+    fn valid_file_name_basic() {
+        assert!(valid_file_name("/home/oetiker/foo.txt"));
+        assert!(valid_file_name("foo.txt"));
+        assert!(!valid_file_name(""));
+        assert!(!valid_file_name("/home/oetiker/")); // bare dir → no filename
+        assert!(!valid_file_name("a\0b")); // interior NUL
+    }
+
+    // -- 6b. get_file_name: wildcard-append on a bare-dir field ----------------
+
+    /// A no-load dialog with a bare-directory field resolves to
+    /// `<dir>/<wildcard>` (the C++ name+ext-empty → fnmerge with the wildcard).
+    #[test]
+    fn get_file_name_appends_wildcard_for_bare_dir() {
+        let mut fd = FileDialog::new("*.rs", "t", "Name", FD_OPEN_BUTTON | FD_NO_LOAD_DIR, 0);
+        fd.directory = "/home/oetiker/".into();
+        // Field text is a bare subdirectory (trailing slash → no filename part).
+        fd_set_field(&mut fd, "sub/");
+        assert_eq!(fd.get_file_name(), "/home/oetiker/sub/*.rs");
+        // The resolved_name cache mirrors the return value.
+        assert_eq!(fd.resolved_name, "/home/oetiker/sub/*.rs");
+    }
+
+    /// A plain filename field resolves to the absolute path, no wildcard append.
+    #[test]
+    fn get_file_name_plain_filename() {
+        let mut fd = FileDialog::new("*.rs", "t", "Name", FD_OPEN_BUTTON | FD_NO_LOAD_DIR, 0);
+        fd.directory = "/home/oetiker/".into();
+        fd_set_field(&mut fd, "main.rs");
+        assert_eq!(fd.get_file_name(), "/home/oetiker/main.rs");
+    }
+
+    // -- 6c. valid() branches --------------------------------------------------
+
+    /// Set the FileInputLine's text (test helper).
+    fn fd_set_field(fd: &mut FileDialog, text: &str) {
+        fd.dialog
+            .child_mut(fd.file_name_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<FileInputLine>())
+            .expect("file_name resolves")
+            .inner
+            .data = text.to_string();
+    }
+
+    fn count_open_boxes(deferred: &[Deferred]) -> usize {
+        deferred
+            .iter()
+            .filter(|d| matches!(d, Deferred::OpenMessageBox { .. }))
+            .count()
+    }
+
+    /// `cmCancel` and `cmFileClear` are always valid: they return true after the
+    /// base group-valid without a navigate/accept branch or a messageBox.
+    /// `get_file_name` does run (faithful to C++ `getData`), but for a wildcard
+    /// field it is purely lexical — no FS touch, no error box.
+    #[test]
+    fn valid_cancel_and_file_clear_always_true() {
+        let mut fd = FileDialog::new("*", "t", "Name", FD_OPEN_BUTTON | FD_NO_LOAD_DIR, 0);
+        // A clearly-invalid wildcard path — checkDirectory must NOT run for these.
+        fd.directory = "/no/such/dir/at/all/".into();
+        fd_set_field(&mut fd, "/no/such/dir/at/all/*.x");
+
+        let mut out: VecDeque<Event> = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+
+        assert!(fd.valid(Command::CANCEL, &mut ctx), "cmCancel always valid");
+        assert!(
+            fd.valid(Command::FILE_CLEAR, &mut ctx),
+            "cmFileClear always valid"
+        );
+        assert_eq!(count_open_boxes(&deferred), 0, "no messageBox for these");
+    }
+
+    /// `valid(cmFileClear)` returns true AND leaves `value()` reflecting the
+    /// resolved field name — pinning the cache-refresh fix: C++ `getData` calls
+    /// `getFileName` unconditionally, so the cancel/clear path must still refresh
+    /// `resolved_name` (it runs `get_file_name` before the early-return).
+    #[test]
+    fn valid_file_clear_refreshes_value_cache() {
+        let mut fd = FileDialog::new("*", "t", "Name", FD_CLEAR_BUTTON | FD_NO_LOAD_DIR, 0);
+        fd.directory = "/home/oetiker/".into();
+        fd_set_field(&mut fd, "report.txt");
+        // Before any valid() the cache is empty.
+        assert_eq!(
+            View::value(&fd),
+            Some(crate::data::FieldValue::Text(String::new())),
+            "cache empty before valid()"
+        );
+
+        let mut out: VecDeque<Event> = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        let accepted = {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            fd.valid(Command::FILE_CLEAR, &mut ctx)
+        };
+        assert!(accepted, "cmFileClear is valid");
+        // value() now reflects the resolved field name, not a stale/empty value.
+        assert_eq!(
+            View::value(&fd),
+            Some(crate::data::FieldValue::Text(
+                "/home/oetiker/report.txt".into()
+            )),
+            "resolved_name refreshed on the cmFileClear path"
+        );
+        assert_eq!(count_open_boxes(&deferred), 0, "no messageBox");
+    }
+
+    /// `cmValid` returns true immediately (before the base call).
+    #[test]
+    fn valid_cmvalid_short_circuits() {
+        let mut fd = FileDialog::new("*", "t", "Name", FD_OPEN_BUTTON | FD_NO_LOAD_DIR, 0);
+        let mut out: VecDeque<Event> = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+        assert!(fd.valid(Command::VALID, &mut ctx));
+    }
+
+    /// A wildcard field over an existing directory → NAVIGATE: returns false,
+    /// updates `directory`/`wild_card`, re-reads the FileList, no messageBox.
+    #[test]
+    fn valid_wildcard_navigates() {
+        let tmp = std::env::temp_dir().join(format!("rstv_fd_wild_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("keep.md"), b"x").unwrap();
+        let dir = format!("{}/", tmp.to_string_lossy());
+
+        let mut fd = FileDialog::new("*", "t", "Name", FD_OPEN_BUTTON | FD_NO_LOAD_DIR, 0);
+        fd.directory = dir.clone();
+        // A wildcard pattern rooted at the fixture dir.
+        fd_set_field(&mut fd, &format!("{dir}*.md"));
+
+        let mut out: VecDeque<Event> = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        let accepted = {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            fd.valid(Command::FILE_OPEN, &mut ctx)
+        };
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        assert!(!accepted, "a wildcard navigates → not accepted (false)");
+        assert_eq!(fd.wild_card, "*.md", "wild_card updated to the new mask");
+        assert_eq!(fd.directory, dir, "directory unchanged (same dir)");
+        assert_eq!(count_open_boxes(&deferred), 0, "valid dir → no error box");
+        // The FileList was re-read with the new mask (only keep.md + "..").
+        let names: Vec<String> = fd_file_list(&mut fd)
+            .list()
+            .iter()
+            .map(|r| r.name.clone())
+            .collect();
+        assert!(
+            names.contains(&"keep.md".to_string()),
+            "matched file present"
+        );
+    }
+
+    /// An existing directory field → NAVIGATE into it: false, `directory`
+    /// updated (with a trailing slash), no messageBox.
+    #[test]
+    fn valid_existing_dir_navigates_into_it() {
+        let tmp = std::env::temp_dir().join(format!("rstv_fd_dir_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("sub")).unwrap();
+        let dir = format!("{}/", tmp.to_string_lossy());
+        let subdir = format!("{}/sub", tmp.to_string_lossy());
+
+        let mut fd = FileDialog::new("*", "t", "Name", FD_OPEN_BUTTON | FD_NO_LOAD_DIR, 0);
+        fd.directory = dir;
+        fd_set_field(&mut fd, &subdir); // existing dir, no trailing slash
+
+        let mut out: VecDeque<Event> = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        let accepted = {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            fd.valid(Command::FILE_OPEN, &mut ctx)
+        };
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        assert!(!accepted, "navigating into a dir → not accepted");
+        assert_eq!(
+            fd.directory,
+            format!("{subdir}/"),
+            "directory updated to the sub dir with a trailing '/'"
+        );
+        assert_eq!(count_open_boxes(&deferred), 0);
+    }
+
+    /// A plain, valid filename → ACCEPT (true), no messageBox.
+    #[test]
+    fn valid_filename_accepts() {
+        let mut fd = FileDialog::new("*", "t", "Name", FD_OPEN_BUTTON | FD_NO_LOAD_DIR, 0);
+        fd.directory = "/home/oetiker/".into();
+        fd_set_field(&mut fd, "report.txt");
+
+        let mut out: VecDeque<Event> = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        let accepted = {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            fd.valid(Command::FILE_OPEN, &mut ctx)
+        };
+        assert!(accepted, "a real filename is accepted");
+        assert_eq!(count_open_boxes(&deferred), 0);
+        // value() now returns the resolved name (cache refreshed by valid()).
+        assert_eq!(
+            View::value(&fd),
+            Some(crate::data::FieldValue::Text(
+                "/home/oetiker/report.txt".into()
+            ))
+        );
+    }
+
+    /// A wildcard over a NON-existent directory → checkDirectory fails → an
+    /// invalid-drive box is queued + refocus the field + false.
+    #[test]
+    fn valid_wildcard_bad_dir_queues_error_box() {
+        let mut fd = FileDialog::new("*", "t", "Name", FD_OPEN_BUTTON | FD_NO_LOAD_DIR, 0);
+        fd.directory = "/".into();
+        fd_set_field(&mut fd, "/no/such/dir/zzz/*.x");
+
+        let mut out: VecDeque<Event> = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        let accepted = {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            fd.valid(Command::FILE_OPEN, &mut ctx)
+        };
+        assert!(!accepted, "bad-dir wildcard keeps the dialog open");
+        assert_eq!(
+            count_open_boxes(&deferred),
+            1,
+            "one invalid-drive box queued"
+        );
+        assert!(
+            deferred
+                .iter()
+                .any(|d| matches!(d, Deferred::FocusById(id) if *id == fd.file_name_id)),
+            "field is refocused after the error"
+        );
+    }
+
+    /// The invalidFile branch: not wild, not an existing dir, not a valid
+    /// filename → the invalid-file box is queued + false.
+    ///
+    /// To reach an empty filename component after `get_file_name`, the wildcard
+    /// itself must be empty (otherwise the bare-dir case appends a non-empty
+    /// name). With an empty wildcard and a bare-directory field over a
+    /// non-existent dir, the resolved path stays directory-only → not isDir,
+    /// not validFileName → invalidFile.
+    #[test]
+    fn valid_invalid_filename_queues_error_box() {
+        // Empty wildcard so get_file_name does NOT append a filename to a bare dir.
+        let mut fd = FileDialog::new("", "t", "Name", FD_OPEN_BUTTON | FD_NO_LOAD_DIR, 0);
+        fd.directory = "/no/such/dir/qqq/".into();
+        // Field text resolves to a non-existent bare directory (trailing slash).
+        fd_set_field(&mut fd, "/no/such/dir/qqq/sub/");
+
+        let mut out: VecDeque<Event> = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        let accepted = {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            fd.valid(Command::FILE_OPEN, &mut ctx)
+        };
+        assert!(!accepted, "invalid filename keeps the dialog open");
+        assert_eq!(
+            count_open_boxes(&deferred),
+            1,
+            "one invalid-file box queued"
+        );
+    }
+
+    // -- 6d. set_value loads the field -----------------------------------------
+
+    #[test]
+    fn set_value_loads_field_text() {
+        let mut fd = FileDialog::new("*", "t", "Name", FD_OPEN_BUTTON | FD_NO_LOAD_DIR, 0);
+        View::set_value(&mut fd, crate::data::FieldValue::Text("loaded.txt".into()));
+        let text = fd
+            .dialog
+            .child_mut(fd.file_name_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<FileInputLine>())
+            .unwrap()
+            .text()
+            .to_string();
+        assert_eq!(text, "loaded.txt");
     }
 }
