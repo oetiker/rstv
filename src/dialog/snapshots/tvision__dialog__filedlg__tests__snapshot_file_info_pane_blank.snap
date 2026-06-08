@@ -1,0 +1,17 @@
+---
+source: src/dialog/filedlg.rs
+expression: "render_fip(&mut fip, 47, 3)"
+---
+size: 47x3
+cursor: hidden
+text:
+| /home/oetiker/*.rs                            |
+|                                               |
+|                                               |
+attr:
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(3) bg=BIOS(1)

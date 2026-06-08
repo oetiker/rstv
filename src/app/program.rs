@@ -1568,20 +1568,29 @@ impl Program {
                                 // write it — only one &mut is live at a time, like
                                 // SyncScrollerDelta's read-then-write.
                                 Deferred::ResolveFocusedFile { subscriber, source } => {
-                                    use crate::dialog::{FileInputLine, FileList};
+                                    use crate::dialog::{FileInfoPane, FileInputLine, FileList};
                                     let rec = group
                                         .find_mut(source)
                                         .and_then(|view| view.as_any_mut())
                                         .and_then(|a| a.downcast_mut::<FileList>())
                                         .and_then(|fl| fl.focused_rec());
+                                    // Two consumers share the broker: a FileInputLine
+                                    // (row 77) and a FileInfoPane (row 78). Try each
+                                    // downcast in turn; `rec` moves into the matching
+                                    // arm (the two are mutually exclusive).
                                     if let Some(fil) = group
                                         .find_mut(subscriber)
                                         .and_then(|view| view.as_any_mut())
                                         .and_then(|a| a.downcast_mut::<FileInputLine>())
                                     {
                                         fil.on_file_focused(rec);
+                                    } else if let Some(fip) = group
+                                        .find_mut(subscriber)
+                                        .and_then(|view| view.as_any_mut())
+                                        .and_then(|a| a.downcast_mut::<FileInfoPane>())
+                                    {
+                                        fip.on_file_focused(rec);
                                     }
-                                    // A2 (row 78) adds an `else if … FileInfoPane` arm.
                                 }
                                 // -- the async-modal-from-a-view seam (handle_event paths) --
                                 //

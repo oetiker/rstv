@@ -671,7 +671,8 @@ impl FileList {
     /// Build the sorted listing from a directory's raw entries — the pure,
     /// unit-testable core of [`read_directory`](FileList::read_directory). `dir`
     /// is a `/`-terminated absolute path; each raw entry is `(name, is_dir,
-    /// size)`.
+    /// size, mtime)` where `mtime` is the entry's modification time (`None` when
+    /// the filesystem could not report one).
     ///
     /// Faithful to the two-pass C++ `readDirectory`:
     /// - **Pass 1 (files):** a non-directory is kept iff it matches `wildcard`.
@@ -680,20 +681,34 @@ impl FileList {
     ///   `.`, `..`, AND hidden dirs (faithful to `ff_name[0] != '.'`).
     /// - **`".."`:** appended iff `dir != "/"` (C++ `strlen(dir) > 1`).
     ///
-    /// `time` is left 0 on every record. TODO(row 78): time/date packing — the
-    /// DOS-timestamp packing + size/date display is the `TFileInfoPane` (row 78)
-    /// concern.
+    /// `time` carries the DOS-packed mtime ([`pack_dos_time`]) on every real
+    /// entry — the value the [`FileInfoPane`] (row 78) unpacks to render the
+    /// size/date line. A real entry with no reportable mtime gets `time = 0`
+    /// (an empty `name` would suppress its date line; a real name would draw a
+    /// blank date, an acceptable degenerate case).
+    ///
+    /// **D-time deviation on the `".."` row.** rstv synthesizes `".."` *without*
+    /// statting the parent, so it uses [`DOTDOT_TIME`] (`0x210000`)
+    /// unconditionally — a cosmetic difference in the displayed date on the
+    /// `".."` row only. C++ `readDirectory` (tfillist.cpp) instead stats the real
+    /// parent via `findfirst("..", FA_DIREC)` and uses the parent dir's real
+    /// mtime, falling back to this constant only when that findfirst fails.
     ///
     /// Returns the [`search_rec_compare`]-sorted `Vec`, built via
     /// [`FileCollection::insert`].
-    fn build_listing(dir: &str, wildcard: &str, raw: &[(String, bool, i32)]) -> Vec<SearchRec> {
+    fn build_listing(
+        dir: &str,
+        wildcard: &str,
+        raw: &[(String, bool, i32, Option<std::time::SystemTime>)],
+    ) -> Vec<SearchRec> {
         let mut fc = FileCollection::new();
-        for (name, is_dir, size) in raw {
+        for (name, is_dir, size, mtime) in raw {
+            let time = mtime.as_ref().map(pack_dos_time).unwrap_or(0);
             if *is_dir {
                 if !name.starts_with('.') {
                     fc.insert(SearchRec {
                         attr: FA_DIREC,
-                        time: 0,
+                        time,
                         size: 0,
                         name: name.clone(),
                     });
@@ -701,7 +716,7 @@ impl FileList {
             } else if Self::wildcard_match(wildcard, name) {
                 fc.insert(SearchRec {
                     attr: 0,
-                    time: 0,
+                    time,
                     size: *size,
                     name: name.clone(),
                 });
@@ -710,7 +725,7 @@ impl FileList {
         if dir != "/" {
             fc.insert(SearchRec {
                 attr: FA_DIREC,
-                time: 0,
+                time: DOTDOT_TIME,
                 size: 0,
                 name: "..".into(),
             });
@@ -736,19 +751,23 @@ impl FileList {
     /// (the broker then reads `focused_rec() == None` → a blank field, the noFile
     /// sentinel's effect).
     pub fn read_directory(&mut self, dir: &str, wildcard: &str, ctx: &mut crate::view::Context) {
-        let raw: Vec<(String, bool, i32)> = match std::fs::read_dir(dir) {
-            Ok(entries) => entries
-                .filter_map(|e| {
-                    let e = e.ok()?;
-                    let meta = std::fs::metadata(e.path()).ok()?;
-                    let name = e.file_name().to_string_lossy().into_owned();
-                    let is_dir = meta.is_dir();
-                    let size = meta.len().min(i32::MAX as u64) as i32;
-                    Some((name, is_dir, size))
-                })
-                .collect(),
-            Err(_) => Vec::new(),
-        };
+        let raw: Vec<(String, bool, i32, Option<std::time::SystemTime>)> =
+            match std::fs::read_dir(dir) {
+                Ok(entries) => entries
+                    .filter_map(|e| {
+                        let e = e.ok()?;
+                        let meta = std::fs::metadata(e.path()).ok()?;
+                        let name = e.file_name().to_string_lossy().into_owned();
+                        let is_dir = meta.is_dir();
+                        let size = meta.len().min(i32::MAX as u64) as i32;
+                        // `.modified()` is unsupported on some platforms; a None
+                        // mtime packs to `time = 0` in build_listing.
+                        let mtime = meta.modified().ok();
+                        Some((name, is_dir, size, mtime))
+                    })
+                    .collect(),
+                Err(_) => Vec::new(),
+            };
 
         self.items = Self::build_listing(dir, wildcard, &raw);
 
@@ -1057,6 +1076,268 @@ impl crate::view::View for FileInputLine {
     /// forwards `as_any_mut` to its editor): the pump's broker downcasts the
     /// resolved subscriber to `FileInputLine`, so `as_any_mut` MUST return
     /// `self`, NOT the inner `InputLine`.
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        Some(self)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FileInfoPane — row 78
+// ---------------------------------------------------------------------------
+
+/// Month names indexed by the DOS `ft_month` field (1–12); index 0 is the empty
+/// string for a noFile/blank rec — `months[]` in stddlg.cpp.
+const MONTHS: [&str; 13] = [
+    "", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+/// `amText` — the AM-hours suffix on the date line.
+const AM: &str = "a";
+/// `pmText` — the PM-hours suffix on the date line.
+const PM: &str = "p";
+
+/// The DOS-packed time rstv's synthesized `".."` rec carries (`0x210000`):
+/// date byte `0x21` → day 1, month 1, year-1980 0 → Jan 01 1980 00:00. Using it
+/// (rather than a literal `0`, which would unpack to month 0 / day 0 — a blank
+/// month name + a `00` day) keeps the `".."` row's date well-formed.
+///
+/// **D-time deviation.** rstv synthesizes `".."` without statting the parent, so
+/// it uses this constant unconditionally. C++ `readDirectory` only falls back to
+/// `0x210000` when its `findfirst("..", FA_DIREC)` fails; in the normal path it
+/// shows the real parent dir's mtime. The difference is cosmetic (the `".."`
+/// row's displayed date).
+const DOTDOT_TIME: i32 = 0x0021_0000;
+
+/// Pack a [`SystemTime`](std::time::SystemTime) into the DOS `ftime` `u32`
+/// layout the C++ `findfirst` produced, so the [`FileInfoPane`] draw can unpack
+/// it verbatim.
+///
+/// Layout (high 16 bits = date, low 16 bits = time):
+/// - date: `year-1980` in bits 9–15, `month` (1–12) in bits 5–8, `day` (1–31)
+///   in bits 0–4.
+/// - time: `hour` (0–23) in bits 11–15, `min` (0–59) in bits 5–10, `sec/2` in
+///   bits 0–4.
+///
+/// **D-time deviation.** The C++ time came from DOS `findfirst` in **local**
+/// time. rstv reads `std::fs` mtime and packs the civil Y/M/D H:M:S in **UTC**
+/// (computed via Howard Hinnant's days-from-civil algorithm — no timezone crate
+/// dependency). The displayed clock is therefore UTC, not local. Times before
+/// the 1980 DOS epoch clamp to Jan 01 1980 00:00 (DOS cannot represent earlier).
+fn pack_dos_time(t: &std::time::SystemTime) -> i32 {
+    let secs = match t.duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => d.as_secs() as i64,
+        // A pre-epoch mtime is well before the 1980 DOS epoch → clamp.
+        Err(_) => return DOTDOT_TIME,
+    };
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    let hour = rem / 3600;
+    let min = (rem % 3600) / 60;
+    let sec = rem % 60;
+
+    // Howard Hinnant's civil-from-days (days are relative to 1970-01-01).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let y = if m <= 2 { y + 1 } else { y };
+
+    // Clamp to the DOS 1980 epoch (DOS cannot represent earlier dates).
+    if y < 1980 {
+        return DOTDOT_TIME;
+    }
+
+    let date = (((y - 1980) as u32) << 9) | ((m as u32) << 5) | (d as u32);
+    let time = ((hour as u32) << 11) | ((min as u32) << 5) | ((sec / 2) as u32);
+    ((date << 16) | time) as i32
+}
+
+/// `TFileInfoPane` (stddlg.cpp) — a plain `TView` that displays the focused
+/// file's path on line 0 and its name + size + date on line 1.
+///
+/// ## Structural shape
+///
+/// `TFileInfoPane` is a C++ subclass of `TView` (not `TInputLine`/`TListViewer`),
+/// so in rstv it is a **direct [`View`](crate::view::View) impl** over a
+/// [`ViewState`](crate::view::ViewState) — *not* a D2 delegate.
+///
+/// ## The payload broker (D3/D4) — shared with [`FileInputLine`]
+///
+/// Like `FileInputLine` it subscribes to `cmFileFocused`: on the broadcast it
+/// requests [`ResolveFocusedFile`](crate::view::Deferred::ResolveFocusedFile)
+/// and the pump resolves the producer's
+/// [`focused_rec`](FileList::focused_rec), then calls
+/// [`on_file_focused`](FileInfoPane::on_file_focused) on this view. Unlike the
+/// input line there is **no `!sfSelected` guard** — the pane always updates.
+///
+/// ## D3 — cached owner fields
+///
+/// `TFileInfoPane::draw` reads `owner->directory` and `owner->wildCard`. A leaf
+/// view cannot read its owner inline (and `draw` has no `Context` at all), so
+/// both are **cached** (`directory` / `wild_card`), set at ctor and refreshed by
+/// [`set_dir_info`](FileInfoPane::set_dir_info) (row 79 drives that via a
+/// deferred push when the dialog re-reads with a new mask). The focused record
+/// is cached in `file_block`.
+///
+/// ## Deviations
+/// - **D7:** no palette chain — the text is drawn in [`Role::InfoPane`].
+/// - **D8:** the C++ `drawView()` after a focus change is dropped (whole-tree
+///   redraw).
+/// - **D14:** `fexpand` is dropped — the path line is `directory` concatenated
+///   with `wild_card` (the dialog guarantees `directory` ends with `/`); no
+///   `\`↔`/` translation.
+/// - **D12:** `getPalette`/`write`/`read`/`build`/`streamableName`/`name`
+///   streaming dropped.
+pub struct FileInfoPane {
+    /// The base-view state (bounds, flags, id, …).
+    state: crate::view::ViewState,
+    /// Cached `((TFileDialog*)owner)->directory` (D3), `/`-terminated.
+    directory: String,
+    /// Cached `((TFileDialog*)owner)->wildCard` (D3).
+    wild_card: String,
+    /// The focused record (`file_block`); `None` = the all-zero `noFile`
+    /// sentinel → a blank name → no size/date line.
+    file_block: Option<SearchRec>,
+}
+
+impl FileInfoPane {
+    /// `TFileInfoPane::TFileInfoPane(bounds)` — build the pane. `directory` /
+    /// `wild_card` cache the owner fields the draw needs (D3); `file_block`
+    /// starts `None` (blank) until the first `cmFileFocused`.
+    ///
+    /// The C++ `eventMask |= evBroadcast` is implicit (the group delivers every
+    /// broadcast unconditionally), so no event mask is wired.
+    pub fn new(
+        bounds: crate::view::Rect,
+        directory: impl Into<String>,
+        wild_card: impl Into<String>,
+    ) -> Self {
+        FileInfoPane {
+            state: crate::view::ViewState::new(bounds),
+            directory: directory.into(),
+            wild_card: wild_card.into(),
+            file_block: None,
+        }
+    }
+
+    /// Cache the focused record — the body of the C++ `handleEvent`'s
+    /// `cmFileFocused` block (`file_block = *infoPtr`), called by the pump's
+    /// [`ResolveFocusedFile`](crate::view::Deferred::ResolveFocusedFile) broker.
+    /// `None` is the all-zero `noFile` sentinel → a blank name. `drawView()` is
+    /// dropped (D8).
+    pub fn on_file_focused(&mut self, rec: Option<SearchRec>) {
+        self.file_block = rec;
+    }
+
+    /// Update the cached owner `directory` / `wildCard` (row 79 drives this via a
+    /// deferred push when the dialog re-reads the directory with a new mask).
+    // TODO(row 79): driven by the dialog's directory/wildCard-change push.
+    pub fn set_dir_info(&mut self, directory: impl Into<String>, wild_card: impl Into<String>) {
+        self.directory = directory.into();
+        self.wild_card = wild_card.into();
+    }
+}
+
+impl crate::view::View for FileInfoPane {
+    fn state(&self) -> &crate::view::ViewState {
+        &self.state
+    }
+
+    fn state_mut(&mut self) -> &mut crate::view::ViewState {
+        &mut self.state
+    }
+
+    /// `TFileInfoPane::draw` — line 0 = the `directory`+`wildCard` path; line 1 =
+    /// the focused name + (when named) its size left-aligned at `size.x-38` and
+    /// its date as `Mon DD, YYYY HH:MMa/p` in the right columns; remaining rows
+    /// cleared. All text in [`Role::InfoPane`].
+    fn draw(&mut self, ctx: &mut crate::view::DrawCtx) {
+        let color = ctx.style(crate::theme::Role::InfoPane);
+        let w = self.state.size.x;
+        let h = self.state.size.y;
+
+        // --- line 0: the path (directory + wildCard, D14 — no fexpand) ------
+        // `Rect::new` is `TRect(ax, ay, bx, by)` — corners, not (x, y, w, h).
+        ctx.fill(crate::view::Rect::new(0, 0, w, 1), ' ', color);
+        let path = format!("{}{}", self.directory, self.wild_card);
+        ctx.put_str(1, 0, &path, color);
+
+        // --- line 1: name + size + date -------------------------------------
+        ctx.fill(crate::view::Rect::new(0, 1, w, 2), ' ', color);
+        if let Some(rec) = &self.file_block
+            && !rec.name.is_empty()
+        {
+            ctx.put_str(1, 1, &rec.name, color);
+
+            // size, left-aligned at column size.x - 38.
+            let size_str = rec.size.to_string();
+            ctx.put_str(w - 38, 1, &size_str, color);
+
+            // Unpack the DOS ftime bitfield (see `pack_dos_time` for the layout).
+            let t = rec.time as u32;
+            let date = t >> 16;
+            let time = t & 0xFFFF;
+            let month = ((date >> 5) & 0xF) as usize;
+            let day = date & 0x1F;
+            let year = (date >> 9) + 1980;
+            let mut hour = time >> 11;
+            let minute = (time >> 5) & 0x3F;
+
+            // month name at size.x - 22 (index guarded — 0..=12).
+            let month_name = MONTHS.get(month).copied().unwrap_or("");
+            ctx.put_str(w - 22, 1, month_name, color);
+
+            // zero-padded day at size.x - 18.
+            ctx.put_str(w - 18, 1, &format!("{day:02}"), color);
+            ctx.put_char(w - 16, 1, ',', color);
+            // year (already +1980) at size.x - 15.
+            ctx.put_str(w - 15, 1, &year.to_string(), color);
+
+            // 12-hour clock with a/p suffix. The C++ `time->ft_hour %= 12`
+            // mutates `file_block` through an aliased pointer (a latent C++ bug);
+            // rstv computes into the local `hour`, correctly NOT reproducing it
+            // (required under D8 — draw must not mutate cached state).
+            let pm = hour >= 12;
+            hour %= 12;
+            if hour == 0 {
+                hour = 12;
+            }
+            ctx.put_str(w - 9, 1, &format!("{hour:02}"), color);
+            ctx.put_char(w - 7, 1, ':', color);
+            ctx.put_str(w - 6, 1, &format!("{minute:02}"), color);
+            ctx.put_str(w - 4, 1, if pm { PM } else { AM }, color);
+        }
+
+        // --- clear the rest (rows 2..h) -------------------------------------
+        if h > 2 {
+            ctx.fill(crate::view::Rect::new(0, 2, w, h), ' ', color);
+        }
+    }
+
+    /// `TFileInfoPane::handleEvent` — on a `cmFileFocused` broadcast (with a
+    /// resolvable source) request the payload broker. No `!sfSelected` guard
+    /// (unlike the input line) — the pane always reflects the focused file.
+    ///
+    /// The C++ `TView::handleEvent(event)` base call is dropped (inert — the base
+    /// only does the `ofSelectable` mouse-select the pane lacks).
+    fn handle_event(&mut self, ev: &mut crate::event::Event, ctx: &mut crate::view::Context) {
+        if let crate::event::Event::Broadcast {
+            command,
+            source: Some(src),
+        } = *ev
+            && command == crate::command::Command::FILE_FOCUSED
+            && let Some(my_id) = self.state.id()
+        {
+            ctx.request_resolve_focused_file(my_id, src);
+        }
+    }
+
+    /// The pump's broker downcasts the resolved subscriber to `FileInfoPane`, so
+    /// `as_any_mut` MUST return `self`.
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         Some(self)
     }
@@ -1523,9 +1804,14 @@ mod tests {
 
     // -- 2. build_listing ------------------------------------------------------
 
-    // Helper: a raw (name, is_dir, size) triple.
-    fn raw(name: &str, is_dir: bool, size: i32) -> (String, bool, i32) {
-        (name.into(), is_dir, size)
+    // Helper: a raw (name, is_dir, size, mtime) tuple. The tests don't exercise
+    // the date display, so `mtime` is always `None` (→ packed `time = 0`).
+    fn raw(
+        name: &str,
+        is_dir: bool,
+        size: i32,
+    ) -> (String, bool, i32, Option<std::time::SystemTime>) {
+        (name.into(), is_dir, size, None)
     }
 
     #[test]
@@ -2103,5 +2389,229 @@ mod tests {
             name: "src".into(),
         }));
         insta::assert_snapshot!(render_fil(&mut fil, 20, 1));
+    }
+
+    // =========================================================================
+    // FileInfoPane — row 78
+    // =========================================================================
+
+    // -- 1. on_file_focused sets / clears the cached record -------------------
+
+    #[test]
+    fn file_info_pane_on_file_focused_sets_and_clears() {
+        let mut fip = FileInfoPane::new(Rect::new(0, 0, 47, 3), "/home/oetiker/", "*.rs");
+        assert_eq!(fip.file_block, None, "starts blank");
+
+        let r = SearchRec {
+            attr: 0,
+            time: 0,
+            size: 42,
+            name: "main.rs".into(),
+        };
+        fip.on_file_focused(Some(r.clone()));
+        assert_eq!(fip.file_block, Some(r));
+
+        // None (the noFile sentinel) clears it back to blank.
+        fip.on_file_focused(None);
+        assert_eq!(fip.file_block, None);
+    }
+
+    // -- 2. handle_event requests ResolveFocusedFile on FILE_FOCUSED ----------
+
+    #[test]
+    fn file_info_pane_handle_event_requests_broker() {
+        let fip = FileInfoPane::new(Rect::new(0, 0, 47, 3), "/home/oetiker/", "*.rs");
+        let mut g = Group::new(Rect::new(0, 0, 60, 20));
+        let fip_id = g.insert(Box::new(fip));
+        let src_id = crate::view::ViewId::next();
+
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            let mut ev = Event::Broadcast {
+                command: Command::FILE_FOCUSED,
+                source: Some(src_id),
+            };
+            g.find_mut(fip_id).unwrap().handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(
+            deferred
+                .iter()
+                .filter(|d| matches!(d,
+                    Deferred::ResolveFocusedFile { subscriber, source }
+                        if *subscriber == fip_id && *source == src_id))
+                .count(),
+            1,
+            "FILE_FOCUSED -> one ResolveFocusedFile request (no sfSelected guard)"
+        );
+
+        // Unlike FileInputLine, the pane has NO sfSelected guard: even when
+        // selected it STILL requests the broker.
+        if let Some(v) = g.find_mut(fip_id) {
+            v.state_mut().state.selected = true;
+        }
+        let mut out2 = VecDeque::new();
+        let mut timers2 = crate::timer::TimerQueue::new();
+        let mut deferred2: Vec<Deferred> = vec![];
+        {
+            let mut ctx = fl_make_ctx(&mut out2, &mut timers2, &mut deferred2);
+            let mut ev = Event::Broadcast {
+                command: Command::FILE_FOCUSED,
+                source: Some(src_id),
+            };
+            g.find_mut(fip_id).unwrap().handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(
+            deferred2
+                .iter()
+                .filter(|d| matches!(d, Deferred::ResolveFocusedFile { .. }))
+                .count(),
+            1,
+            "selected pane STILL requests the broker (no sfSelected guard)"
+        );
+    }
+
+    // -- 3. the DOS-time pack: known vector + round-trip ----------------------
+
+    #[test]
+    fn pack_dos_time_known_vector_and_round_trip() {
+        use std::time::{Duration, UNIX_EPOCH};
+        // 2021-01-01 00:00:00 UTC = 1609459200.
+        let t = UNIX_EPOCH + Duration::from_secs(1_609_459_200);
+        let packed = pack_dos_time(&t);
+        // year-1980 = 41 (0x29), month 1, day 1, time 0 -> date 0x5221, time 0.
+        assert_eq!(
+            packed, 0x5221_0000,
+            "2021-01-01 00:00 UTC packs to 0x52210000"
+        );
+
+        // Unpack the SAME bitfield the draw uses; round-trip to Y/M/D H:M.
+        let v = packed as u32;
+        let date = v >> 16;
+        let time = v & 0xFFFF;
+        assert_eq!((date >> 9) + 1980, 2021, "year");
+        assert_eq!((date >> 5) & 0xF, 1, "month");
+        assert_eq!(date & 0x1F, 1, "day");
+        assert_eq!(time >> 11, 0, "hour");
+        assert_eq!((time >> 5) & 0x3F, 0, "minute");
+    }
+
+    #[test]
+    fn pack_dos_time_afternoon_vector() {
+        use std::time::{Duration, UNIX_EPOCH};
+        // 2021-06-15 14:37:00 UTC = 1623767820.
+        let t = UNIX_EPOCH + Duration::from_secs(1_623_767_820);
+        let v = pack_dos_time(&t) as u32;
+        let date = v >> 16;
+        let time = v & 0xFFFF;
+        assert_eq!((date >> 9) + 1980, 2021, "year");
+        assert_eq!((date >> 5) & 0xF, 6, "month = Jun");
+        assert_eq!(date & 0x1F, 15, "day");
+        assert_eq!(time >> 11, 14, "hour (24h)");
+        assert_eq!((time >> 5) & 0x3F, 37, "minute");
+    }
+
+    #[test]
+    fn pack_dos_time_pre_1980_clamps() {
+        use std::time::{Duration, UNIX_EPOCH};
+        // 1970-01-01 00:00:00 UTC is before the DOS 1980 epoch -> clamp.
+        assert_eq!(pack_dos_time(&UNIX_EPOCH), DOTDOT_TIME);
+        // 1979-12-31 23:59:59 UTC also clamps.
+        let t = UNIX_EPOCH + Duration::from_secs(315_532_799);
+        assert_eq!(pack_dos_time(&t), DOTDOT_TIME);
+    }
+
+    /// A date in 2044+ sets DOS date bit 15 (`year-1980 >= 64`), which lands in
+    /// bit 31 of the packed `u32` — so the `i32` `time` is **negative**. This is
+    /// intentional: the `draw` recovers the fields via `(time as u32)` (the same
+    /// cast `FileInfoPane::draw` uses), so the negative value round-trips
+    /// correctly. Pinning it here so nobody "fixes" the sign.
+    #[test]
+    fn pack_dos_time_far_future_is_negative_and_round_trips() {
+        use std::time::{Duration, UNIX_EPOCH};
+        // 2050-01-01 00:00:00 UTC = 2524608000 secs since the epoch.
+        let t = UNIX_EPOCH + Duration::from_secs(2_524_608_000);
+        let packed = pack_dos_time(&t);
+        // year-1980 = 70 (0x46); date = (70<<9)|(1<<5)|1 = 0x8C21; time = 0.
+        // As a u32 that is 0x8C210000, whose i32 reinterpretation is negative.
+        assert!(packed < 0, "year >= 2044 sets bit 31 -> negative i32");
+        assert_eq!(packed as u32, 0x8C21_0000, "packed bit pattern");
+
+        // Unpack via the SAME `as u32` recovery the draw uses.
+        let v = packed as u32;
+        let date = v >> 16;
+        let time = v & 0xFFFF;
+        assert_eq!((date >> 9) + 1980, 2050, "year round-trips");
+        assert_eq!((date >> 5) & 0xF, 1, "month");
+        assert_eq!(date & 0x1F, 1, "day");
+        assert_eq!(time >> 11, 0, "hour");
+        assert_eq!((time >> 5) & 0x3F, 0, "minute");
+    }
+
+    #[test]
+    fn build_listing_packs_mtime_and_dotdot_constant() {
+        use std::time::{Duration, UNIX_EPOCH};
+        let t = UNIX_EPOCH + Duration::from_secs(1_609_459_200); // 2021-01-01
+        let raw_entries = vec![("a.rs".to_string(), false, 10, Some(t))];
+        let items = FileList::build_listing("/home/oetiker/", "*", &raw_entries);
+        // items: "a.rs" (file, packed time), ".." (dir, DOTDOT_TIME).
+        let a = items.iter().find(|r| r.name == "a.rs").unwrap();
+        assert_eq!(a.time, 0x5221_0000, "file carries its packed mtime");
+        let dd = items.iter().find(|r| r.name == "..").unwrap();
+        assert_eq!(dd.time, DOTDOT_TIME, ".. carries the 0x210000 constant");
+    }
+
+    // -- 4. snapshots ---------------------------------------------------------
+
+    fn render_fip(fip: &mut FileInfoPane, w: u16, h: u16) -> String {
+        use crate::backend::{HeadlessBackend, Renderer};
+        use crate::screen::Buffer;
+        use crate::theme::Theme;
+        use crate::view::{DrawCtx, View};
+
+        let theme = Theme::classic_blue();
+        let (backend, screen) = HeadlessBackend::new(w, h);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = fip.state().get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            fip.draw(&mut dc);
+        });
+        screen.snapshot()
+    }
+
+    /// A file entry with a real size + date. Width 47 (the C++ pane is
+    /// `TRect(1,16,48,18)` = 47 wide) so the right-aligned `size.x-38..` columns
+    /// fit. Hand-verify the `Mon DD, YYYY HH:MMa/p` layout against the C++
+    /// offsets and the fg=cyan(3) bg=blue(1) InfoPane color.
+    ///
+    /// The frozen `report.t12345` in the snapshot is **faithful** C++
+    /// single-buffer behavior, NOT a bug: the name is drawn at col 1, then the
+    /// size is drawn at col `size.x - 38` (= 9 here), overwriting the name's tail
+    /// (`report.txt` → `report.t` + `12345`). The C++ `TDrawBuffer` does the same
+    /// (one shared row buffer, last write wins).
+    #[test]
+    fn snapshot_file_info_pane_file() {
+        use std::time::{Duration, UNIX_EPOCH};
+        let mut fip = FileInfoPane::new(Rect::new(0, 0, 47, 3), "/home/oetiker/", "*.rs");
+        // 2021-06-15 14:37:00 UTC -> "Jun 15, 2021 02:37p".
+        let t = UNIX_EPOCH + Duration::from_secs(1_623_767_820);
+        fip.on_file_focused(Some(SearchRec {
+            attr: 0,
+            time: pack_dos_time(&t),
+            size: 12345,
+            name: "report.txt".into(),
+        }));
+        insta::assert_snapshot!(render_fip(&mut fip, 47, 3));
+    }
+
+    /// The blank / noFile state: only the path line draws, no name/size/date.
+    #[test]
+    fn snapshot_file_info_pane_blank() {
+        let mut fip = FileInfoPane::new(Rect::new(0, 0, 47, 3), "/home/oetiker/", "*.rs");
+        // file_block stays None -> blank line 1.
+        insta::assert_snapshot!(render_fip(&mut fip, 47, 3));
     }
 }

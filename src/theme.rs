@@ -174,10 +174,15 @@ pub enum Role {
     /// getColor(0x0505)` → palette idx 5 (`0x28`, darkgray on green) for both
     /// lo and hi.
     StatusSelDisabled,
+    /// `TFileInfoPane` text (path + size/date display) — `cpInfoPane "\x1E"`
+    /// idx 1 (`getColor(0x01)`, row 78). Resolved through the classic gray-dialog
+    /// palette chain: `cpInfoPane` idx 1 → `cpGrayDialog` idx `0x1E` (30) = `0x3D`
+    /// → `cpAppColor[0x3D]` = **`0x13`** = BIOS attr fg=cyan(3) on bg=blue(1).
+    InfoPane,
 }
 
 /// Number of [`Role`] variants — the fixed length of [`Theme`]'s style array.
-const ROLE_COUNT: usize = 57;
+const ROLE_COUNT: usize = 58;
 
 impl Role {
     /// Total mapping of each variant to its index into the style array.
@@ -243,6 +248,7 @@ impl Role {
             Role::StatusShortcutSelect => 53,
             Role::StatusDisabled => 54,
             Role::StatusSelDisabled => 55,
+            Role::InfoPane => 57,
         }
     }
 }
@@ -596,6 +602,11 @@ impl Theme {
         set(&mut styles, Role::StatusDisabled, 0x8, 0x7); // 0x78: darkgray on lightgray
         set(&mut styles, Role::StatusSelDisabled, 0x8, 0x2); // 0x28: darkgray on green
 
+        // File-info pane (row 78). Faithful palette chain `cpInfoPane "\x1E"`
+        // idx 1 → `cpGrayDialog[0x1E]` = `0x3D` → `cpAppColor[0x3D]` = `0x13` =
+        // BIOS attr `(bg<<4)|fg` with fg=cyan(3), bg=blue(1).
+        set(&mut styles, Role::InfoPane, 0x3, 0x1); // cyan on blue (0x13)
+
         Theme {
             styles,
             glyphs: Glyphs::default(),
@@ -682,6 +693,7 @@ mod tests {
         Role::StatusShortcutSelect,
         Role::StatusDisabled,
         Role::StatusSelDisabled,
+        Role::InfoPane,
     ];
 
     #[test]
