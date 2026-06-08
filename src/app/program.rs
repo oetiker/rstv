@@ -2512,6 +2512,119 @@ mod tests {
         );
     }
 
+    // -- row 80: Deferred::MakeButtonDefault wires through the pump -----------
+
+    /// **The end-to-end test of the real `program.rs`
+    /// [`MakeButtonDefault`](crate::view::Deferred::MakeButtonDefault) pump arm**
+    /// (row 80: `TDirListBox::setState` → `chDirButton->makeDefault`). filedlg's
+    /// unit tests assert that `DirListBox::set_state` *queues* the variant; this
+    /// drives the genuine production arm through `pump_once`: `group.find_mut(button)`
+    /// downcasts the `Button` and calls `make_default(enable, ctx)`, whose
+    /// `cmGrabDefault` re-broadcast then makes the real default button relinquish
+    /// the look — the exact `find_mut(button)`-reaching-a-nested-button path the
+    /// unit tests cannot confirm.
+    ///
+    /// Mirrors [`deferred_focus_by_id_selects_target_through_pump`]: a benign
+    /// broadcast drives a dispatch so the pump reaches its deferred-apply loop, and
+    /// the `MakeButtonDefault` is pushed alongside it (the shape of "the dir list's
+    /// `set_state` queues the poke during its own dispatch"). The `chDirButton` is
+    /// `bfNormal`, the `okButton` `bfDefault` — so after settling the Chdir button
+    /// grabbed the default and OK relinquished it.
+    #[test]
+    fn deferred_make_button_default_grabs_default_through_pump() {
+        use crate::command::Command;
+        use crate::widgets::{Button, ButtonFlags};
+
+        fn am_default(program: &mut Program, id: crate::view::ViewId) -> bool {
+            program
+                .group_mut()
+                .find_mut(id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<Button>())
+                .map(|b| b.am_default)
+                .expect("button resolves")
+        }
+
+        let ids: Rc<RefCell<(Option<crate::view::ViewId>, Option<crate::view::ViewId>)>> =
+            Rc::new(RefCell::new((None, None)));
+        let ids_cap = ids.clone();
+        let (backend, _handle) = HeadlessBackend::new(80, 25);
+        let theme = Theme::classic_blue();
+        let clock = Rc::new(ManualClock::new(0));
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            theme,
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                // okButton: bfDefault (the initial default). chDirButton: bfNormal.
+                let ok = Button::new(
+                    Rect::new(2, 2, 12, 4),
+                    "O~K~",
+                    Command::OK,
+                    ButtonFlags {
+                        default: true,
+                        ..Default::default()
+                    },
+                );
+                let chdir = Button::new(
+                    Rect::new(2, 5, 12, 7),
+                    "~C~hdir",
+                    Command::CHANGE_DIR,
+                    ButtonFlags::new(),
+                );
+                let ok_id = desktop.insert_view(Box::new(ok));
+                let chdir_id = desktop.insert_view(Box::new(chdir));
+                *ids_cap.borrow_mut() = (Some(ok_id), Some(chdir_id));
+                Some(Box::new(desktop))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        let (ok_id, chdir_id) = {
+            let b = ids.borrow();
+            (b.0.unwrap(), b.1.unwrap())
+        };
+        program.out_events.clear();
+
+        // Preconditions: bfDefault initializes am_default; bfNormal does not.
+        assert!(
+            am_default(&mut program, ok_id),
+            "okButton starts the default"
+        );
+        assert!(
+            !am_default(&mut program, chdir_id),
+            "chDirButton starts non-default"
+        );
+
+        // Queue the makeDefault poke exactly as `DirListBox::set_state` would on an
+        // sfFocused change, and drive a dispatch with a benign broadcast so the pump
+        // reaches its deferred-apply loop. The arm downcasts the chDirButton and
+        // calls make_default(true): it grabs the default + broadcasts cmGrabDefault.
+        program.deferred.push(Deferred::MakeButtonDefault {
+            button: chdir_id,
+            enable: true,
+        });
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.pump_once();
+
+        assert!(
+            am_default(&mut program, chdir_id),
+            "the MakeButtonDefault arm made the chDirButton the default through the pump"
+        );
+
+        // The make_default broadcast (cmGrabDefault, source = chDirButton) settles
+        // next pump: the bfDefault okButton receives it and relinquishes the look.
+        program.pump_once();
+        assert!(
+            !am_default(&mut program, ok_id),
+            "okButton relinquished the default on the chDirButton's cmGrabDefault"
+        );
+    }
+
     #[test]
     fn alt_n_no_match_does_not_change_selection() {
         let (mut program, ids) = program_with_windows(80, 25, 2);
