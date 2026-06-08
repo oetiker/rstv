@@ -750,24 +750,49 @@ impl FileList {
     /// empty case has no focusable item, so it broadcasts `FILE_FOCUSED` directly
     /// (the broker then reads `focused_rec() == None` → a blank field, the noFile
     /// sentinel's effect).
+    /// Read `dir`'s raw entries from the filesystem — the impure half shared by
+    /// [`read_directory`](FileList::read_directory) and the ctx-free
+    /// [`read_directory_listing`](FileList::read_directory_listing). Each entry is
+    /// `(name, is_dir, size, mtime)`. Uses `std::fs::metadata` (follows symlinks,
+    /// matching magiblot's `findfirst`/`stat`); a broken symlink errs and is
+    /// skipped. `size` saturates into `i32`.
+    fn raw_from_fs(dir: &str) -> Vec<(String, bool, i32, Option<std::time::SystemTime>)> {
+        match std::fs::read_dir(dir) {
+            Ok(entries) => entries
+                .filter_map(|e| {
+                    let e = e.ok()?;
+                    let meta = std::fs::metadata(e.path()).ok()?;
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    let is_dir = meta.is_dir();
+                    let size = meta.len().min(i32::MAX as u64) as i32;
+                    // `.modified()` is unsupported on some platforms; a None
+                    // mtime packs to `time = 0` in build_listing.
+                    let mtime = meta.modified().ok();
+                    Some((name, is_dir, size, mtime))
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// `TFileList::readDirectory`, ctx-free — a sibling of
+    /// [`read_directory`](FileList::read_directory) for the `TFileDialog` ctor
+    /// path and deterministic tests. Builds + publishes the listing to the
+    /// list-viewer state (`range`/`focused`/`top_item`) but does **NOT** sync the
+    /// scrollbar or broadcast `cmFileFocused` — both of those need a `Context`,
+    /// which the C++ ctor's trailing `readDirectory()` also lacks. The ctx-ful
+    /// `read_directory` (driven from `reset_current`) is the path that does the
+    /// scrollbar sync + broadcast.
+    pub fn read_directory_listing(&mut self, dir: &str, wildcard: &str) {
+        let raw = Self::raw_from_fs(dir);
+        self.items = Self::build_listing(dir, wildcard, &raw);
+        self.lv.range = self.items.len() as i32;
+        self.lv.focused = 0;
+        self.lv.top_item = 0;
+    }
+
     pub fn read_directory(&mut self, dir: &str, wildcard: &str, ctx: &mut crate::view::Context) {
-        let raw: Vec<(String, bool, i32, Option<std::time::SystemTime>)> =
-            match std::fs::read_dir(dir) {
-                Ok(entries) => entries
-                    .filter_map(|e| {
-                        let e = e.ok()?;
-                        let meta = std::fs::metadata(e.path()).ok()?;
-                        let name = e.file_name().to_string_lossy().into_owned();
-                        let is_dir = meta.is_dir();
-                        let size = meta.len().min(i32::MAX as u64) as i32;
-                        // `.modified()` is unsupported on some platforms; a None
-                        // mtime packs to `time = 0` in build_listing.
-                        let mtime = meta.modified().ok();
-                        Some((name, is_dir, size, mtime))
-                    })
-                    .collect(),
-                Err(_) => Vec::new(),
-            };
+        let raw = Self::raw_from_fs(dir);
 
         self.items = Self::build_listing(dir, wildcard, &raw);
 
@@ -1338,6 +1363,444 @@ impl crate::view::View for FileInfoPane {
 
     /// The pump's broker downcasts the resolved subscriber to `FileInfoPane`, so
     /// `as_any_mut` MUST return `self`.
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        Some(self)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FileDialog — row 79 (skeleton: B1)
+// ---------------------------------------------------------------------------
+
+use crate::dialog::Dialog;
+
+/// Display width of `s`, skipping `~` hotkey markers — the C++ `cstrlen` loop
+/// used to size the `inputName` label (`3 + cstrlen(inputName)`).
+fn cstrlen(s: &str) -> i32 {
+    s.chars()
+        .filter(|&c| c != '~')
+        .map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(1) as i32)
+        .sum()
+}
+
+/// `MAXPATH` — the filename field's byte cap (DOS `MAXPATH`; rstv uses 255).
+const MAXPATH: i32 = 255;
+
+/// `fdOKButton` — insert an "OK" button (`cmFileOpen`).
+pub const FD_OK_BUTTON: u16 = 0x0001;
+/// `fdOpenButton` — insert an "Open" button (`cmFileOpen`).
+pub const FD_OPEN_BUTTON: u16 = 0x0002;
+/// `fdReplaceButton` — insert a "Replace" button (`cmFileReplace`).
+pub const FD_REPLACE_BUTTON: u16 = 0x0004;
+/// `fdClearButton` — insert a "Clear" button (`cmFileClear`).
+pub const FD_CLEAR_BUTTON: u16 = 0x0008;
+/// `fdHelpButton` — insert a "Help" button (`cmHelp`).
+pub const FD_HELP_BUTTON: u16 = 0x0010;
+/// `fdNoLoadDir` — skip the initial `readDirectory` on open.
+pub const FD_NO_LOAD_DIR: u16 = 0x0100;
+
+// Button / label text. `~X~` is rstv's hotkey markup (the widgets parse it).
+const FILES_TEXT: &str = "~F~iles";
+const OPEN_TEXT: &str = "~O~pen";
+const OK_TEXT: &str = "O~K~";
+const REPLACE_TEXT: &str = "~R~eplace";
+const CLEAR_TEXT: &str = "~C~lear";
+const CANCEL_TEXT: &str = "Cancel";
+const HELP_TEXT: &str = "~H~elp";
+
+/// The action-button layout for a given `options` mask — the pure decision the
+/// ctor realizes into `TButton`s. Each tuple is `(text, command, is_default,
+/// y_top)`.
+///
+/// Faithful to the C++ ctor loop (tfildlg.cpp): `opt` starts `bfDefault`; each
+/// *option* button (Open/OK/Replace/Clear, in that order) consumes the default
+/// then resets `opt` to `bfNormal`, so only the **first** option button is the
+/// default. **Cancel is always inserted, and Cancel/Help are hardcoded
+/// `bfNormal`** — they never participate in the default chain (so a dialog with
+/// no option buttons has no default button at all). `r` starts at `(35,3,46,5)`
+/// and steps `+3` in y on every button (`y_top` = 3, 6, 9, …).
+fn button_specs(options: u16) -> Vec<(&'static str, crate::command::Command, bool, i32)> {
+    use crate::command::Command;
+    let mut specs: Vec<(&'static str, Command, bool, i32)> = Vec::new();
+    let mut y = 3;
+    let mut default = true;
+    // `is_opt` = participates in the bfDefault chain (the four option buttons).
+    let push = |specs: &mut Vec<_>, y: &mut i32, default: &mut bool, text, cmd, is_opt: bool| {
+        let is_default = is_opt && *default;
+        specs.push((text, cmd, is_default, *y));
+        if is_opt {
+            *default = false;
+        }
+        *y += 3;
+    };
+
+    if options & FD_OPEN_BUTTON != 0 {
+        push(
+            &mut specs,
+            &mut y,
+            &mut default,
+            OPEN_TEXT,
+            Command::FILE_OPEN,
+            true,
+        );
+    }
+    if options & FD_OK_BUTTON != 0 {
+        push(
+            &mut specs,
+            &mut y,
+            &mut default,
+            OK_TEXT,
+            Command::FILE_OPEN,
+            true,
+        );
+    }
+    if options & FD_REPLACE_BUTTON != 0 {
+        push(
+            &mut specs,
+            &mut y,
+            &mut default,
+            REPLACE_TEXT,
+            Command::FILE_REPLACE,
+            true,
+        );
+    }
+    if options & FD_CLEAR_BUTTON != 0 {
+        push(
+            &mut specs,
+            &mut y,
+            &mut default,
+            CLEAR_TEXT,
+            Command::FILE_CLEAR,
+            true,
+        );
+    }
+    // Cancel: always inserted, hardcoded bfNormal (is_opt = false).
+    push(
+        &mut specs,
+        &mut y,
+        &mut default,
+        CANCEL_TEXT,
+        Command::CANCEL,
+        false,
+    );
+    if options & FD_HELP_BUTTON != 0 {
+        push(
+            &mut specs,
+            &mut y,
+            &mut default,
+            HELP_TEXT,
+            Command::HELP,
+            false,
+        );
+    }
+    specs
+}
+
+/// `TFileDialog` (tfildlg.cpp) — a [`Dialog`] that assembles the row-76/77/78
+/// widgets ([`FileList`], [`FileInputLine`], [`FileInfoPane`]) plus a filename
+/// label, a history icon, a scroll bar, and the action buttons into a working
+/// file picker.
+///
+/// ## Structural shape (D2 embed-and-delegate)
+///
+/// `TFileDialog` is a C++ subclass of `TDialog`. In rstv it **embeds** a
+/// [`Dialog`] and forwards the un-overridden [`View`](crate::view::View) methods
+/// via `#[crate::delegate(to = dialog)]`. It overrides only `handle_event`,
+/// `size_limits`, `reset_current`, and `as_any_mut` (so the modal loop / the
+/// owner-downcast target is the `FileDialog`, not the inner `Dialog`).
+/// `calc_bounds` is **skip-listed** (left at the trait default) so an
+/// owner-driven resize routes through this type's `size_limits` 49×19 floor —
+/// mirroring the `EditWindow` precedent.
+///
+/// ## D14 — native Linux paths
+///
+/// The initial directory comes from [`std::env::current_dir`] (not DOS
+/// `getCurDir`), normalized to end with `/` (the [`FileList::read_directory`]
+/// trailing-slash precondition). No drive letters, no `\`.
+///
+/// ## Deferrals (the B1 skeleton — B2 follows)
+///
+/// - `getFileName`/`valid`/`checkDirectory` path-validation + their messageBoxes
+///   — `TODO(row 79 B2)`.
+/// - The "21st-century percentages" screen-relative resize block in the ctor —
+///   `TODO(row 79 B2)`; the dialog keeps its base 49×19 size.
+/// - `wfGrow` — `TODO(row 79 B2)`; `WindowFlags` is private behind `Dialog` and
+///   not snapshot-visible, so the grow flag is not wired in the skeleton.
+/// - **D12:** `TStreamable` (`write`/`read`/`build`/`streamableName`) dropped.
+pub struct FileDialog {
+    /// The embedded `TDialog` — the D2 delegation target.
+    dialog: Dialog,
+    /// `wildCard` — the active file mask (cached; pushed to the children).
+    wild_card: String,
+    /// `directory` — set by `reset_current`'s initial `readDirectory` (D14,
+    /// `/`-terminated).
+    directory: String,
+    /// The [`FileInputLine`] child's id.
+    // TODO(row 79 B2): read by getFileName/valid (the filename the dialog
+    // returns); stored now (links the label + history at ctor time), unread
+    // until B2 lands the path-validation + result-gathering.
+    #[allow(dead_code)]
+    file_name_id: crate::view::ViewId,
+    /// The [`FileList`] child's id.
+    file_list_id: crate::view::ViewId,
+    /// The [`FileInfoPane`] child's id.
+    info_pane_id: crate::view::ViewId,
+    /// One-time guard for the `reset_current` initial `readDirectory`.
+    needs_read_directory: bool,
+}
+
+impl FileDialog {
+    /// `TFileDialog::TFileDialog(wildCard, title, inputName, aOptions, histId)`.
+    ///
+    /// Assembles the children in the **exact C++ insertion order** (so the
+    /// labels/history can link to the already-captured input-line / file-list
+    /// ids, and `reset_current` focuses the first selectable = the input line).
+    /// Bounds are verbatim from the C++; `grow_mode` is set per the C++ table on
+    /// each child before insert (faithful completeness — resize is not exercised
+    /// in a fixed-size snapshot).
+    pub fn new(
+        wild_card: impl Into<String>,
+        title: impl Into<String>,
+        input_name: impl Into<String>,
+        options: u16,
+        history_id: u8,
+    ) -> Self {
+        use crate::view::{GrowMode, Rect, View};
+        use crate::widgets::{Button, ButtonFlags, Label, ScrollBar, THistory};
+
+        let wild_card = wild_card.into();
+        let input_name = input_name.into();
+
+        // TDialog(TRect(15,1,64,20), title); options |= ofCentered; flags |= wfGrow.
+        let mut dialog = Dialog::new(Rect::new(15, 1, 64, 20), Some(title.into()));
+        // ofCentered — reachable via the public View::state_mut() → ViewState.
+        {
+            let opts = &mut dialog.state_mut().options;
+            opts.center_x = true;
+            opts.center_y = true;
+        }
+        // TODO(row 79 B2): flags |= wfGrow (WindowFlags is private behind Dialog;
+        // not snapshot-visible, so the grow flag is deferred to B2).
+
+        // --- fileName: TFileInputLine(TRect(3,3,31,4), MAXPATH) --------------
+        // strnzcpy(fileName->data, wildCard) — initial text = the wildcard.
+        // growMode = gfGrowHiX.
+        let mut fil = FileInputLine::new(Rect::new(3, 3, 31, 4), MAXPATH, wild_card.clone());
+        fil.inner.data = wild_card.clone();
+        fil.inner.state.grow_mode = GrowMode {
+            hi_x: true,
+            ..Default::default()
+        };
+        let file_name_id = dialog.insert_child(Box::new(fil));
+
+        // --- TLabel(TRect(2,2,3+len(inputName),3), inputName, fileName) ------
+        // growMode = 0.
+        let label_w = 3 + cstrlen(&input_name);
+        dialog.insert_child(Box::new(Label::new(
+            Rect::new(2, 2, label_w, 3),
+            input_name,
+            Some(file_name_id),
+        )));
+
+        // --- THistory(TRect(31,3,34,4), fileName, histId) -------------------
+        // growMode = gfGrowLoX | gfGrowHiX.
+        let mut hist = THistory::new(Rect::new(31, 3, 34, 4), file_name_id, history_id);
+        hist.state_mut().grow_mode = GrowMode {
+            lo_x: true,
+            hi_x: true,
+            ..Default::default()
+        };
+        dialog.insert_child(Box::new(hist));
+
+        // --- TScrollBar(TRect(3,14,34,15)) ----------------------------------
+        let sb_id = dialog.insert_child(Box::new(ScrollBar::new(Rect::new(3, 14, 34, 15))));
+
+        // --- fileList: TFileList(TRect(3,6,34,14), sb) ----------------------
+        // growMode = gfGrowHiX | gfGrowHiY.
+        let mut fl = FileList::new(Rect::new(3, 6, 34, 14), None, Some(sb_id));
+        fl.lv.state.grow_mode = GrowMode {
+            hi_x: true,
+            hi_y: true,
+            ..Default::default()
+        };
+        let file_list_id = dialog.insert_child(Box::new(fl));
+
+        // --- TLabel(TRect(2,5,8,6), filesText, fileList) --------------------
+        // growMode = 0.
+        dialog.insert_child(Box::new(Label::new(
+            Rect::new(2, 5, 8, 6),
+            FILES_TEXT,
+            Some(file_list_id),
+        )));
+
+        // --- the action buttons ---------------------------------------------
+        // The which/order/default/y decision is the pure `button_specs` helper;
+        // here we just realize each spec into a TButton at `r(35, y, 46, y+2)`
+        // (growMode = gfGrowLoX | gfGrowHiX). r steps +3 in y per button.
+        let grow_lo_hi_x = GrowMode {
+            lo_x: true,
+            hi_x: true,
+            ..Default::default()
+        };
+        for (text, cmd, is_default, y) in button_specs(options) {
+            let flags = if is_default {
+                ButtonFlags {
+                    default: true,
+                    ..Default::default()
+                }
+            } else {
+                ButtonFlags::new()
+            };
+            let mut b = Button::new(Rect::new(35, y, 46, y + 2), text, cmd, flags);
+            b.state.grow_mode = grow_lo_hi_x;
+            dialog.insert_child(Box::new(b));
+        }
+
+        // --- infoPane: TFileInfoPane(TRect(1,16,48,18)) ---------------------
+        // growMode = gfGrowAll & ~gfGrowLoX = { lo_y, hi_x, hi_y }.
+        let mut fip = FileInfoPane::new(Rect::new(1, 16, 48, 18), "", wild_card.clone());
+        fip.state_mut().grow_mode = GrowMode {
+            lo_y: true,
+            hi_x: true,
+            hi_y: true,
+            ..Default::default()
+        };
+        let info_pane_id = dialog.insert_child(Box::new(fip));
+
+        // selectNext(False): the modal loop's reset_current establishes currency
+        // (focuses the first selectable child = the input line, inserted first),
+        // so no explicit selectNext is needed here (see View::reset_current).
+
+        // TODO(row 79 B2): the "21st-century percentages" screen-relative resize
+        // block — scales the dialog from the base 49x19 using application->size.
+        // It needs the app size; skip it, keep the base 49x19.
+
+        FileDialog {
+            dialog,
+            wild_card,
+            directory: String::new(),
+            file_name_id,
+            file_list_id,
+            info_pane_id,
+            needs_read_directory: options & FD_NO_LOAD_DIR == 0,
+        }
+    }
+}
+
+#[crate::delegate(
+    to = dialog,
+    skip(
+        apply_list_scroll,
+        as_any_mut,
+        calc_bounds,
+        grabs_focus_on_click,
+        select_window_num,
+        set_value,
+        size_limits,
+        value
+    )
+)]
+impl crate::view::View for FileDialog {
+    /// `TFileDialog::handleEvent` — delegate to `TDialog::handleEvent` first (the
+    /// faithful base call), then:
+    /// - `cmFileOpen`/`cmFileReplace`/`cmFileClear` → `endModal(command)` + clear.
+    ///   (B2 inserts the `valid()` path-check gate before accepting.)
+    /// - `cmFileDoubleClicked` broadcast → re-inject as `cmOK` (`putEvent`) +
+    ///   clear. The base `TDialog::handleEvent` then turns `cmOK` into
+    ///   `endModal(cmOK)` on the next cycle (the dialog is modal).
+    fn handle_event(&mut self, ev: &mut crate::event::Event, ctx: &mut crate::view::Context) {
+        use crate::command::Command;
+        use crate::event::Event;
+
+        // TDialog::handleEvent FIRST (faithful order).
+        self.dialog.handle_event(ev, ctx);
+
+        match *ev {
+            // TODO(row 79 B2): valid() path-check before accepting; for now end
+            // the modal directly with the result command.
+            Event::Command(c)
+                if matches!(
+                    c,
+                    Command::FILE_OPEN | Command::FILE_REPLACE | Command::FILE_CLEAR
+                ) =>
+            {
+                ctx.end_modal(c);
+                ev.clear();
+            }
+            // cmFileDoubleClicked -> re-inject cmOK (putEvent == ctx.post), clear.
+            Event::Broadcast {
+                command: Command::FILE_DOUBLE_CLICKED,
+                ..
+            } => {
+                ctx.post(Command::OK);
+                ev.clear();
+            }
+            _ => {}
+        }
+    }
+
+    /// `TFileDialog::sizeLimits` — `min = {49, 19}` (the base dialog size);
+    /// `max` from the embedded dialog. `calc_bounds` is in the skip list so an
+    /// owner-driven resize routes through this floor (the `EditWindow` pattern).
+    fn size_limits(
+        &self,
+        owner_size: crate::view::Point,
+    ) -> (crate::view::Point, crate::view::Point) {
+        let (_min, max) = crate::view::View::size_limits(&self.dialog, owner_size);
+        (crate::view::Point::new(49, 19), max)
+    }
+
+    /// The ctx-bearing init hook (the C++ ctor's trailing `readDirectory()` maps
+    /// here — the ctor has no `Context`). Establishes the dialog's internal
+    /// currency first (focuses the input line), then, once, performs the initial
+    /// `readDirectory`: the current dir (D14, `/`-terminated) is read into the
+    /// [`FileList`] (ctx-ful — scrollbar sync + `cmFileFocused` broadcast) and the
+    /// [`FileInfoPane`]'s cached dir/wildcard are refreshed (direct owner-state
+    /// push, not a cross-view broker — the dialog owns the group).
+    fn reset_current(&mut self, ctx: &mut crate::view::Context) {
+        self.dialog.reset_current(ctx);
+
+        if self.needs_read_directory {
+            self.needs_read_directory = false;
+            // D14: the initial directory from std::env::current_dir, not getCurDir.
+            let dir = std::env::current_dir()
+                .ok()
+                .and_then(|p| p.to_str().map(String::from))
+                .unwrap_or_else(|| "/".into());
+            // D14 trailing-slash precondition for FileList::read_directory.
+            let dir = if dir.ends_with('/') {
+                dir
+            } else {
+                format!("{dir}/")
+            };
+            self.directory = dir.clone();
+            let wild = self.wild_card.clone();
+
+            // FileList ctx-ful read: builds + scrollbar sync + cmFileFocused
+            // broadcast (the broker updates the info pane / input line).
+            if let Some(fl) = self
+                .dialog
+                .child_mut(self.file_list_id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<FileList>())
+            {
+                fl.read_directory(&dir, &wild, ctx);
+            }
+            // Owner-state push to the info pane (direct child mutation — the dialog
+            // owns the group, so this is NOT a cross-view broker).
+            if let Some(fip) = self
+                .dialog
+                .child_mut(self.info_pane_id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<FileInfoPane>())
+            {
+                fip.set_dir_info(&dir, &wild);
+            }
+        }
+    }
+
+    /// The modal loop and any owner-downcast target must reach the `FileDialog`,
+    /// so `as_any_mut` returns `self`, NOT the inner `Dialog`.
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         Some(self)
     }
@@ -2613,5 +3076,335 @@ mod tests {
         let mut fip = FileInfoPane::new(Rect::new(0, 0, 47, 3), "/home/oetiker/", "*.rs");
         // file_block stays None -> blank line 1.
         insta::assert_snapshot!(render_fip(&mut fip, 47, 3));
+    }
+
+    // =========================================================================
+    // FileDialog — row 79 (skeleton: B1)
+    // =========================================================================
+
+    /// Resolve a `FileList` child by id, panicking if absent (test helper).
+    fn fd_file_list(fd: &mut FileDialog) -> &mut FileList {
+        fd.dialog
+            .child_mut(fd.file_list_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<FileList>())
+            .expect("file_list resolves")
+    }
+
+    // -- 1. assembly: ids distinct + the three captured children resolve -------
+
+    #[test]
+    fn file_dialog_assembles_children() {
+        // Open + Help selected (plus the always-present Cancel).
+        let mut fd = FileDialog::new(
+            "*.rs",
+            "Open a File",
+            "Name",
+            FD_OPEN_BUTTON | FD_HELP_BUTTON,
+            0,
+        );
+
+        // The three captured ids are distinct and non-zero.
+        assert_ne!(fd.file_name_id, fd.file_list_id);
+        assert_ne!(fd.file_list_id, fd.info_pane_id);
+        assert_ne!(fd.file_name_id, fd.info_pane_id);
+
+        // Each captured child resolves via child_mut + downcast.
+        assert!(
+            fd.dialog
+                .child_mut(fd.file_name_id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<FileInputLine>())
+                .is_some(),
+            "file_name resolves to a FileInputLine"
+        );
+        assert!(
+            fd.dialog
+                .child_mut(fd.file_list_id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<FileList>())
+                .is_some(),
+            "file_list resolves to a FileList"
+        );
+        assert!(
+            fd.dialog
+                .child_mut(fd.info_pane_id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<FileInfoPane>())
+                .is_some(),
+            "info_pane resolves to a FileInfoPane"
+        );
+
+        // The input line shows the wildcard as its initial text (strnzcpy).
+        let fil = fd
+            .dialog
+            .child_mut(fd.file_name_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<FileInputLine>())
+            .unwrap();
+        assert_eq!(fil.inner.data, "*.rs", "input line initial text = wildcard");
+
+        // needs_read_directory is armed when fdNoLoadDir is NOT set.
+        assert!(fd.needs_read_directory, "armed without fdNoLoadDir");
+    }
+
+    /// `fdNoLoadDir` suppresses the initial readDirectory arming.
+    #[test]
+    fn file_dialog_no_load_dir_disarms_read() {
+        let fd = FileDialog::new("*", "t", "Name", FD_OPEN_BUTTON | FD_NO_LOAD_DIR, 0);
+        assert!(
+            !fd.needs_read_directory,
+            "fdNoLoadDir clears needs_read_directory"
+        );
+    }
+
+    // -- 1a. button_specs: the which/order/default/y chain by option mask ------
+
+    /// The pure button-layout decision (the source of the ctor's button set).
+    /// Covers the degenerate no-option case, a single-option default, and the
+    /// all-options chain (only the first is default; y steps +3).
+    #[test]
+    fn file_dialog_button_specs_combinations() {
+        use crate::command::Command;
+
+        // No option buttons -> only Cancel, and NO default button at all.
+        let none = button_specs(0);
+        assert_eq!(none.len(), 1, "only Cancel inserted");
+        assert_eq!(none[0].1, Command::CANCEL);
+        assert!(!none[0].2, "Cancel is never the default (bfNormal)");
+        assert_eq!(none[0].3, 3, "Cancel at the base y = 3");
+
+        // FD_OK_BUTTON alone -> OK (default, cmFileOpen) + Cancel.
+        let ok = button_specs(FD_OK_BUTTON);
+        assert_eq!(ok.len(), 2, "OK + Cancel");
+        assert_eq!(ok[0].0, OK_TEXT);
+        assert_eq!(ok[0].1, Command::FILE_OPEN, "OK fires cmFileOpen");
+        assert!(ok[0].2, "the lone option button is the default");
+        assert_eq!(ok[1].1, Command::CANCEL);
+        assert!(!ok[1].2, "Cancel not default");
+
+        // All option buttons + Help -> Open, OK, Replace, Clear, Cancel, Help.
+        let all = button_specs(
+            FD_OPEN_BUTTON | FD_OK_BUTTON | FD_REPLACE_BUTTON | FD_CLEAR_BUTTON | FD_HELP_BUTTON,
+        );
+        assert_eq!(all.len(), 6, "4 option + Cancel + Help");
+        // Order + commands.
+        assert_eq!(
+            all.iter().map(|b| b.1).collect::<Vec<_>>(),
+            vec![
+                Command::FILE_OPEN,    // Open
+                Command::FILE_OPEN,    // OK
+                Command::FILE_REPLACE, // Replace
+                Command::FILE_CLEAR,   // Clear
+                Command::CANCEL,       // Cancel
+                Command::HELP,         // Help
+            ]
+        );
+        // Only the first (Open) is the default.
+        assert!(all[0].2, "Open is the default");
+        assert!(
+            !all[1..].iter().any(|b| b.2),
+            "no button after the first is the default"
+        );
+        // y steps +3 per button, starting at 3.
+        assert!(
+            all.iter().enumerate().all(|(i, b)| b.3 == 3 + 3 * i as i32),
+            "y_top steps +3 per button: {:?}",
+            all.iter().map(|b| b.3).collect::<Vec<_>>()
+        );
+    }
+
+    // -- 1b. reset_current performs the initial readDirectory (the title task) --
+
+    /// Driving `reset_current` (the ctx-bearing init hook) once flips the guard,
+    /// sets the D14 trailing-slash directory, and reads the current dir into the
+    /// FileList. Asserts invariants (not the machine-dependent cwd contents): the
+    /// guard flips, `directory` ends with `/`, and the FileList got a non-empty
+    /// listing (the cwd always has at least `..`). A second call is a no-op.
+    #[test]
+    fn file_dialog_reset_current_reads_directory() {
+        let mut fd = FileDialog::new("*", "t", "Name", FD_OPEN_BUTTON, 0);
+        assert!(fd.needs_read_directory);
+
+        let mut out: VecDeque<Event> = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            View::reset_current(&mut fd, &mut ctx);
+        }
+        assert!(!fd.needs_read_directory, "guard flips after the first run");
+        assert!(
+            fd.directory.ends_with('/'),
+            "D14 trailing-slash precondition on directory: {:?}",
+            fd.directory
+        );
+        assert!(
+            fd_file_list(&mut fd).lv().range > 0,
+            "current dir read into the FileList (cwd always has at least '..')"
+        );
+
+        // A second reset_current is a no-op (the guard already cleared).
+        let range_after_first = fd_file_list(&mut fd).lv().range;
+        {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            View::reset_current(&mut fd, &mut ctx);
+        }
+        assert_eq!(
+            fd_file_list(&mut fd).lv().range,
+            range_after_first,
+            "second reset_current does not re-read"
+        );
+    }
+
+    // -- 2. handle_event: result commands end the modal ------------------------
+
+    #[test]
+    fn file_dialog_file_open_ends_modal() {
+        let mut fd = FileDialog::new("*", "t", "Name", FD_OPEN_BUTTON, 0);
+
+        let mut out: VecDeque<Event> = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        let mut ev = Event::Command(Command::FILE_OPEN);
+        {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            fd.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "cmFileOpen consumed");
+        assert_eq!(
+            deferred
+                .iter()
+                .filter(|d| matches!(d, Deferred::EndModal(Command::FILE_OPEN)))
+                .count(),
+            1,
+            "cmFileOpen queues EndModal(FILE_OPEN) directly (no modal-flag gate)"
+        );
+    }
+
+    // -- 3. handle_event: double-click re-injects cmOK -------------------------
+
+    #[test]
+    fn file_dialog_double_click_posts_ok() {
+        let mut fd = FileDialog::new("*", "t", "Name", FD_OPEN_BUTTON, 0);
+
+        let mut out: VecDeque<Event> = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        let mut ev = Event::Broadcast {
+            command: Command::FILE_DOUBLE_CLICKED,
+            source: Some(crate::view::ViewId::next()),
+        };
+        {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            fd.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "cmFileDoubleClicked consumed");
+        assert!(
+            out.iter().any(|e| *e == Event::Command(Command::OK)),
+            "cmFileDoubleClicked re-injects cmOK (putEvent == ctx.post)"
+        );
+    }
+
+    // -- 4. read_directory_listing (ctx-free) populates the listing ------------
+
+    #[test]
+    fn file_list_read_directory_listing_populates() {
+        // Deterministic fixture dir under the system temp dir.
+        let tmp = std::env::temp_dir().join(format!("rstv_filedlg_b1_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("keep.txt"), b"x").unwrap();
+        std::fs::write(tmp.join("skip.rs"), b"y").unwrap();
+        std::fs::create_dir_all(tmp.join("sub")).unwrap();
+        let dir = format!("{}/", tmp.to_string_lossy());
+
+        let mut fl = FileList::new(Rect::new(0, 0, 30, 8), None, None);
+        fl.read_directory_listing(&dir, "*.txt");
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let names: Vec<&str> = fl.list().iter().map(|r| r.name.as_str()).collect();
+        // "keep.txt" matches; "skip.rs" filtered; "sub" dir kept; ".." synthesized.
+        assert_eq!(names, vec!["keep.txt", "sub", ".."]);
+        // range/focused/top_item published without a Context.
+        assert_eq!(fl.lv().range, 3, "range == listing length");
+        assert_eq!(fl.lv().focused, 0, "focused reset to 0");
+        assert_eq!(fl.lv().top_item, 0, "top_item reset to 0");
+    }
+
+    // -- 5. snapshot: a fully-assembled dialog with a deterministic listing ----
+
+    /// Render the assembled FileDialog with a hardcoded listing injected (so the
+    /// frame is deterministic — no real-filesystem size/mtime). The info pane's
+    /// `file_block` is left `None` (blank size/date line); only its path line
+    /// draws. Hand-verify: the frame + title, the input field showing "*.rs",
+    /// the "Name" + "Files" labels, the Open/Cancel buttons, the two-column
+    /// file list, and the "/fixture/*.rs" path line in the info pane.
+    #[test]
+    fn snapshot_file_dialog() {
+        use crate::backend::{HeadlessBackend, Renderer};
+        use crate::screen::Buffer;
+        use crate::theme::Theme;
+        use crate::view::DrawCtx;
+
+        let mut fd = FileDialog::new("*.rs", "Open a File", "Name", FD_OPEN_BUTTON, 0);
+        // Mark the dialog selected/active so the frame draws its active style.
+        fd.dialog.state_mut().state.selected = true;
+        fd.dialog.state_mut().state.active = true;
+
+        // Inject a deterministic listing into the FileList (no fs read).
+        {
+            let fl = fd_file_list(&mut fd);
+            fl.items = vec![
+                SearchRec {
+                    attr: 0,
+                    time: 0,
+                    size: 100,
+                    name: "lib.rs".into(),
+                },
+                SearchRec {
+                    attr: 0,
+                    time: 0,
+                    size: 200,
+                    name: "main.rs".into(),
+                },
+                SearchRec {
+                    attr: FA_DIREC,
+                    time: 0,
+                    size: 0,
+                    name: "src".into(),
+                },
+                SearchRec {
+                    attr: FA_DIREC,
+                    time: DOTDOT_TIME,
+                    size: 0,
+                    name: "..".into(),
+                },
+            ];
+            fl.lv.range = fl.items.len() as i32;
+            fl.lv.focused = 0;
+            fl.lv.state.state.selected = true;
+            fl.lv.state.state.active = true;
+        }
+        // Set the info pane's path line deterministically.
+        if let Some(fip) = fd
+            .dialog
+            .child_mut(fd.info_pane_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<FileInfoPane>())
+        {
+            fip.set_dir_info("/fixture/", "*.rs");
+        }
+
+        let theme = Theme::classic_blue();
+        let (backend, screen) = HeadlessBackend::new(64, 20);
+        let mut r = Renderer::new(Box::new(backend));
+        let mut view: Box<dyn View> = Box::new(fd);
+        r.render(|buf: &mut Buffer| {
+            let bounds = view.state().get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            view.draw(&mut dc);
+        });
+        insta::assert_snapshot!(screen.snapshot());
     }
 }

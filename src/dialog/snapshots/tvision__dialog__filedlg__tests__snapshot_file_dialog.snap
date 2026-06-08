@@ -1,0 +1,61 @@
+---
+source: src/dialog/filedlg.rs
+expression: screen.snapshot()
+---
+size: 64x20
+cursor: hidden
+text:
+|                                                                |
+|               ┌───────────────── Open a File ─────────────────┐|
+|               │                                               │|
+|               │  Name                                         │|
+|               │   *.rs                       ▐↓▌    Open   ▄  │|
+|               │                                    ▀▀▀▀▀▀▀▀▀  │|
+|               │  Files                                        │|
+|               │   lib.rs        │                  Cancel  ▄  │|
+|               │   main.rs       │                  ▀▀▀▀▀▀▀▀▀  │|
+|               │   src/          │                             │|
+|               │   ../           │                             │|
+|               │                 │                             │|
+|               │                 │                             │|
+|               │                 │                             │|
+|               │                 │                             │|
+|               │  ◄▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓►              │|
+|               │                                               │|
+|               │ /fixture/*.rs                                 │|
+|               │                                               │|
+|               └───────────────────────────────────────────────┘|
+attr:
+|................................................................|
+|...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|...............aabbbbbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|...............aaacccccccccccccccccccccccccccccdcaeffgffffffeaaa|
+|...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaeeeeeeeeeeeaaa|
+|...............aabhbbbbaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|...............aaaiiiiiiiiiiiiiiiaaaaaaaaaaaaaaaaaefffffffffeaaa|
+|...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaeeeeeeeeeeeaaa|
+|...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|...............aaajjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjaaaaaaaaaaaaaaa|
+|...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+|...............akkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkka|
+|...............akkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkka|
+|...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(7) bg=BIOS(1)
+  b fg=BIOS(0) bg=BIOS(7)
+  c fg=BIOS(0) bg=BIOS(3)
+  d fg=BIOS(14) bg=BIOS(3)
+  e fg=BIOS(8) bg=BIOS(0)
+  f fg=BIOS(0) bg=BIOS(2)
+  g fg=BIOS(14) bg=BIOS(2)
+  h fg=BIOS(4) bg=BIOS(7)
+  i fg=BIOS(15) bg=BIOS(1)
+  j fg=BIOS(1) bg=BIOS(3)
+  k fg=BIOS(3) bg=BIOS(1)

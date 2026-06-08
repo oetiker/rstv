@@ -66,6 +66,15 @@ impl Dialog {
     pub(crate) fn insert_child(&mut self, view: Box<dyn View>) -> ViewId {
         self.window.insert_child(view)
     }
+
+    /// Reach a direct child of the dialog's embedded window/group by id.
+    ///
+    /// Mirrors [`Window::child_mut`]; used by `FileDialog` (row 79) to run a
+    /// child's post-insert, ctx-bearing init (e.g. `FileList::read_directory`)
+    /// and to read it back via `as_any_mut` + downcast.
+    pub(crate) fn child_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
+        self.window.child_mut(id)
+    }
 }
 
 #[crate::delegate(
