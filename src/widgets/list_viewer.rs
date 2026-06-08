@@ -68,7 +68,7 @@
 use crate::command::Command;
 use crate::event::{Event, Key, ctrl_to_arrow};
 use crate::theme::Role;
-use crate::view::{Context, DrawCtx, StateFlag, View, ViewId, ViewState};
+use crate::view::{Context, DrawCtx, Point, StateFlag, View, ViewId, ViewState};
 
 /// The empty-list placeholder text (`TListViewer::emptyText`, `tlstview.cpp`).
 const EMPTY_TEXT: &str = "<empty>";
@@ -565,7 +565,7 @@ pub fn draw<L: ListViewer + ?Sized>(this: &L, ctx: &mut DrawCtx) {
 ///
 /// (C++ `draw` calls `setCursor` as a side effect; under our `&self` draw +
 /// top-down cursor walk the position is derived on demand instead.)
-pub fn focused_cursor<L: ListViewer + ?Sized>(this: &L) -> Option<crate::view::Point> {
+pub fn focused_cursor<L: ListViewer + ?Sized>(this: &L) -> Option<Point> {
     let lv = this.lv();
     let st = &lv.state.state;
     if !(st.selected && st.active) || lv.range <= 0 {
@@ -580,11 +580,186 @@ pub fn focused_cursor<L: ListViewer + ?Sized>(this: &L) -> Option<crate::view::P
         for j in 0..num_cols {
             let item = j * size.y + i + top_item;
             if focused == item {
-                return Some(crate::view::Point::new(j * col_width + 1, i));
+                return Some(Point::new(j * col_width + 1, i));
             }
         }
     }
     None
+}
+
+// ---------------------------------------------------------------------------
+// SortedSearch — TSortedListBox's type-to-search hooks (D-A sub-trait)
+// ---------------------------------------------------------------------------
+
+/// The `kbShift` mask = `kbLeftShift | kbRightShift` = `0x01 | 0x02`. The
+/// incremental-search state machine captures it at the `searchPos -1↔0`
+/// transition; file/dir subclasses (`FileList`) test `shift_state() & KB_SHIFT`.
+pub const KB_SHIFT: u8 = 0x03;
+
+/// Case-insensitive equality of the first `n` chars — C++ `equal` / `strnicmp`.
+fn ci_prefix_eq(a: &[char], b: &[char], n: usize) -> bool {
+    if a.len() < n || b.len() < n {
+        return false;
+    }
+    a[..n]
+        .iter()
+        .zip(&b[..n])
+        .all(|(x, y)| x.eq_ignore_ascii_case(y))
+}
+
+/// `TSortedListBox`'s type-to-search hooks — the polymorphic parts of the
+/// incremental-search state machine. The shared machine is [`sorted_handle_event`]
+/// + [`sorted_cursor`]; concrete widgets (SortedListBox, FileList) implement these.
+pub trait SortedSearch: ListViewer {
+    /// `searchPos` — index of the last matched char in the focused item's text;
+    /// -1 = no active search.
+    fn search_pos(&self) -> i32;
+    fn set_search_pos(&mut self, pos: i32);
+    /// `shiftState` — `kbShift` bits captured at the searchPos -1↔0 transition.
+    /// The base SortedListBox never reads it; file/dir subclasses' `search` does.
+    fn shift_state(&self) -> u8;
+    fn set_shift_state(&mut self, s: u8);
+    /// `getKey(curString)` + `list()->search(key, value)` fused: given the prepared
+    /// prefix chars `cur` (already truncated by the state machine), return the
+    /// insertion index in `0..=range` of the first item NOT LESS than the key.
+    fn search(&self, cur: &[char]) -> i32;
+}
+
+/// `TSortedListBox::handleEvent` — incremental type-to-search state machine.
+/// Reusable verbatim by every `SortedSearch` widget (SortedListBox, FileList).
+///
+/// TRAP 1: `cur` is re-seeded from the FOCUSED ITEM'S text every keystroke,
+/// not from an accumulated typed-chars buffer. `searchPos` indexes into `cur`.
+///
+/// TRAP 2: exact sequence: save `old_value = focused` → delegate to base
+/// [`handle_event`] (`TListBox::handleEvent` == `TListViewer::handleEvent`, since
+/// TListBox does not override it) → reset `search_pos = -1` if `focused` changed
+/// OR a `cmReleasedFocus` broadcast → THEN gate on `ev` still being a `KeyDown`.
+pub fn sorted_handle_event<L: SortedSearch + ?Sized>(
+    this: &mut L,
+    ev: &mut Event,
+    ctx: &mut Context,
+) {
+    let old_value = this.lv().focused;
+    handle_event(this, ev, ctx); // (1) base first
+
+    // (2) reset search on focus change OR a cmReleasedFocus broadcast.
+    let released = matches!(ev,
+        Event::Broadcast { command, .. } if *command == Command::RELEASED_FOCUS);
+    if old_value != this.lv().focused || released {
+        this.set_search_pos(-1);
+    }
+
+    // (3) only keys the base passed through are STILL KeyDown here.
+    let ke = match *ev {
+        Event::KeyDown(ke) => ke,
+        _ => return,
+    };
+
+    // charScan.charCode != 0: only Char(..) and Backspace produce a charCode.
+    // Other passed-through keys (charCode 0) are ignored.
+    // Determine the acting char (None = Backspace; Some(c) = a character).
+    let acting: Option<char> = match ke.key {
+        Key::Char(c) => Some(c),
+        Key::Backspace => None,
+        _ => return, // charCode == 0 → ignore
+    };
+
+    let range = this.lv().range;
+    let value0 = this.lv().focused;
+    // (A) seed cur from the FOCUSED item's text every keystroke.
+    let mut cur: Vec<char> = if value0 < range {
+        this.get_text(value0).chars().collect()
+    } else {
+        Vec::new()
+    };
+    let old_pos = this.search_pos();
+
+    match acting {
+        None => {
+            // kbBack branch.
+            if this.search_pos() == -1 {
+                return;
+            }
+            this.set_search_pos(this.search_pos() - 1);
+            if this.search_pos() == -1 {
+                // C++ captures controlKeyState here; capture the real kbShift bit
+                // (FileList's `search` reads it; the base SortedListBox does not).
+                this.set_shift_state(if ke.modifiers.shift { KB_SHIFT } else { 0 });
+            }
+            cur.truncate((this.search_pos() + 1).max(0) as usize);
+        }
+        Some('.') => {
+            // Dot branch: jump to the focused item's '.' separator.
+            match cur.iter().position(|&c| c == '.') {
+                None => this.set_search_pos(-1),
+                Some(i) => this.set_search_pos(i as i32),
+            }
+        }
+        Some(c) => {
+            // Character branch.
+            this.set_search_pos(this.search_pos() + 1);
+            if this.search_pos() == 0 {
+                // C++ captures controlKeyState here; capture the real kbShift bit.
+                this.set_shift_state(if ke.modifiers.shift { KB_SHIFT } else { 0 });
+            }
+            let idx = this.search_pos() as usize;
+            if idx < cur.len() {
+                cur[idx] = c;
+            } else {
+                cur.push(c);
+            }
+            cur.truncate(idx + 1);
+        }
+    }
+
+    // key = getKey(curString); search; confirm; focus or revert.
+    //
+    // The search key is the WHOLE `cur`, mirroring C++ exactly: only the char
+    // and back branches re-terminate `curString` (`curString[searchPos+1]=EOS`),
+    // which we mirror with `cur.truncate(...)` above — so for those branches
+    // `cur` IS the prefix. The DOT branch does NOT truncate, leaving `cur` as
+    // the full focused item (e.g. "file.txt"); C++ then searches that full text
+    // (NOT "file."). Only the *confirm* below uses `prefix_len` via
+    // `ci_prefix_eq`, which reads just the first `prefix_len` chars regardless
+    // of `cur`'s length.
+    let prefix_len = (this.search_pos() + 1).max(0) as usize;
+    let value = this.search(&cur);
+    if value < range {
+        let new_string: Vec<char> = this.get_text(value).chars().collect();
+        if ci_prefix_eq(&cur, &new_string, prefix_len) {
+            if value != old_value {
+                focus_item(this, value, ctx);
+            }
+            // Cursor advance is handled by sorted_cursor (derives from search_pos).
+        } else {
+            this.set_search_pos(old_pos);
+        }
+    } else {
+        this.set_search_pos(old_pos);
+    }
+
+    // Consume iff the search advanced OR the key was an alphabetic char.
+    let is_alpha = matches!(acting, Some(c) if c.is_ascii_alphabetic());
+    if this.search_pos() != old_pos || is_alpha {
+        ev.clear();
+    }
+}
+
+/// Cursor advanced past the matched prefix (C++ `setCursor(cursor.x+searchPos+1, …)`).
+///
+/// [`focused_cursor`] returns `x = col*col_width + 1` (the text-start column).
+/// Adding `(search_pos+1)` positions just after the matched prefix.
+/// With `search_pos == -1` the offset is 0 — no advance.
+///
+/// We derive the cursor ABSOLUTELY from `search_pos` (`base.x + search_pos + 1`)
+/// rather than tracking C++'s incremental `setCursor(cursor.x + (searchPos -
+/// oldPos), …)` accumulation. The result is identical: `base.x` is the
+/// text-start column re-derived each frame (no accumulated cursor state to keep
+/// in sync), so a fresh `base.x + search_pos + 1` equals C++'s running total.
+pub fn sorted_cursor<L: SortedSearch + ?Sized>(this: &L) -> Option<Point> {
+    let base = focused_cursor(this)?;
+    Some(Point::new(base.x + (this.search_pos() + 1).max(0), base.y))
 }
 
 #[cfg(test)]

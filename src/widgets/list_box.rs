@@ -175,39 +175,33 @@ fn ci_cmp(a: &str, b: &str) -> core::cmp::Ordering {
         .cmp(b.chars().map(|c| c.to_ascii_lowercase()))
 }
 
-/// Case-insensitive equality of the first `n` chars — C++ `equal` / `strnicmp`.
-fn ci_prefix_eq(a: &[char], b: &[char], n: usize) -> bool {
-    if a.len() < n || b.len() < n {
-        return false;
-    }
-    a[..n]
-        .iter()
-        .zip(&b[..n])
-        .all(|(x, y)| x.eq_ignore_ascii_case(y))
-}
-
-/// `TSortedListBox` (`stddlg.cpp`) — a [`ListBox`] with type-to-search incremental
-/// search over a case-insensitively sorted string list. D2 embed-delegate over
-/// `ListBox`; only `handle_event` (the search state machine) and `cursor_request`
-/// (advance the cursor past the matched prefix) differ.
+/// `TSortedListBox` (`stddlg.cpp`) — a list viewer with type-to-search incremental
+/// search over a case-insensitively sorted string list. A **direct `ListViewer`
+/// impl** (like [`ListBox`]); the search state machine lives as the
+/// [`sorted_handle_event`](crate::widgets::list_viewer::sorted_handle_event) /
+/// [`sorted_cursor`](crate::widgets::list_viewer::sorted_cursor) free functions
+/// over the [`SortedSearch`](crate::widgets::list_viewer::SortedSearch) sub-trait,
+/// which this widget implements.
 ///
 /// ## Deviations / deferrals
-/// * No `TSortedCollection`: rstv already models the list as a `Vec<String>`
-///   (in the embedded `ListBox`). `new_list` keeps it CASE-INSENSITIVELY SORTED so
-///   the binary search and the case-insensitive prefix-confirm cohere — a
-///   deliberate rstv choice (C++ leaves ordering to the injected collection's
-///   `compare`; the file/dir subclasses (rows 72/74/75) will set their own).
-/// * `get_key` is identity here (C++ virtual; file/dir subclasses override) — kept
-///   a private method; restructure when row 75 needs it. TODO breadcrumb.
+/// * No `TSortedCollection`: rstv models the list as an owned `Vec<String>`.
+///   `new_list` keeps it CASE-INSENSITIVELY SORTED so the binary search and the
+///   case-insensitive prefix-confirm cohere — a deliberate rstv choice (C++ leaves
+///   ordering to the injected collection's `compare`; the file/dir subclasses
+///   (rows 72/74/75) will set their own).
+/// * `getKey` is identity here (C++ virtual; file/dir subclasses override) — folded
+///   into the `SortedSearch::search` impl. FileList overrides `search` for its own
+///   getKey + ordering.
 /// * `shiftState` (C++ captures `controlKeyState` on the `searchPos -1↔0`
-///   transition) is stored but UNUSED in the base — breadcrumb.
+///   transition) is captured but UNUSED in the base — FileList reads it.
 /// * `curString`'s 256-byte cap → `Vec<char>` (no cap).
 pub struct SortedListBox {
-    inner: ListBox,
+    lv: ListViewerState,
+    items: Vec<String>,
     /// `searchPos` — index of the last matched char in the focused item's text;
     /// -1 = no active search.
     search_pos: i32,
-    /// `shiftState` — captured per C++ but unused in the base (see doc).
+    /// `shiftState` — captured per C++; UNUSED in the base (FileList reads it).
     shift_state: u8,
 }
 
@@ -219,46 +213,33 @@ impl SortedListBox {
         h: Option<ViewId>,
         v: Option<ViewId>,
     ) -> Self {
-        let mut inner = ListBox::new(bounds, num_cols, h, v);
-        View::state_mut(&mut inner).show_cursor();
-        View::state_mut(&mut inner).set_cursor(1, 0);
+        let mut lv = ListViewerState::new(bounds, num_cols, h, v);
+        lv.state.show_cursor();
+        lv.state.set_cursor(1, 0);
         SortedListBox {
-            inner,
+            lv,
+            items: Vec::new(),
             search_pos: -1,
             shift_state: 0,
         }
     }
 
-    /// `TSortedListBox::newList` — sort the items CASE-INSENSITIVELY, hand to the
-    /// inner `ListBox`, reset the search.
+    /// `TSortedListBox::newList` — sort the items CASE-INSENSITIVELY, (re)publish
+    /// the v-bar range + focus, reset the search. Mirrors [`ListBox::new_list`].
     pub fn new_list(&mut self, mut items: Vec<String>, ctx: &mut Context) {
         items.sort_by(|a, b| ci_cmp(a, b));
-        self.inner.new_list(items, ctx);
+        self.items = items;
+        let len = self.items.len() as i32;
+        list_viewer::set_range(self, len, ctx);
+        if self.lv.range > 0 {
+            list_viewer::focus_item(self, 0, ctx);
+        }
         self.search_pos = -1;
     }
 
-    /// `getKey` — identity in the base (C++ virtual; file/dir subclasses override).
-    /// TODO breadcrumb: restructure into a trait when row 75 needs it.
-    fn get_key(&self, s: &[char]) -> String {
-        s.iter().collect()
-    }
-
-    /// `list()->search(k, value)` — first index `i` in `0..range` whose item is
-    /// `>= key` case-insensitively (the C++ insertion point). Returns `range` if
-    /// none. Binary search over `get_text(i)`.
-    fn search(&self, key: &str) -> i32 {
-        use crate::widgets::list_viewer::ListViewer;
-        let range = self.inner.lv().range;
-        let (mut lo, mut hi) = (0i32, range);
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            if ci_cmp(&self.inner.get_text(mid), key) == core::cmp::Ordering::Less {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        lo
+    /// The current item collection (`TListBox::list()`).
+    pub fn list(&self) -> &[String] {
+        &self.items
     }
 
     /// Test accessor for `search_pos` (used in tests only).
@@ -268,145 +249,100 @@ impl SortedListBox {
     }
 }
 
-#[crate::delegate(to = inner)]
-impl View for SortedListBox {
-    /// `TSortedListBox::handleEvent` — incremental type-to-search state machine.
-    ///
-    /// TRAP 1: `cur` is re-seeded from the FOCUSED ITEM'S text every keystroke,
-    /// not from an accumulated typed-chars buffer. `searchPos` indexes into `cur`.
-    ///
-    /// TRAP 2: exact sequence: save `old_value = focused` → delegate to base
-    /// `handle_event` → reset `search_pos = -1` if `focused` changed OR a
-    /// `cmReleasedFocus` broadcast → THEN gate on `ev` still being a `KeyDown`.
-    fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
-        use crate::command::Command;
-        use crate::event::Key;
-        use crate::widgets::list_viewer::{self, ListViewer};
-
-        let old_value = self.inner.lv().focused;
-        self.inner.handle_event(ev, ctx); // (1) base first
-
-        // (2) reset search on focus change OR a cmReleasedFocus broadcast.
-        let released = matches!(ev,
-            Event::Broadcast { command, .. } if *command == Command::RELEASED_FOCUS);
-        if old_value != self.inner.lv().focused || released {
-            self.search_pos = -1;
-        }
-
-        // (3) only keys the base passed through are STILL KeyDown here.
-        let ke = match *ev {
-            Event::KeyDown(ke) => ke,
-            _ => return,
-        };
-
-        // charScan.charCode != 0: only Char(..) and Backspace produce a charCode.
-        // Other passed-through keys (charCode 0) are ignored.
-        // Determine the acting char (None = Backspace; Some(c) = a character).
-        let acting: Option<char> = match ke.key {
-            Key::Char(c) => Some(c),
-            Key::Backspace => None,
-            _ => return, // charCode == 0 → ignore
-        };
-
-        let range = self.inner.lv().range;
-        let value0 = self.inner.lv().focused;
-        // (A) seed cur from the FOCUSED item's text every keystroke.
-        let mut cur: Vec<char> = if value0 < range {
-            self.inner.get_text(value0).chars().collect()
-        } else {
-            Vec::new()
-        };
-        let old_pos = self.search_pos;
-
-        match acting {
-            None => {
-                // kbBack branch.
-                if self.search_pos == -1 {
-                    return;
-                }
-                self.search_pos -= 1;
-                if self.search_pos == -1 {
-                    // C++ captures controlKeyState here; the base never reads shift_state.
-                    self.shift_state = 0;
-                }
-                cur.truncate((self.search_pos + 1).max(0) as usize);
-            }
-            Some('.') => {
-                // Dot branch: jump to the focused item's '.' separator.
-                match cur.iter().position(|&c| c == '.') {
-                    None => self.search_pos = -1,
-                    Some(i) => self.search_pos = i as i32,
-                }
-            }
-            Some(c) => {
-                // Character branch.
-                self.search_pos += 1;
-                if self.search_pos == 0 {
-                    // C++ captures controlKeyState here; the base never reads shift_state.
-                    self.shift_state = 0;
-                }
-                let idx = self.search_pos as usize;
-                if idx < cur.len() {
-                    cur[idx] = c;
-                } else {
-                    cur.push(c);
-                }
-                cur.truncate(idx + 1);
-            }
-        }
-
-        // key = getKey(curString); search; confirm; focus or revert.
-        //
-        // The search key is the WHOLE `cur`, mirroring C++ exactly: only the char
-        // and back branches re-terminate `curString` (`curString[searchPos+1]=EOS`),
-        // which we mirror with `cur.truncate(...)` above — so for those branches
-        // `cur` IS the prefix. The DOT branch does NOT truncate, leaving `cur` as
-        // the full focused item (e.g. "file.txt"); C++ then searches that full text
-        // (NOT "file."). Only the *confirm* below uses `prefix_len` via
-        // `ci_prefix_eq`, which reads just the first `prefix_len` chars regardless
-        // of `cur`'s length.
-        let prefix_len = (self.search_pos + 1).max(0) as usize;
-        let key = self.get_key(&cur);
-        let value = self.search(&key);
-        if value < range {
-            let new_string: Vec<char> = self.inner.get_text(value).chars().collect();
-            if ci_prefix_eq(&cur, &new_string, prefix_len) {
-                if value != old_value {
-                    list_viewer::focus_item(&mut self.inner, value, ctx);
-                }
-                // Cursor advance is handled by cursor_request (derives from search_pos).
-            } else {
-                self.search_pos = old_pos;
-            }
-        } else {
-            self.search_pos = old_pos;
-        }
-
-        // Consume iff the search advanced OR the key was an alphabetic char.
-        let is_alpha = matches!(acting, Some(c) if c.is_ascii_alphabetic());
-        if self.search_pos != old_pos || is_alpha {
-            ev.clear();
-        }
+impl ListViewer for SortedListBox {
+    fn lv(&self) -> &ListViewerState {
+        &self.lv
     }
 
-    /// Cursor advanced past the matched prefix (C++ `setCursor(cursor.x+searchPos+1, …)`).
-    ///
-    /// `focused_cursor` returns `x = col*col_width + 1` (the text-start column).
-    /// Adding `(search_pos+1)` positions just after the matched prefix.
-    /// With `search_pos == -1` the offset is 0 — no advance.
-    ///
-    /// We derive the cursor ABSOLUTELY from `search_pos` (`base.x + search_pos + 1`)
-    /// rather than tracking C++'s incremental `setCursor(cursor.x + (searchPos -
-    /// oldPos), …)` accumulation. The result is identical: `base.x` is the
-    /// text-start column re-derived each frame (no accumulated cursor state to keep
-    /// in sync), so a fresh `base.x + search_pos + 1` equals C++'s running total.
+    fn lv_mut(&mut self) -> &mut ListViewerState {
+        &mut self.lv
+    }
+
+    /// `getText` — return the text for `item` from the owned Vec.
+    fn get_text(&self, item: i32) -> String {
+        self.items.get(item as usize).cloned().unwrap_or_default()
+    }
+    // is_selected / select_item: inherit the base (item == focused / broadcast
+    // cmListItemSelected). TSortedListBox does NOT override these.
+}
+
+impl list_viewer::SortedSearch for SortedListBox {
+    fn search_pos(&self) -> i32 {
+        self.search_pos
+    }
+
+    fn set_search_pos(&mut self, pos: i32) {
+        self.search_pos = pos;
+    }
+
+    fn shift_state(&self) -> u8 {
+        self.shift_state
+    }
+
+    fn set_shift_state(&mut self, s: u8) {
+        self.shift_state = s;
+    }
+
+    /// `getKey(cur)` is identity here, so the search key IS `cur`; then
+    /// `list()->search(key, value)` — first index `i` in `0..range` whose item is
+    /// `>= key` case-insensitively (the C++ insertion point). Returns `range` if
+    /// none. Binary search over `get_text(i)`.
+    fn search(&self, cur: &[char]) -> i32 {
+        let key: String = cur.iter().collect();
+        let range = self.lv.range;
+        let (mut lo, mut hi) = (0i32, range);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if ci_cmp(&self.get_text(mid), &key) == core::cmp::Ordering::Less {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        lo
+    }
+}
+
+impl View for SortedListBox {
+    fn state(&self) -> &ViewState {
+        &self.lv.state
+    }
+
+    fn state_mut(&mut self) -> &mut ViewState {
+        &mut self.lv.state
+    }
+
+    fn draw(&mut self, ctx: &mut DrawCtx) {
+        list_viewer::draw(self, ctx);
+    }
+
+    /// `TSortedListBox::handleEvent` — the incremental type-to-search state machine,
+    /// shared verbatim via the [`sorted_handle_event`](list_viewer::sorted_handle_event)
+    /// free function over the `SortedSearch` sub-trait.
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
+        list_viewer::sorted_handle_event(self, ev, ctx);
+    }
+
+    fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
+        list_viewer::set_state(self, flag, enable, ctx);
+    }
+
+    /// Cursor advanced past the matched prefix — shared via
+    /// [`sorted_cursor`](list_viewer::sorted_cursor).
     fn cursor_request(&self) -> Option<Point> {
-        let base = list_viewer::focused_cursor(&self.inner)?;
-        Some(Point::new(base.x + (self.search_pos + 1).max(0), base.y))
+        list_viewer::sorted_cursor(self)
+    }
+
+    fn apply_list_scroll(&mut self, h: Option<i32>, v: Option<i32>, ctx: &mut Context) {
+        list_viewer::apply_scroll(self, h, v, ctx);
     }
 
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         Some(self)
+    }
+
+    fn value(&self) -> Option<FieldValue> {
+        Some(FieldValue::Int(self.lv.focused))
     }
 }
 
@@ -751,7 +687,7 @@ mod tests {
             let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
             slb.handle_event(&mut ev, &mut ctx);
         }
-        assert_eq!(slb.inner.lv().focused, 1, "'b' -> focused == 1 (\"beta\")");
+        assert_eq!(slb.lv().focused, 1, "'b' -> focused == 1 (\"beta\")");
         assert_eq!(slb.search_pos(), 0, "search_pos == 0 after first char");
         assert!(ev.is_nothing(), "'b' consumed (alpha match found)");
 
@@ -763,11 +699,7 @@ mod tests {
             let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
             slb.handle_event(&mut ev, &mut ctx);
         }
-        assert_eq!(
-            slb.inner.lv().focused,
-            2,
-            "'br' -> focused == 2 (\"bravo\")"
-        );
+        assert_eq!(slb.lv().focused, 2, "'br' -> focused == 2 (\"bravo\")");
         assert_eq!(slb.search_pos(), 1, "search_pos == 1 after second char");
         assert!(ev.is_nothing(), "'r' consumed");
     }
@@ -787,7 +719,7 @@ mod tests {
             slb.handle_event(&mut ev, &mut ctx);
             deferred.clear();
         }
-        assert_eq!(slb.inner.lv().focused, 2, "pre: focused == 2 (\"bravo\")");
+        assert_eq!(slb.lv().focused, 2, "pre: focused == 2 (\"bravo\")");
         assert_eq!(slb.search_pos(), 1, "pre: search_pos == 1");
 
         // Backspace → search shortens to "b" and re-resolves.
@@ -802,11 +734,7 @@ mod tests {
         }
         assert_eq!(slb.search_pos(), 0, "search_pos decremented to 0");
         // Focus should be on the first item matching "b" prefix ("beta").
-        assert_eq!(
-            slb.inner.lv().focused,
-            1,
-            "backspace re-focuses to \"beta\""
-        );
+        assert_eq!(slb.lv().focused, 1, "backspace re-focuses to \"beta\"");
     }
 
     // -- SLB 3. dot jumps to the extension separator ---------------------------
@@ -823,9 +751,9 @@ mod tests {
         let (mut slb, mut out, mut timers, mut deferred) =
             make_sorted_lb(vec!["file.txt", "file.bak", "zebra"]);
         // After sort: index 0 = "file.bak", 1 = "file.txt", 2 = "zebra".
-        assert_eq!(slb.inner.get_text(0), "file.bak");
-        assert_eq!(slb.inner.get_text(1), "file.txt");
-        assert_eq!(slb.inner.lv().focused, 0, "starts at 0 (\"file.bak\")");
+        assert_eq!(slb.get_text(0), "file.bak");
+        assert_eq!(slb.get_text(1), "file.txt");
+        assert_eq!(slb.lv().focused, 0, "starts at 0 (\"file.bak\")");
 
         // Type "file.t" up to (but not including) the dot, then the dot, then a
         // final char, navigating focus onto "file.txt" first.
@@ -837,7 +765,7 @@ mod tests {
                 slb.handle_event(&mut ev, &mut ctx);
             }
             assert_eq!(
-                slb.inner.lv().focused,
+                slb.lv().focused,
                 want_focus,
                 "typing '{ch}' keeps focus on \"file.bak\" (shared prefix)"
             );
@@ -851,7 +779,7 @@ mod tests {
             let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
             slb.handle_event(&mut ev, &mut ctx);
         }
-        assert_eq!(slb.inner.lv().focused, 1, "Down -> focus \"file.txt\"");
+        assert_eq!(slb.lv().focused, 1, "Down -> focus \"file.txt\"");
         assert_eq!(slb.search_pos(), -1, "arrow nav reset search_pos");
         deferred.clear();
 
@@ -870,7 +798,7 @@ mod tests {
             "dot sets search_pos to the '.' position"
         );
         assert_eq!(
-            slb.inner.lv().focused,
+            slb.lv().focused,
             1,
             "dot must NOT mis-jump to \"file.bak\"; stays on \"file.txt\""
         );
@@ -892,7 +820,7 @@ mod tests {
             let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
             slb.handle_event(&mut ev, &mut ctx);
         }
-        assert_eq!(slb.inner.lv().focused, 0, "no match: focus unchanged");
+        assert_eq!(slb.lv().focused, 0, "no match: focus unchanged");
         assert_eq!(slb.search_pos(), -1, "no match: search_pos reverted to -1");
         assert!(ev.is_nothing(), "alpha key consumed even on no-match");
     }
@@ -915,7 +843,7 @@ mod tests {
             let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
             slb.handle_event(&mut ev, &mut ctx);
         }
-        assert_eq!(slb.inner.lv().focused, 0, "focus unchanged");
+        assert_eq!(slb.lv().focused, 0, "focus unchanged");
         assert_eq!(slb.search_pos(), -1, "search_pos stays -1");
         assert!(!ev.is_nothing(), "non-alpha no-match: event NOT consumed");
     }
@@ -992,9 +920,9 @@ mod tests {
             );
         }
         // Case-insensitive sort: "apple" < "Banana" < "Zebra".
-        assert_eq!(slb.inner.get_text(0), "apple", "sorted: apple first");
-        assert_eq!(slb.inner.get_text(1), "Banana", "sorted: Banana second");
-        assert_eq!(slb.inner.get_text(2), "Zebra", "sorted: Zebra third");
+        assert_eq!(slb.get_text(0), "apple", "sorted: apple first");
+        assert_eq!(slb.get_text(1), "Banana", "sorted: Banana second");
+        assert_eq!(slb.get_text(2), "Zebra", "sorted: Zebra third");
         assert_eq!(slb.search_pos(), -1, "new_list resets search_pos");
     }
 }

@@ -5,6 +5,49 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — sorted-search seam extraction (FOUNDATION sub-step for row 76)
+
+The HANDOVER flagged **row 76 `TFileList`** as *not* a routine leaf: like
+`DirListBox` (row 75) it stores its own collection (`Vec<SearchRec>`) with an
+overridden `getText`, so it **cannot** be a D2 delegate over `SortedListBox` — it
+must be a *direct* `ListViewer` impl. But unlike `DirListBox` it *also* needs
+`TSortedListBox`'s incremental type-to-search, which until now lived **inside**
+`SortedListBox` operating on its embedded `ListBox`'s `Vec<String>`. A direct impl
+would have to duplicate that machine. This commit performs the deferred
+"list-viewer item-source seam refactor" so row 76 gets search **for free**.
+
+**The extraction.** `SortedListBox::handle_event`/`cursor_request` (the verbatim
+`TSortedListBox::handleEvent` state machine) moved into two free functions in
+`src/widgets/list_viewer.rs` — `sorted_handle_event` / `sorted_cursor` — generic
+over a new sub-trait `SortedSearch: ListViewer` (mirroring how `draw`/`handle_event`
+are free functions over `ListViewer`). `SortedSearch` exposes the polymorphic parts:
+`search_pos`/`set_search_pos`, `shift_state`/`set_shift_state`, and a single
+`search(&self, cur: &[char]) -> i32` that **fuses C++ `getKey` + `list()->search`**
+— the base SortedListBox makes it identity-getKey + a case-insensitive binary
+search; `FileList` (row 76) will override it to build a key `SearchRec` (attr from
+shift/dot) and binary-search via `search_rec_compare`. The base call inside the
+machine is now `list_viewer::handle_event(this, …)` (faithful: `TListBox` does not
+override `handleEvent`, so it == `TListViewer::handleEvent`). Every documented trap
+is preserved (cur re-seeded from the focused item each keystroke; dot-branch
+doesn't truncate; `ci_prefix_eq`=`strnicmp` confirm over `prefix_len = searchPos+1`;
+consume-iff `searchPos != oldPos || isalpha`).
+
+**The one intentional delta (safe).** At the `searchPos -1↔0` transition the base
+previously stored `shift_state = 0` (a breadcrumb — C++ captured `controlKeyState`
+there but the base never read it). It now captures the real bit
+(`if ke.modifiers.shift { KB_SHIFT } else { 0 }`, `KB_SHIFT = kbLeftShift|kbRightShift
+= 0x03`) so the future `FileList::search` can read it. Unobserved by every existing
+test (the base never reads `shift_state`).
+
+**SortedListBox → direct `ListViewer`.** With the search extracted, the embedded
+`ListBox` was pure indirection, so `SortedListBox` became a direct `ListViewer`
+impl over its own `Vec<String>` (parallel to `ListBox`/`DirListBox`) + a
+`SortedSearch` impl. The `#[delegate(to = inner)]` is gone; `handle_event`/
+`cursor_request` delegate to the new free functions. **Behavior-preserving:** all
+existing `SortedListBox` tests keep their assertions verbatim (only `slb.inner.X` →
+`slb.X` access-path rewrites). Verified zero production consumers of `SortedListBox`
+before converting. 810 lib tests green, clippy + fmt clean.
+
 ## Session — row 75 `TDirListBox` + deviation D14 (native Linux `/` paths)
 
 Ported **row 75 `TDirListBox`** as `DirListBox` in `src/dialog/filedlg.rs`.
