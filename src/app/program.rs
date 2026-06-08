@@ -1558,6 +1558,31 @@ impl Program {
                                         ed.insert_text(t.as_bytes(), false, &mut ctx);
                                     }
                                 }
+                                // -- row 77: cmFileFocused payload broker -------
+                                //
+                                // Resolve the payload-carrying cmFileFocused
+                                // broadcast (D4: source is the resolvable subject,
+                                // not a value carrier). Read the focused SearchRec
+                                // from the source FileList in its OWN find_mut and
+                                // drop the borrow, THEN find_mut the subscriber and
+                                // write it — only one &mut is live at a time, like
+                                // SyncScrollerDelta's read-then-write.
+                                Deferred::ResolveFocusedFile { subscriber, source } => {
+                                    use crate::dialog::{FileInputLine, FileList};
+                                    let rec = group
+                                        .find_mut(source)
+                                        .and_then(|view| view.as_any_mut())
+                                        .and_then(|a| a.downcast_mut::<FileList>())
+                                        .and_then(|fl| fl.focused_rec());
+                                    if let Some(fil) = group
+                                        .find_mut(subscriber)
+                                        .and_then(|view| view.as_any_mut())
+                                        .and_then(|a| a.downcast_mut::<FileInputLine>())
+                                    {
+                                        fil.on_file_focused(rec);
+                                    }
+                                    // A2 (row 78) adds an `else if … FileInfoPane` arm.
+                                }
                                 // -- the async-modal-from-a-view seam (handle_event paths) --
                                 //
                                 // A downward-borrowed `&mut View`'s valid() requested

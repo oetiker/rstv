@@ -216,6 +216,28 @@ impl Command {
     pub const DEL_WORD_LEFT: Command = Command("tv.del_word_left");
     /// `cmEncoding`
     pub const ENCODING: Command = Command("tv.encoding");
+
+    // --- File-dialog commands (stddlg.h) ---
+    /// `cmFileOpen` (stddlg.h `1001`)
+    pub const FILE_OPEN: Command = Command("tv.file_open");
+    /// `cmFileReplace` (stddlg.h `1002`)
+    pub const FILE_REPLACE: Command = Command("tv.file_replace");
+    /// `cmFileClear` (stddlg.h `1003`)
+    pub const FILE_CLEAR: Command = Command("tv.file_clear");
+    /// `cmFileInit` (stddlg.h `1004`)
+    pub const FILE_INIT: Command = Command("tv.file_init");
+    /// `cmChangeDir` (stddlg.h `1005`)
+    pub const CHANGE_DIR: Command = Command("tv.change_dir");
+    /// `cmRevert` (stddlg.h `1006`)
+    pub const REVERT: Command = Command("tv.revert");
+    /// `cmFileFocused` (stddlg.h `102`) — broadcast by `TFileList::focusItem` on
+    /// every focus change; the focused `TSearchRec` is the payload (D4: carried
+    /// via the resolvable `source`, resolved by the pump's `ResolveFocusedFile`).
+    pub const FILE_FOCUSED: Command = Command("tv.file_focused");
+    /// `cmFileDoubleClicked` (stddlg.h, next after `cmFileFocused`) — broadcast by
+    /// `TFileList::selectItem`. Faithfully payload-less in rstv (the only consumer,
+    /// `TFileDialog::handleEvent`, just turns it into `cmOK`).
+    pub const FILE_DOUBLE_CLICKED: Command = Command("tv.file_double_clicked");
 }
 
 /// A set of enabled commands. Faithful to `TCommandSet` (`views.h`,

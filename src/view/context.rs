@@ -289,6 +289,34 @@ pub enum Deferred {
     /// **view-tree** family + the backend.
     EditorPaste(ViewId),
 
+    // -- row 77: the payload-carrying-broadcast (cmFileFocused) broker (D3/D4) -
+    /// **Resolve a `cmFileFocused` broadcast's `TSearchRec` payload** (the
+    /// `TFileInputLine`/`TFileInfoPane` consumers). rstv's
+    /// [`Event::Broadcast`](crate::event::Event::Broadcast) is payload-less (D4:
+    /// `source` is the resolvable subject, NOT a value carrier), so this is the
+    /// resolve-by-source broker — the same shape as
+    /// [`SyncListViewer`](Self::SyncListViewer)'s read+write, but reading a
+    /// `SearchRec` rather than a scrollbar value.
+    ///
+    /// The producer ([`FileList`](crate::dialog::FileList)) broadcasts
+    /// `FILE_FOCUSED { source = its own id }`; the consumer (a leaf holding only
+    /// `&mut Context`, D3, so it cannot read its `FileList` sibling) filters on the
+    /// command and requests this. The pump resolves `source` (downcast `FileList`,
+    /// read its [`focused_rec`](crate::dialog::FileList::focused_rec)), then writes
+    /// the record into `subscriber` (downcast
+    /// [`FileInputLine`](crate::dialog::FileInputLine), call `on_file_focused`).
+    /// Two separate `find_mut` calls keep only one `&mut` live at a time (exactly
+    /// like [`SyncScrollerDelta`](Self::SyncScrollerDelta)'s read-then-write).
+    ///
+    /// Touches the **view-tree** family (same as the scroller/list broker ops), so
+    /// the insertion-order drain stays order-equivalent.
+    ResolveFocusedFile {
+        /// The consumer view to write the focused record into (`TFileInputLine`).
+        subscriber: ViewId,
+        /// The producer view (`TFileList`) whose focused `SearchRec` to read.
+        source: ViewId,
+    },
+
     // -- the async-modal-from-a-view seam (messageBox from valid()) -----------
     /// **View-triggered modal `messageBox`** (the async-modal-from-a-view seam —
     /// `docs/design/async-modal-from-view.md`). A downward-borrowed `&mut View`
@@ -759,6 +787,17 @@ impl<'a> Context<'a> {
     /// `h`/`v` are the bar [`ViewId`]s (`None` = no bar).
     pub fn request_sync_list_viewer(&mut self, list: ViewId, h: Option<ViewId>, v: Option<ViewId>) {
         self.deferred.push(Deferred::SyncListViewer { list, h, v });
+    }
+
+    /// Request the focused `SearchRec` of the `TFileList` `source` be resolved and
+    /// written into `subscriber` (`TFileInputLine`) — **deferred**
+    /// ([`Deferred::ResolveFocusedFile`]). The resolve-by-source broker for the
+    /// payload-carrying `cmFileFocused` broadcast: the consumer (a leaf, D3) holds
+    /// only `&mut Context` and cannot read its `FileList` sibling, so the pump
+    /// brokers the read + write.
+    pub fn request_resolve_focused_file(&mut self, subscriber: ViewId, source: ViewId) {
+        self.deferred
+            .push(Deferred::ResolveFocusedFile { subscriber, source });
     }
 
     /// Request the menu view `id` regray its menu tree against the program's live

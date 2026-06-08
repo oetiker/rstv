@@ -564,12 +564,15 @@ impl crate::view::View for DirListBox {
 /// `strupr` (DOS-only, `#ifndef __FLAT__`) is **not** ported — the Linux build
 /// is case-sensitive.
 ///
-/// ## Owner broadcasts — deferred to row 79 (`TFileDialog`)
+/// ## Owner broadcasts (row 77)
 ///
-/// TODO(row 79 TFileDialog): C++ TFileList::focusItem broadcasts cmFileFocused
-/// (payload = the focused SearchRec) on every focus change, live-updating the
-/// info pane. rstv focus_item is a free fn, not virtual; row 79 builds this on
-/// the old_value != focused diff already computed in sorted_handle_event.
+/// `TFileList::focusItem` broadcasts `cmFileFocused` (payload = the focused
+/// `SearchRec`) on every focus change, and `selectItem` broadcasts
+/// `cmFileDoubleClicked`. Both are wired here via the `on_focus_changed`
+/// virtual-`focusItem` hook ([`ListViewer::on_focus_changed`]) and the
+/// `select_item` override; the payload travels through the pump's
+/// [`ResolveFocusedFile`](crate::view::Deferred::ResolveFocusedFile) broker (D4:
+/// payload-less broadcast + resolvable `source`).
 ///
 /// ## Drops / deferrals (faithful, breadcrumbed)
 ///
@@ -619,6 +622,14 @@ impl FileList {
     /// The current item collection (`TFileList::list()`).
     pub fn list(&self) -> &[SearchRec] {
         &self.items
+    }
+
+    /// The focused entry (`list()->at(focused)`), or `None` when the list is empty
+    /// (or `focused` is out of range). Read by the pump's
+    /// [`ResolveFocusedFile`](crate::view::Deferred::ResolveFocusedFile) broker to
+    /// deliver the `cmFileFocused` payload to a `TFileInputLine`/`TFileInfoPane`.
+    pub fn focused_rec(&self) -> Option<SearchRec> {
+        self.items.get(self.lv.focused as usize).cloned()
     }
 
     /// Match `name` against a `*`/`?` glob (case-sensitive, like the Linux
@@ -716,8 +727,14 @@ impl FileList {
     /// symlinks — matching magiblot's `findfirst`/`stat`, not `lstat`); a broken
     /// symlink errs and is skipped via `.ok()`. `size` saturates into `i32`.
     ///
-    /// TODO(row 79 TFileDialog): readDirectory broadcasts cmFileFocused for item 0
-    /// (or a noFile sentinel when empty) to the owner; payload-carrying -> row 79.
+    /// Faithful to the C++ `readDirectory` tail: after `newList(fileList)`, it
+    /// broadcasts `cmFileFocused` for item 0 (or an all-zero `DirSearchRec noFile`
+    /// sentinel when the listing is empty). Here the non-empty case is FREE — the
+    /// `focus_item(self, 0, …)` below fires `on_focus_changed`, which broadcasts
+    /// `FILE_FOCUSED { source = self }`; the broker reads `focused_rec()`. The
+    /// empty case has no focusable item, so it broadcasts `FILE_FOCUSED` directly
+    /// (the broker then reads `focused_rec() == None` → a blank field, the noFile
+    /// sentinel's effect).
     pub fn read_directory(&mut self, dir: &str, wildcard: &str, ctx: &mut crate::view::Context) {
         let raw: Vec<(String, bool, i32)> = match std::fs::read_dir(dir) {
             Ok(entries) => entries
@@ -738,7 +755,13 @@ impl FileList {
         let len = self.items.len() as i32;
         crate::widgets::list_viewer::set_range(self, len, ctx);
         if self.lv.range > 0 {
+            // focus_item → on_focus_changed → FILE_FOCUSED broadcast (item 0).
             crate::widgets::list_viewer::focus_item(self, 0, ctx);
+        } else if let Some(id) = self.lv.state.id() {
+            // Empty listing — no focusable item, so the `focus_item` path can't
+            // fire. Broadcast FILE_FOCUSED directly: the broker reads
+            // `focused_rec() == None` → a blank field (the C++ noFile sentinel).
+            ctx.broadcast(crate::command::Command::FILE_FOCUSED, Some(id));
         }
     }
 }
@@ -770,14 +793,37 @@ impl crate::widgets::list_viewer::ListViewer for FileList {
     // `is_selected` is INHERITED (base: `item == focused`). TFileList does not
     // override it — do NOT add one here.
 
-    /// `TFileList::selectItem` — overridden to a no-op (deferred).
+    /// `TFileList::focusItem` — the virtual tail, fired on EVERY focus change.
     ///
-    /// TODO(row 79 TFileDialog): selectItem broadcasts cmFileDoubleClicked carrying
-    /// the chosen SearchRec payload to the owner. Deferred — design the typed-payload
-    /// command seam at its first consumer (row 79). Does NOT call the base.
-    fn select_item(&mut self, _item: i32, _ctx: &mut crate::view::Context) {
-        // Intentionally empty — see TODO above. (Notably it does NOT broadcast
-        // cmListItemSelected, because the C++ override does not call the base.)
+    /// Faithful: `message(owner, evBroadcast, cmFileFocused, list()->at(item))`.
+    /// rstv's broadcast is payload-less (D4), so we broadcast `FILE_FOCUSED` with
+    /// this view as the resolvable `source`; the pump's
+    /// [`ResolveFocusedFile`](crate::view::Deferred::ResolveFocusedFile) broker
+    /// reads [`focused_rec`](FileList::focused_rec) and delivers it to the
+    /// consumer. (The C++ calls `TSortedListBox::focusItem` first — that base step
+    /// is the shared `focus_item` free fn that invokes this hook, so it has already
+    /// run.)
+    fn on_focus_changed(&mut self, ctx: &mut crate::view::Context) {
+        if let Some(id) = self.lv.state.id() {
+            ctx.broadcast(crate::command::Command::FILE_FOCUSED, Some(id));
+        }
+    }
+
+    /// `TFileList::selectItem` — broadcast `cmFileDoubleClicked`.
+    ///
+    /// Faithful: `message(owner, evBroadcast, cmFileDoubleClicked, list()->at(item))`.
+    /// The C++ payload is the focused `SearchRec`, but the only consumer
+    /// (`TFileDialog::handleEvent`) merely turns `cmFileDoubleClicked` into `cmOK`
+    /// and never reads the record — so it is faithfully **payload-less** here (D4):
+    /// just `FILE_DOUBLE_CLICKED { source = self }`. Does NOT call the base, so it
+    /// does NOT also broadcast `cmListItemSelected`.
+    ///
+    /// TODO(row 79 TFileDialog): the dialog's `cmFileDoubleClicked → cmOK`
+    /// conversion is row 79's job.
+    fn select_item(&mut self, _item: i32, ctx: &mut crate::view::Context) {
+        if let Some(id) = self.lv.state.id() {
+            ctx.broadcast(crate::command::Command::FILE_DOUBLE_CLICKED, Some(id));
+        }
     }
 }
 
@@ -889,6 +935,130 @@ impl crate::view::View for FileList {
     /// `TFileList` contributes nothing to dialog data transfer.
     fn value(&self) -> Option<crate::data::FieldValue> {
         None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FileInputLine — row 77
+// ---------------------------------------------------------------------------
+
+/// `TFileInputLine` (stddlg.cpp) — a [`TInputLine`](crate::widgets::InputLine)
+/// filename field that mirrors the [`FileList`]'s focused entry.
+///
+/// On a `cmFileFocused` broadcast (and only while the user is **not** typing in
+/// it — the `!(state & sfSelected)` guard) it copies the focused entry's name
+/// into the field, appending `/<wildCard>` (D14 `/`, not the DOS `\`) when the
+/// entry is a directory.
+///
+/// ## Structural shape (D2 embed-and-delegate)
+///
+/// `TFileInputLine` is a C++ subclass of `TInputLine`. In rstv it **embeds** an
+/// [`InputLine`] and forwards the un-overridden [`View`](crate::view::View)
+/// methods via `#[crate::delegate(to = inner)]` — only `handle_event` and
+/// `as_any_mut` differ. `value`/`set_value` (D10) are NOT overridden (the C++
+/// `TFileInputLine` has no `getData`/`setData`), so they forward to the inner
+/// `InputLine`.
+///
+/// ## The payload broker (D3/D4)
+///
+/// The broadcast is payload-less in rstv, so `handle_event` does not read the
+/// record inline; it requests
+/// [`ResolveFocusedFile`](crate::view::Deferred::ResolveFocusedFile) and the pump
+/// resolves the producer's [`focused_rec`](FileList::focused_rec), then calls
+/// [`on_file_focused`](FileInputLine::on_file_focused) on this view.
+///
+/// ## Drops / deferrals
+/// - **D8:** the C++ `drawView()` after the copy is dropped (whole-tree redraw).
+/// - **D12:** `write`/`read`/`build`/`streamableName`/`name` streaming dropped.
+pub struct FileInputLine {
+    /// The embedded `TInputLine` — the D2 delegation target.
+    inner: crate::widgets::InputLine,
+    /// Cached `((TFileDialog*)owner)->wildCard` (D3: a child can't read its owner
+    /// inline). Set at ctor; row 79 pushes updates when the dialog re-reads with a
+    /// new mask. Appended after a `/` when the focused entry is a directory.
+    wild_card: String,
+}
+
+impl FileInputLine {
+    /// `TFileInputLine::TFileInputLine(bounds, aMaxLen)` — build a filename field.
+    ///
+    /// Faithful: `TInputLine(bounds, aMaxLen)` — `aMaxLen` is the byte cap
+    /// ([`LimitMode::MaxBytes`], the C++ default), so `maxLen = aMaxLen - 1`. The
+    /// C++ `eventMask |= evBroadcast` is implicit (the group delivers every
+    /// broadcast unconditionally), so no event mask is wired. `wild_card` caches
+    /// the owner's `wildCard` (which the C++ reads via `owner` on each dir entry).
+    pub fn new(bounds: crate::view::Rect, max_len: i32, wild_card: impl Into<String>) -> Self {
+        FileInputLine {
+            inner: crate::widgets::InputLine::new(
+                bounds,
+                max_len,
+                None,
+                crate::widgets::LimitMode::MaxBytes,
+            ),
+            wild_card: wild_card.into(),
+        }
+    }
+
+    /// Write the focused record into the field — the body of the C++
+    /// `handleEvent`'s `cmFileFocused` block, called by the pump's
+    /// [`ResolveFocusedFile`](crate::view::Deferred::ResolveFocusedFile) broker
+    /// once it has resolved the producer's focused [`SearchRec`].
+    ///
+    /// Faithful: `strcpy(data, rec->name)`; if `rec->attr & FA_DIREC`, then
+    /// `strcat(data, "/"); strcat(data, wildCard)` (D14 `/`, not `\`); then
+    /// `selectAll(False)`. `None` is the C++ all-zero `noFile` sentinel (empty
+    /// name) → a blank field. `drawView()` is dropped (D8).
+    pub fn on_file_focused(&mut self, rec: Option<SearchRec>) {
+        let text = match rec {
+            Some(r) if r.attr & FA_DIREC != 0 => format!("{}/{}", r.name, self.wild_card),
+            Some(r) => r.name,
+            None => String::new(),
+        };
+        // C++ `strcpy(data, …)` does not clamp in this path; assign directly
+        // (InputLine exposes no clamping text-setter, and `data` is `pub`).
+        self.inner.data = text;
+        // selectAll(False) — the C++ shorthand `selectAll(Boolean)` defaults
+        // `scroll = True`, so this is `select_all(false, true)`.
+        self.inner.select_all(false, true);
+        // drawView() dropped (D8 — whole-tree redraw + diff).
+    }
+
+    /// Update the cached owner `wildCard` (row 79 drives this via a deferred push
+    /// when the dialog re-reads the directory with a new mask).
+    // TODO(row 79): driven by the dialog's wildCard-change push.
+    pub fn set_wild_card(&mut self, w: impl Into<String>) {
+        self.wild_card = w.into();
+    }
+}
+
+#[crate::delegate(to = inner)]
+impl crate::view::View for FileInputLine {
+    /// `TFileInputLine::handleEvent` — delegate to `TInputLine::handleEvent`
+    /// first, then, on a `cmFileFocused` broadcast while NOT selected (so the copy
+    /// never clobbers the field the user is typing in), request the payload broker.
+    fn handle_event(&mut self, ev: &mut crate::event::Event, ctx: &mut crate::view::Context) {
+        // TInputLine::handleEvent — the base call (the C++ runs it first).
+        self.inner.handle_event(ev, ctx);
+
+        if let crate::event::Event::Broadcast {
+            command,
+            source: Some(src),
+        } = *ev
+            && command == crate::command::Command::FILE_FOCUSED
+            // !(state & sfSelected) — do NOT clobber the field while the user types.
+            && !self.inner.state().state.selected
+            && let Some(my_id) = self.inner.state().id()
+        {
+            ctx.request_resolve_focused_file(my_id, src);
+        }
+    }
+
+    /// **Override** (the OPPOSITE of [`Memo`](crate::widgets::Memo), which
+    /// forwards `as_any_mut` to its editor): the pump's broker downcasts the
+    /// resolved subscriber to `FileInputLine`, so `as_any_mut` MUST return
+    /// `self`, NOT the inner `InputLine`.
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        Some(self)
     }
 }
 
@@ -1586,5 +1756,352 @@ mod tests {
         fl.lv.focused = 0;
 
         insta::assert_snapshot!(render_fl(&mut fl, 30, 6));
+    }
+
+    // =========================================================================
+    // FileInputLine + the cmFileFocused payload broker — row 77
+    // =========================================================================
+
+    use crate::command::Command;
+    use crate::view::{Group, Rect};
+
+    /// Insert `fl` into a fresh group, returning the group + the stamped id so we
+    /// can drive it through `as_any_mut().downcast_mut::<FileList>()` and read the
+    /// broadcasts it queues with `self` as `source`.
+    fn fl_in_group(fl: FileList) -> (Group, crate::view::ViewId) {
+        let mut g = Group::new(Rect::new(0, 0, 40, 12));
+        let id = g.insert(Box::new(fl));
+        (g, id)
+    }
+
+    fn count_broadcasts(out: &VecDeque<Event>, cmd: Command, src: crate::view::ViewId) -> usize {
+        out.iter()
+            .filter(|e| {
+                matches!(e, Event::Broadcast { command, source }
+                if *command == cmd && *source == Some(src))
+            })
+            .count()
+    }
+
+    // -- 1. on_focus_changed queues FILE_FOCUSED { source = self } -------------
+
+    #[test]
+    fn focus_change_broadcasts_file_focused_with_self_source() {
+        let raw_entries = vec![raw("a.rs", false, 1), raw("b.rs", false, 1)];
+        let items = FileList::build_listing("/home/oetiker/", "*", &raw_entries);
+        let mut fl = FileList::new(Rect::new(0, 0, 30, 8), None, None);
+        fl.items = items;
+        fl.lv.range = fl.items.len() as i32;
+        fl.lv.focused = 0;
+
+        let (mut g, id) = fl_in_group(fl);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+
+        // Drive a focus change through the shared `focus_item` funnel.
+        {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            let fl = g
+                .find_mut(id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<FileList>())
+                .unwrap();
+            crate::widgets::list_viewer::focus_item(fl, 1, &mut ctx);
+            assert_eq!(fl.lv().focused, 1);
+        }
+        assert_eq!(
+            count_broadcasts(&out, Command::FILE_FOCUSED, id),
+            1,
+            "focus change broadcasts exactly one FILE_FOCUSED with self as source"
+        );
+    }
+
+    // -- 2. focused_rec returns the focused entry / None when empty -----------
+
+    #[test]
+    fn focused_rec_returns_focused_or_none() {
+        let raw_entries = vec![raw("a.rs", false, 1), raw("b.rs", false, 1)];
+        let items = FileList::build_listing("/home/oetiker/", "*", &raw_entries);
+        let mut fl = FileList::new(Rect::new(0, 0, 30, 8), None, None);
+        fl.items = items;
+        fl.lv.range = fl.items.len() as i32;
+
+        fl.lv.focused = 0;
+        assert_eq!(fl.focused_rec().map(|r| r.name), Some("a.rs".to_string()));
+        fl.lv.focused = 1;
+        assert_eq!(fl.focused_rec().map(|r| r.name), Some("b.rs".to_string()));
+
+        // Empty listing -> None.
+        let empty = FileList::new(Rect::new(0, 0, 30, 8), None, None);
+        assert_eq!(empty.focused_rec(), None);
+    }
+
+    // -- 3. select_item queues FILE_DOUBLE_CLICKED ----------------------------
+
+    #[test]
+    fn select_item_broadcasts_file_double_clicked() {
+        let raw_entries = vec![raw("a.rs", false, 1)];
+        let items = FileList::build_listing("/home/oetiker/", "*", &raw_entries);
+        let mut fl = FileList::new(Rect::new(0, 0, 30, 8), None, None);
+        fl.items = items;
+        fl.lv.range = fl.items.len() as i32;
+
+        let (mut g, id) = fl_in_group(fl);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            let fl = g
+                .find_mut(id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<FileList>())
+                .unwrap();
+            fl.select_item(0, &mut ctx);
+        }
+        assert_eq!(
+            count_broadcasts(&out, Command::FILE_DOUBLE_CLICKED, id),
+            1,
+            "selectItem broadcasts FILE_DOUBLE_CLICKED with self as source"
+        );
+        // Faithful: it does NOT also broadcast cmListItemSelected (no base call).
+        assert_eq!(
+            count_broadcasts(&out, Command::LIST_ITEM_SELECTED, id),
+            0,
+            "selectItem does NOT call the base -> no cmListItemSelected"
+        );
+    }
+
+    // -- 4. read_directory on an empty dir queues a FILE_FOCUSED (noFile) ------
+
+    /// Verifies the `read_directory` noFile-branch **contract by construction**:
+    /// an empty listing (range 0) has no focusable item, so it must broadcast
+    /// `FILE_FOCUSED` directly rather than via `focus_item`. A genuinely-empty
+    /// listing is unreachable end-to-end (off-root always synthesizes `..`; `/`
+    /// always has subdirs on a live system), so this cannot drive `read_directory`
+    /// for real — it instead exercises the exact `else` arm's logic in isolation.
+    #[test]
+    fn empty_listing_branch_broadcasts_file_focused_by_contract() {
+        let fl = FileList::new(Rect::new(0, 0, 30, 8), None, None);
+        let (mut g, id) = fl_in_group(fl);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            let fl = g
+                .find_mut(id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<FileList>())
+                .unwrap();
+            // Mirrors the production `read_directory` `else` arm verbatim (an empty
+            // listing can't be produced end-to-end, so we reproduce its logic here):
+            // empty items, range 0 -> broadcast FILE_FOCUSED directly (focus_item
+            // never runs with range 0).
+            fl.items.clear();
+            crate::widgets::list_viewer::set_range(fl, 0, &mut ctx);
+            assert_eq!(fl.lv().range, 0);
+            if fl.lv().range == 0
+                && let Some(vid) = fl.lv().state.id()
+            {
+                ctx.broadcast(Command::FILE_FOCUSED, Some(vid));
+            }
+        }
+        assert_eq!(
+            count_broadcasts(&out, Command::FILE_FOCUSED, id),
+            1,
+            "empty-listing branch broadcasts FILE_FOCUSED (noFile) once"
+        );
+    }
+
+    /// Non-empty `read_directory` (off-root, so `..` is present) takes the
+    /// `focus_item(0)` path -> `on_focus_changed` -> exactly one FILE_FOCUSED.
+    #[test]
+    fn read_directory_nonempty_broadcasts_file_focused_once() {
+        let tmp = std::env::temp_dir().join(format!("rstv_filedlg_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("keep.txt"), b"x").unwrap();
+        let dir = format!("{}/", tmp.to_string_lossy());
+
+        let fl = FileList::new(Rect::new(0, 0, 30, 8), None, None);
+        let (mut g, id) = fl_in_group(fl);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            let fl = g
+                .find_mut(id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<FileList>())
+                .unwrap();
+            fl.read_directory(&dir, "*", &mut ctx);
+            assert!(fl.lv().range > 0, "off-root dir has at least '..'");
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+        assert_eq!(
+            count_broadcasts(&out, Command::FILE_FOCUSED, id),
+            1,
+            "non-empty read_directory broadcasts exactly one FILE_FOCUSED (item 0)"
+        );
+    }
+
+    // -- 5. on_file_focused: file / dir / None --------------------------------
+
+    #[test]
+    fn file_input_line_on_file_focused_file_dir_none() {
+        let mut fil = FileInputLine::new(Rect::new(0, 0, 20, 1), 80, "*.rs");
+
+        // A plain file -> just the name, no slash.
+        fil.on_file_focused(Some(SearchRec {
+            attr: 0,
+            time: 0,
+            size: 10,
+            name: "main.rs".into(),
+        }));
+        assert_eq!(fil.inner.data, "main.rs");
+
+        // A directory -> "name/<wild_card>" (D14 slash).
+        fil.on_file_focused(Some(SearchRec {
+            attr: FA_DIREC,
+            time: 0,
+            size: 0,
+            name: "src".into(),
+        }));
+        assert_eq!(fil.inner.data, "src/*.rs");
+
+        // None (the noFile sentinel) -> blank.
+        fil.on_file_focused(None);
+        assert_eq!(fil.inner.data, "");
+    }
+
+    // -- 6. handle_event requests ResolveFocusedFile (guarded by sfSelected) --
+
+    #[test]
+    fn file_input_line_handle_event_requests_broker_when_not_selected() {
+        let fil = FileInputLine::new(Rect::new(0, 0, 20, 1), 80, "*.rs");
+        let mut g = Group::new(Rect::new(0, 0, 40, 12));
+        let fil_id = g.insert(Box::new(fil));
+        // A producer id to name as the broadcast source.
+        let src_id = crate::view::ViewId::next();
+
+        // NOT selected (default) -> the broker IS requested.
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = fl_make_ctx(&mut out, &mut timers, &mut deferred);
+            let mut ev = Event::Broadcast {
+                command: Command::FILE_FOCUSED,
+                source: Some(src_id),
+            };
+            g.find_mut(fil_id).unwrap().handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(
+            deferred
+                .iter()
+                .filter(|d| matches!(d,
+                    Deferred::ResolveFocusedFile { subscriber, source }
+                        if *subscriber == fil_id && *source == src_id))
+                .count(),
+            1,
+            "not-selected FILE_FOCUSED -> one ResolveFocusedFile request"
+        );
+
+        // SELECTED (user typing) -> the broker is NOT requested (sfSelected guard).
+        if let Some(v) = g.find_mut(fil_id) {
+            v.state_mut().state.selected = true;
+        }
+        let mut out2 = VecDeque::new();
+        let mut timers2 = crate::timer::TimerQueue::new();
+        let mut deferred2: Vec<Deferred> = vec![];
+        {
+            let mut ctx = fl_make_ctx(&mut out2, &mut timers2, &mut deferred2);
+            let mut ev = Event::Broadcast {
+                command: Command::FILE_FOCUSED,
+                source: Some(src_id),
+            };
+            g.find_mut(fil_id).unwrap().handle_event(&mut ev, &mut ctx);
+        }
+        assert!(
+            !deferred2
+                .iter()
+                .any(|d| matches!(d, Deferred::ResolveFocusedFile { .. })),
+            "selected (typing) FILE_FOCUSED -> no broker request (sfSelected guard)"
+        );
+    }
+
+    // -- 7. full pump-free round trip: broker resolves producer into consumer -
+
+    #[test]
+    fn file_focused_round_trip_through_broker() {
+        // Producer FileList with a focused dir entry, consumer FileInputLine —
+        // both in one group; emulate the pump's ResolveFocusedFile apply.
+        let raw_entries = vec![raw("readme.txt", false, 1), raw("src", true, 0)];
+        let items = FileList::build_listing("/home/oetiker/", "*", &raw_entries);
+        let mut fl = FileList::new(Rect::new(0, 0, 30, 8), None, None);
+        fl.items = items;
+        fl.lv.range = fl.items.len() as i32;
+        fl.lv.focused = 1; // the "src" directory
+
+        let mut g = Group::new(Rect::new(0, 0, 40, 12));
+        let src_id = g.insert(Box::new(fl));
+        let sub_id = g.insert(Box::new(FileInputLine::new(
+            Rect::new(0, 1, 20, 1),
+            80,
+            "*.c",
+        )));
+
+        // Emulate the pump's broker: read producer's focused rec, write to consumer.
+        let rec = g
+            .find_mut(src_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<FileList>())
+            .and_then(|fl| fl.focused_rec());
+        let fil = g
+            .find_mut(sub_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<FileInputLine>())
+            .unwrap();
+        fil.on_file_focused(rec);
+
+        // "src" is a directory -> "src/" + wildCard "*.c".
+        assert_eq!(fil.inner.data, "src/*.c");
+    }
+
+    // -- 8. snapshot of a rendered FileInputLine ------------------------------
+
+    fn render_fil(fil: &mut FileInputLine, w: u16, h: u16) -> String {
+        use crate::backend::{HeadlessBackend, Renderer};
+        use crate::screen::Buffer;
+        use crate::theme::Theme;
+        use crate::view::{DrawCtx, View};
+
+        let theme = Theme::classic_blue();
+        let (backend, screen) = HeadlessBackend::new(w, h);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = fil.state().get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            fil.draw(&mut dc);
+        });
+        screen.snapshot()
+    }
+
+    #[test]
+    fn snapshot_file_input_line() {
+        let mut fil = FileInputLine::new(Rect::new(0, 0, 20, 1), 80, "*.rs");
+        fil.inner.state.state.selected = true;
+        fil.inner.state.state.active = true;
+        // A directory focus -> "src/*.rs" in the field.
+        fil.on_file_focused(Some(SearchRec {
+            attr: FA_DIREC,
+            time: 0,
+            size: 0,
+            name: "src".into(),
+        }));
+        insta::assert_snapshot!(render_fil(&mut fil, 20, 1));
     }
 }

@@ -185,6 +185,14 @@ pub trait ListViewer: View {
         let source = self.lv().state.id();
         ctx.broadcast(Command::LIST_ITEM_SELECTED, source);
     }
+
+    /// Faithful hook for `TListViewer::focusItem`'s virtual tail. The base
+    /// [`focus_item`] free fn calls this after moving `focused` (and adjusting
+    /// `top_item`), so an override fires on EVERY focus change (keyboard, mouse,
+    /// scrollbar-at-apply-time, `readDirectory`). Default: no-op
+    /// (behaviour-preserving for all existing impls). `TFileList` overrides it to
+    /// broadcast `cmFileFocused`.
+    fn on_focus_changed(&mut self, _ctx: &mut Context) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -242,6 +250,10 @@ pub fn focus_item<L: ListViewer + ?Sized>(this: &mut L, item: i32, ctx: &mut Con
             };
         }
     }
+
+    // `TFileList::focusItem`'s virtual tail (default: no-op). Fires AFTER the
+    // `focused`/`top_item` move, so an override sees the settled position.
+    this.on_focus_changed(ctx);
 }
 
 /// `TListViewer::setRange` — set the list length, resetting `focused` if it now

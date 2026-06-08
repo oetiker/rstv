@@ -1,0 +1,13 @@
+---
+source: src/dialog/filedlg.rs
+expression: "render_fil(&mut fil, 20, 1)"
+---
+size: 20x1
+cursor: hidden
+text:
+| src/*.rs           |
+attr:
+|aaaaaaaaaaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(0) bg=BIOS(3)
