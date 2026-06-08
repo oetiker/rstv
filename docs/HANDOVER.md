@@ -15,12 +15,22 @@
 
 ## Current state
 
-- **HEAD = row 80 `TChDirDialog` (`ChDirDialog`) — COMPLETE, landed this session
-  on top of the 77/78/79 filedlg cluster. The file-dialog family (75–80) is now
-  finished.** See the IMPLEMENTATION-LOG top section. Build: **882 lib tests**
-  green; `cargo clippy --workspace --all-targets -- -D warnings` and
-  `cargo fmt --all --check` clean (verify clippy with a forced re-lint — a cached
-  run can mask a fresh warning).
+- **HEAD = row 81 color-selection data classes (`ColorItem`/`ColorGroup`/
+  `ColorIndex`) — COMPLETE, landed this session.** New file
+  `src/dialog/colordlg.rs` opens the color-selection cluster (81–87, `colordlg`);
+  pure data, unit-tested only. See the IMPLEMENTATION-LOG top section. Build:
+  **892 lib tests** green; `cargo clippy --workspace --all-targets -- -D warnings`
+  and `cargo fmt --all --check` clean (verify clippy with a forced re-lint — a
+  cached run can mask a fresh warning).
+- **The row-81 data shape (foundation for the rest of the cluster):**
+  collections→`Vec`. `ColorGroup::index` is **mutable focus state** (focused-item
+  position; defaults 0, set later by row-85 `setGroupIndex`), distinct from the
+  immutable palette `ColorItem::index` — the one real naming trap, documented in
+  the file. Groups = bare `Vec<ColorGroup>` (no newtype); `with_item` builder
+  replaces C++ `operator+`. `ColorIndex.color_index: Vec<u8>` with `colorSize`→
+  `color_index.len()` (the C++ `[256]` is a sentinel; real alloc is
+  `new uchar[numGroups+2]`). Rows 85/87 will add `setGroupIndex`/`getNumGroups`/
+  `setIndexes`/`getIndexes` etc. atop these (NOT pulled forward at row 81).
 - **The makeDefault broker is now built** (FOUNDATION, row 80):
   `Deferred::MakeButtonDefault { button, enable }` + `Context::make_button_default`
   + a pump arm that downcasts `Button` and calls `make_default(enable, ctx)`.
@@ -106,19 +116,32 @@
   payload-command + `set_state` `chDirButton` poke breadcrumbed → row 80. The
   `#[delegate]` proc-macro is landed and adopted codebase-wide.
 
-## Next — resume PORT-ORDER at row 81 (the color-selection family)
+## Next — resume PORT-ORDER at row 82 (the color-selection view leaves)
 
-**The file-dialog family (75–80) is DONE.** Resume the normal "lowest-numbered
-incomplete row" rule → **row 81 `TColorItem`/`TColorGroup`/`TColorIndex`**, the
-start of the **color-selection cluster (81–87, `colordlg`)**: pure data classes
-(81) → the `TView` leaves `TColorSelector`/`TColorDisplay` (82/83) →
-`TMonoSelector` (84, a `TCluster`) → the two `TListViewer`s
-`TColorGroupList`/`TColorItemList` (85/86) → `TColorDialog` (87) which assembles
-82–86 and edits a `TPalette`. Sources: `colorsel.h`/`colorsel.cpp` +
-`sclrsel.cpp`. Mostly MECHANICAL; the cluster interlocks (85/86 own 81's data,
-87 brokers selection across 82–86) so it is likely another small consumer
-cluster like 77–79. After it: the outline family (88–90) and the terminal
-family (91–92).
+**Row 81 (color data classes) is DONE.** Continue the color-selection cluster
+(81–87, `colordlg`) → **row 82 `TColorSelector`** (a `TView`, 16-color grid),
+then `TColorDisplay` (83, sample-text preview), `TMonoSelector` (84, a
+`TCluster`), the two `TListViewer`s `TColorGroupList`/`TColorItemList` (85/86 —
+they own row-81's data + drive `setGroupIndex`/`getNumGroups`/`focusItem`/
+`getText` over the `Vec<ColorGroup>`), then `TColorDialog` (87) which assembles
+82–86 and edits a `TPalette` (its `setIndexes`/`getIndexes` use row-81's
+`ColorIndex`). Sources: `colorsel.cpp` + `sclrsel.cpp` (already read this session
+— see the impl bodies). Mostly MECHANICAL; the cluster interlocks via
+**broadcasts** (`cmColorForegroundChanged`/`cmColorBackgroundChanged`/`cmColorSet`/
+`cmNewColorItem`/`cmNewColorIndex`/`cmSaveColorIndex`), so 85/86/87 will likely
+need the payload-less-broadcast / sibling-broker patterns (precedent: the row-77
+`ResolveFocusedFile` + row-80 `MakeButtonDefault` brokers) — `cmNewColorItem`
+carries a `TColorGroup*` infoPtr and the color selectors carry a `uchar` color in
+`infoByte`, so expect a payload-carrying-broadcast seam like row 77. After the
+cluster: the outline family (88–90) and the terminal family (91–92).
+
+**Row-81 data API available to 82–87:** `ColorItem::{new,name,index}`,
+`ColorGroup::{new,with_item,name,index,set_index,items}`,
+`ColorIndex::{new,group_index,set_group_index,color_index,color_size}`. The
+read-only walks the C++ does over linked lists become `Vec` indexing; the
+write methods 85/87 need beyond `set_index`/`set_group_index` (e.g. rebuilding a
+group's `items`, resizing `color_index`) were intentionally NOT added yet — add
+them in the consuming row.
 
 **`FileEditor::saveAs` is UNBLOCKED** (row 79 `FileDialog` landed): read the chosen
 filename from `FileDialog::value()` → `FieldValue::Text`, as is `EditWindow`'s

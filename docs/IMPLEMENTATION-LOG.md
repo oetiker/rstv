@@ -5,6 +5,45 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — row 81 color-selection data classes (`TColorItem`/`TColorGroup`/`TColorIndex`)
+
+Landed **row 81** — the three pure data classes that open the color-selection
+cluster (81–87, `colordlg`). New file `src/dialog/colordlg.rs`; `ColorItem`,
+`ColorGroup`, `ColorIndex` exported from `dialog/mod.rs`. One fresh-implementer
+(Sonnet, MECHANICAL) → one focused spec+quality review → two fix passes →
+integrate → commit. 882 → **892 lib tests** (+10 unit tests; +1 doctest). Pure
+data, no rendering → unit tests only (no snapshot), per the HANDOVER rule.
+
+### The collections→`Vec` shape (the cluster's data foundation)
+The C++ types are `next`-pointer singly-linked lists chained with `operator+`.
+Per the rstv collections→`Vec` deviation that machinery is dropped:
+- `ColorItem { name: String, index: u8 }` — `index` is an **immutable palette
+  index** (ctor param). `char*`→`String` (the `newStr` heap copy).
+- `ColorGroup { name: String, index: u8, items: Vec<ColorItem> }` — the
+  `TColorItem* items` list → owned `Vec`. **Naming trap captured in the docs:**
+  `ColorGroup::index` is *not* a palette index — it is **mutable focus state**
+  (the focused-item *position* within the group), left uninitialized by the C++
+  ctor and written later by `setGroupIndex` (row 85). So it is **not** a ctor
+  parameter; it defaults to `0` and is set via `set_index`. A `with_item(name,
+  idx)` fluent builder is the sanctioned replacement for the C++ `group + item`
+  chaining (just a `Vec` push — no `std::ops::Add`).
+- `ColorIndex { group_index: u8, color_index: Vec<u8> }` — the C++
+  `TColorIndex` is a variable-length struct (`new uchar[numGroups+2]`; the
+  header's `colorIndex[256]` is a sentinel, never the real size). `colorSize`
+  becomes `color_index.len()` (`color_size()` derives it); no separate field.
+
+The groups list is a bare `Vec<ColorGroup>` — **no `ColorGroupList` newtype**;
+`Vec` indexing replaces every linked-list walk the later rows (85/87) would do
+(`getGroup`/`getNumGroups`/`setGroupIndex` all become O(1)/`.len()`).
+
+### Scope discipline
+Structs + ctors + read/focus accessors only. Row-85/87 logic
+(`setGroupIndex`/`getNumGroups`/`focusItem`/`getText`/`setIndexes`/`getIndexes`)
+deliberately **not** pulled forward. Review also trimmed three speculative
+write-paths (`push_item`/`items_mut`/`color_index_mut`) that had no consumer yet
+— YAGNI; rows 85/87 add exactly what they need when they land. D12
+(`TStreamable` read/write/build for the groups tree) dropped.
+
 ## Session — row 80 `TChDirDialog` (the last filedlg row)
 
 Landed **row 80 `TChDirDialog`** (`ChDirDialog`) — the change-directory dialog —
