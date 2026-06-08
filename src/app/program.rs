@@ -2344,6 +2344,157 @@ mod tests {
         );
     }
 
+    /// **The ONLY end-to-end test of the real `program.rs`
+    /// [`ResolveFocusedFile`](crate::view::Deferred::ResolveFocusedFile) pump arm**
+    /// (the row-77 `cmFileFocused` payload broker). Every other test for this
+    /// chain is unit-level: filedlg's tests either count the broadcast/request or
+    /// *emulate* the broker apply by hand (`file_focused_round_trip_through_broker`
+    /// runs `find_mut(src).focused_rec()` + `on_file_focused` itself). This test
+    /// drives the genuine production chain through `pump_once`:
+    ///
+    /// `FileList` focus move (real `Down` key, routed by the group to the current
+    /// child) → `on_focus_changed` broadcasts `FILE_FOCUSED { source = filelist }`
+    /// → the broadcast is redelivered next pump to the sibling `FileInputLine`,
+    /// whose `handle_event` (NOT selected, so past the `!sfSelected` guard)
+    /// requests `ResolveFocusedFile` → the SAME pump's deferred-drain runs the real
+    /// `program.rs` broker arm: `group.find_mut(source)` downcasts the `FileList`,
+    /// reads `focused_rec()`, then `find_mut(subscriber)` downcasts the
+    /// `FileInputLine` and calls `on_file_focused`, writing the focused name into
+    /// the field.
+    #[test]
+    fn file_focused_broker_updates_input_line_through_pump() {
+        use crate::dialog::{FileInputLine, FileList};
+
+        // Deterministic listing WITHOUT the real FS leaking in: build a temp dir
+        // with two known plain files. `read_directory_listing` is ctx-free and
+        // reads exactly this dir; `build_listing` sorts files-before-dirs then
+        // appends ".." (non-root) -> [a.rs, b.rs, ..]. So focused 0 == "a.rs",
+        // and a single Down -> focused 1 == "b.rs" (both plain files, so the
+        // field text is the bare name — no "name/<wildcard>" dir append to model).
+        let uniq = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir =
+            std::env::temp_dir().join(format!("rstv_file_focused_{}_{}", std::process::id(), uniq));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        std::fs::write(dir.join("a.rs"), b"a").expect("a.rs");
+        std::fs::write(dir.join("b.rs"), b"b").expect("b.rs");
+        let dir_str = format!("{}/", dir.to_string_lossy());
+
+        // Insert the FileList FIRST (so it is `current` after focus) and the
+        // FileInputLine SECOND, both as siblings of the desktop group. The list is
+        // populated at construction time via the ctx-free `read_directory_listing`.
+        let ids: Rc<RefCell<(Option<crate::view::ViewId>, Option<crate::view::ViewId>)>> =
+            Rc::new(RefCell::new((None, None)));
+        let ids_cap = ids.clone();
+        let dir_cap = dir_str.clone();
+        let (backend, _handle) = HeadlessBackend::new(80, 25);
+        let theme = Theme::classic_blue();
+        let clock = Rc::new(ManualClock::new(0));
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            theme,
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                let mut fl = FileList::new(Rect::new(2, 2, 32, 12), None, None);
+                fl.read_directory_listing(&dir_cap, "*");
+                let fl_id = desktop.insert_view(Box::new(fl));
+                let fil_id = desktop.insert_view(Box::new(FileInputLine::new(
+                    Rect::new(2, 14, 32, 15),
+                    80,
+                    "*.rs",
+                )));
+                *ids_cap.borrow_mut() = (Some(fl_id), Some(fil_id));
+                Some(Box::new(desktop))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        let (fl_id, fil_id) = {
+            let b = ids.borrow();
+            (b.0.unwrap(), b.1.unwrap())
+        };
+        program.out_events.clear();
+
+        // Focus the FileList through the production focus path (the same
+        // `focus_descendant` the pump's FocusById arm uses). This makes it the
+        // desktop group's `current` AND deselects the input line — so the Down key
+        // routes to the list and the input line is past its `!sfSelected` guard.
+        program.with_ctx(|g, ctx| g.focus_descendant(fl_id, ctx));
+
+        // Precondition: the FileList is genuinely focused at the focused entry 0
+        // ("a.rs"); fail HERE (not at a confusing empty-text assertion) if focus
+        // silently failed.
+        let focused_before = program
+            .group_mut()
+            .find_mut(fl_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<FileList>())
+            .and_then(|fl| fl.focused_rec())
+            .map(|r| r.name);
+        assert_eq!(
+            focused_before,
+            Some("a.rs".to_string()),
+            "FileList starts focused on item 0 (a.rs)"
+        );
+        assert!(
+            program
+                .group_mut()
+                .find_mut(fil_id)
+                .map(|v| !v.state().state.selected)
+                .unwrap_or(false),
+            "FileInputLine is NOT selected (so it will request the broker)"
+        );
+        program.out_events.clear();
+
+        // Drive the focus change through the real pump: a Down key routed to the
+        // current FileList moves focused 0 -> 1, firing on_focus_changed ->
+        // FILE_FOCUSED broadcast (an out-event). Pump until the chain settles,
+        // bounded so a wiring break fails the assertion below instead of hanging.
+        // The broadcast is queued on pump N, delivered to the input line on pump
+        // N+1 (which requests ResolveFocusedFile), and the broker arm runs in that
+        // SAME pump's deferred-drain — so 2 pumps after the key event settle it.
+        program.out_events.push_back(Event::KeyDown(KeyEvent::new(
+            Key::Down,
+            KeyModifiers::default(),
+        )));
+        let mut pumps = 0;
+        let mut text = String::new();
+        while pumps < 5 {
+            program.pump_once();
+            pumps += 1;
+            text = program
+                .group_mut()
+                .find_mut(fil_id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<FileInputLine>())
+                .map(|fil| fil.text().to_string())
+                .unwrap_or_default();
+            if text == "b.rs" {
+                break;
+            }
+        }
+
+        // Clean up the temp fixture before the assertion (so a failure still tidies).
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // The REAL broker arm resolved the FileList's focused_rec() == "b.rs" and
+        // wrote it into the input line — proving the production ResolveFocusedFile
+        // path ran end-to-end (not an emulation).
+        assert_eq!(
+            text, "b.rs",
+            "the production ResolveFocusedFile broker wrote the focused file name \
+             into the input line through pump_once"
+        );
+        assert!(
+            (2..=3).contains(&pumps),
+            "the chain settled in 2 pumps after the Down key (broadcast queued, \
+             redelivered + broker-applied next pump); took {pumps}"
+        );
+    }
+
     #[test]
     fn alt_n_no_match_does_not_change_selection() {
         let (mut program, ids) = program_with_windows(80, 25, 2);
