@@ -15,13 +15,23 @@
 
 ## Current state
 
-- **HEAD = row 81 color-selection data classes (`ColorItem`/`ColorGroup`/
-  `ColorIndex`) — COMPLETE, landed this session.** New file
-  `src/dialog/colordlg.rs` opens the color-selection cluster (81–87, `colordlg`);
-  pure data, unit-tested only. See the IMPLEMENTATION-LOG top section. Build:
-  **892 lib tests** green; `cargo clippy --workspace --all-targets -- -D warnings`
-  and `cargo fmt --all --check` clean (verify clippy with a forced re-lint — a
-  cached run can mask a fresh warning).
+- **HEAD = row 82 `TColorSelector` (`ColorSelector`) — COMPLETE, landed this
+  session** on top of row 81. The color-selection cluster (81–87, `colordlg`) is
+  two rows in. Build: **924 lib tests** green; `cargo clippy --workspace
+  --all-targets -- -D warnings` and `cargo fmt --all --check` clean (verify clippy
+  with a forced re-lint — a cached run can mask a fresh warning).
+- **Row 82 established two reusable things for the rest of the cluster:**
+  1. **Raw-BIOS-color drawing** — the first widget to draw palette colors
+     literally (not via theme `Role`s): `Style::new(Color::Bios(c&0xF),
+     Color::Bios((c>>4)&0xF))`; attr `0x70` = `Bios(0)`/`Bios(7)`. Rows 83/84
+     (`TColorDisplay`/`TMonoSelector`) draw raw colors the same way.
+  2. **The color-changed seam** — `colorChanged` emits a **payload-less**
+     `COLOR_FOREGROUND/BACKGROUND_CHANGED {source=self}` (D4); consumers resolve
+     the color via `ColorSelector::color()` + `as_any_mut` downcast (the
+     `FileList::focused_rec` precedent, NOT D10 value). The **inbound** `cmColorSet`
+     is breadcrumbed inert `TODO(row 83)` — its `TColorDisplay` source doesn't
+     exist yet. **Row 83 owns building the resolver/broker** for both directions
+     (the `ResolveFocusedFile`/`MakeButtonDefault` broker pattern).
 - **The row-81 data shape (foundation for the rest of the cluster):**
   collections→`Vec`. `ColorGroup::index` is **mutable focus state** (focused-item
   position; defaults 0, set later by row-85 `setGroupIndex`), distinct from the
@@ -31,6 +41,9 @@
   `color_index.len()` (the C++ `[256]` is a sentinel; real alloc is
   `new uchar[numGroups+2]`). Rows 85/87 will add `setGroupIndex`/`getNumGroups`/
   `setIndexes`/`getIndexes` etc. atop these (NOT pulled forward at row 81).
+- **New `Command`s (colorsel.h):** `COLOR_FOREGROUND_CHANGED` (71),
+  `COLOR_BACKGROUND_CHANGED` (72), `COLOR_SET` (73). Rows 85/86 will add
+  `cmNewColorItem`/`cmNewColorIndex`/`cmSaveColorIndex` (74/75/76).
 - **The makeDefault broker is now built** (FOUNDATION, row 80):
   `Deferred::MakeButtonDefault { button, enable }` + `Context::make_button_default`
   + a pump arm that downcasts `Button` and calls `make_default(enable, ctx)`.
@@ -116,24 +129,38 @@
   payload-command + `set_state` `chDirButton` poke breadcrumbed → row 80. The
   `#[delegate]` proc-macro is landed and adopted codebase-wide.
 
-## Next — resume PORT-ORDER at row 82 (the color-selection view leaves)
+## Next — resume PORT-ORDER at row 83 (`TColorDisplay`)
 
-**Row 81 (color data classes) is DONE.** Continue the color-selection cluster
-(81–87, `colordlg`) → **row 82 `TColorSelector`** (a `TView`, 16-color grid),
-then `TColorDisplay` (83, sample-text preview), `TMonoSelector` (84, a
-`TCluster`), the two `TListViewer`s `TColorGroupList`/`TColorItemList` (85/86 —
-they own row-81's data + drive `setGroupIndex`/`getNumGroups`/`focusItem`/
+**Rows 81–82 are DONE.** Continue the color-selection cluster (81–87, `colordlg`)
+→ **row 83 `TColorDisplay`** (a `TView`, sample-text preview), then `TMonoSelector`
+(84, a `TCluster`), the two `TListViewer`s `TColorGroupList`/`TColorItemList`
+(85/86 — they own row-81's data + drive `setGroupIndex`/`getNumGroups`/`focusItem`/
 `getText` over the `Vec<ColorGroup>`), then `TColorDialog` (87) which assembles
 82–86 and edits a `TPalette` (its `setIndexes`/`getIndexes` use row-81's
 `ColorIndex`). Sources: `colorsel.cpp` + `sclrsel.cpp` (already read this session
-— see the impl bodies). Mostly MECHANICAL; the cluster interlocks via
-**broadcasts** (`cmColorForegroundChanged`/`cmColorBackgroundChanged`/`cmColorSet`/
-`cmNewColorItem`/`cmNewColorIndex`/`cmSaveColorIndex`), so 85/86/87 will likely
-need the payload-less-broadcast / sibling-broker patterns (precedent: the row-77
-`ResolveFocusedFile` + row-80 `MakeButtonDefault` brokers) — `cmNewColorItem`
-carries a `TColorGroup*` infoPtr and the color selectors carry a `uchar` color in
-`infoByte`, so expect a payload-carrying-broadcast seam like row 77. After the
-cluster: the outline family (88–90) and the terminal family (91–92).
+— see the impl bodies in the IMPLEMENTATION-LOG investigation).
+
+**Row 83 `TColorDisplay` is the broker-building row** (the row-82 breadcrumb owner).
+It holds a `TColorAttr* color` pointer into the dialog's palette and a sample text;
+its `draw` shows the text in that attr; it **owns the broadcast wiring** the cluster
+needs (all raw-color, like row 82):
+- It **consumes** `cmColorForegroundChanged`/`cmColorBackgroundChanged` (from the
+  row-82 selectors) — `*color = (*color & 0xF0) | (fg & 0x0F)` etc. The color value
+  lives on the **source selector** (`ColorSelector::color()` — already exposed +
+  `as_any_mut`), so build a resolver broker like `ResolveFocusedFile`: on the
+  payload-less broadcast, resolve the source's `color()` and apply the nibble.
+- Its `setColor` **emits** `cmColorSet` carrying the new attr — which the row-82
+  selectors consume (their inbound `cmColorSet` arm is the breadcrumb waiting for
+  this). Under D4 that broadcast is payload-less with `source = the TColorDisplay`,
+  and the selectors resolve the attr via a `TColorDisplay` color accessor (add one
+  mirroring `ColorSelector::color()`). **So row 83 unblocks and wires the row-82
+  `TODO(row 83)` arm.**
+The mutable `TColorAttr* color` pointer-into-the-palette is the D3 wrinkle: the
+display doesn't own the attr; in rstv it can't hold an up-pointer. Decide the
+ownership shape at row 83 (likely: the display caches the attr value + the dialog
+brokers the write-back, the row-77/80 broker style) — this is the row's one real
+design call; consult before locking it. After the cluster: the outline family
+(88–90) and the terminal family (91–92).
 
 **Row-81 data API available to 82–87:** `ColorItem::{new,name,index}`,
 `ColorGroup::{new,with_item,name,index,set_index,items}`,

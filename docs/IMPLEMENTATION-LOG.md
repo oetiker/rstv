@@ -5,6 +5,41 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — row 82 `TColorSelector` (the 16-color grid view)
+
+Landed **row 82 `TColorSelector`** (`ColorSelector`) — the BIOS-color picker grid,
+the second view in the color-selection cluster. Appended to `src/dialog/colordlg.rs`;
+exported (`ColorSel`, `ColorSelector`) from `dialog/mod.rs`. One fresh-implementer
+(Sonnet) → one spec+quality review → one fix pass → integrate → commit. 892 →
+**924 lib tests** (+32: nav arithmetic for both `selType`s, mouse pick, broadcast
+emission with `source`; +3 snapshots).
+
+### First raw-BIOS-color widget (a new draw pattern)
+Unlike every prior widget (which draws through theme `Role`s), the color selector
+draws the 16 BIOS colors **literally** — its whole job is showing the palette. It
+builds `Style`s directly: cell color `c` → `Style::new(Color::Bios(c&0xF),
+Color::Bios((c>>4)&0xF))`; the row fill + the `c==0` marker use attr `0x70`
+(`Bios(0)` on `Bios(7)`, so the marker is visible on the black-on-black cell).
+Glyphs: `icon='\u{2588}'` (█, CP437 0xDB), marker `'\u{25D8}'` (◘, CP437 0x08) at
+the middle cell of the selected color. The C++ `for i in 0..=size.y` inclusive
+loop + `TDrawBuffer` clipping is ported as `for i in 0..4` + `DrawCtx` clip — the
+faithful equivalent (a `Background` selector of height 2 shows colors 0–7; a
+`Foreground` of height 4 shows 0–15), verified by 3 snapshots.
+
+### The cluster's color-changed seam (emit now, broker at the consumer row)
+`colorChanged` is a **payload-less broadcast** (D4): it emits
+`COLOR_FOREGROUND_CHANGED`/`COLOR_BACKGROUND_CHANGED` with `source = Some(self_id)`
+and NO color payload. Future consumers (rows 83/84) resolve the color via a new
+`color()` accessor + `as_any_mut`→`Some(self)` (the `FileList::focused_rec`
+reachability precedent) — NOT D10 `value`/`set_value` (`TColorSelector` has no
+`getData`/`setData`). The inbound `cmColorSet` (which carries the row-83
+`TColorDisplay`'s attr) is **breadcrumbed inert** `TODO(row 83)` — its resolvable
+source doesn't exist yet. New `Command`s: `COLOR_FOREGROUND_CHANGED` (71),
+`COLOR_BACKGROUND_CHANGED` (72), `COLOR_SET` (73). Mouse is single-shot (the C++
+`do{}while(mouseEvent…evMouseMove)` drag loop deferred `TODO(row 31)`, like
+`button.rs`); coords are already view-local (D3). Nav wrap arithmetic ported
+verbatim (incl. the underflow-safe `>width-1` / `==0` / `==max_col` guards).
+
 ## Session — row 81 color-selection data classes (`TColorItem`/`TColorGroup`/`TColorIndex`)
 
 Landed **row 81** — the three pure data classes that open the color-selection
