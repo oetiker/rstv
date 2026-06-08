@@ -18,8 +18,10 @@
 - **HEAD = row 79 `TFileDialog` (`FileDialog`) — row 79 COMPLETE, landed this
   session as B1 (skeleton) + B2 (valid/path-logic), on top of rows 77
   `TFileInputLine` + 78 `TFileInfoPane`. The whole filedlg consumer cluster
-  (77/78/79) is done — see the IMPLEMENTATION-LOG top section.** Build: **867 lib
-  tests** green; `cargo clippy --workspace --all-targets -- -D warnings` and
+  (77/78/79) is done — see the IMPLEMENTATION-LOG top section.** Build: **868 lib
+  tests** green (incl. a pump-level integration test exercising the real
+  `ResolveFocusedFile` broker arm end-to-end); `cargo clippy --workspace
+  --all-targets -- -D warnings` and
   `cargo fmt --all --check` clean (verify clippy with a forced re-lint — a cached
   run can mask a fresh warning).
 - **The payload-carrying-broadcast seam is now built** (FOUNDATION, row 77):
