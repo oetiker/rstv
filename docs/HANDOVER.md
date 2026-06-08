@@ -15,11 +15,17 @@
 
 ## Current state
 
-- **HEAD = row 75 `TDirListBox` (`DirListBox`) + deviation D14 (native Linux `/`
-  paths), landed this session — see the IMPLEMENTATION-LOG top section.** Build:
-  **810 lib tests** green; `cargo clippy --workspace --all-targets -- -D warnings`
-  and `cargo fmt --all --check` clean (verify clippy with a forced re-lint — a
-  cached run can mask a fresh warning).
+- **HEAD = row 76 `TFileList` (`FileList`), landed this session on top of a
+  FOUNDATION sorted-search-seam extraction (separate commit) — see the
+  IMPLEMENTATION-LOG top two sections.** Build: **822 lib tests** green; `cargo
+  clippy --workspace --all-targets -- -D warnings` and `cargo fmt --all --check`
+  clean (verify clippy with a forced re-lint — a cached run can mask a fresh
+  warning).
+- **The sorted-search seam is now extracted** (`SortedSearch: ListViewer` sub-trait
+  + `sorted_handle_event`/`sorted_cursor` free fns in `list_viewer.rs`): both
+  `SortedListBox` and `FileList` are direct `ListViewer` impls implementing it.
+  Row 80's `TChDirDialog` uses `DirListBox` (a direct impl that does NOT need the
+  search machine); row 79's other panes are plain views.
 - **Cargo workspace** (`tvision` + `tvision-macros`) — use `--workspace` for
   test/clippy/fmt. Artifacts land in
   `CARGO_TARGET_DIR=/home/oetiker/scratch/cargo-target` (export it). `cargo build
@@ -85,41 +91,44 @@
   payload-command + `set_state` `chDirButton` poke breadcrumbed → row 80. The
   `#[delegate]` proc-macro is landed and adopted codebase-wide.
 
-## Next — resume PORT-ORDER at row 76 `TFileList`
+## Next — resume PORT-ORDER at row 77 `TFileInputLine`
 
-**Row 75 `TDirListBox` is DONE** (landed this session; D14 + the design cycle in
-the IMPLEMENTATION-LOG top section). Resume the normal "lowest-numbered incomplete
-row" rule → **row 76**.
+**Rows 75 `TDirListBox` and 76 `TFileList` are DONE** (76 + the FOUNDATION
+sorted-search-seam extraction landed this session — see the IMPLEMENTATION-LOG top
+two sections). Resume the normal "lowest-numbered incomplete row" rule → **row 77**.
 
-### The filedlg cluster (rows 76–80) — all inherit deviation D14 (native `/`)
-**D14 is now the law for this whole cluster** (PORTING-GUIDE): `/`-separated paths,
+### The filedlg cluster (rows 77–80) — all inherit deviation D14 (native `/`)
+**D14 is the law for this whole cluster** (PORTING-GUIDE): `/`-separated paths,
 root `/`, NO drives/`\`/"Drives" entry; FS reads via `std::fs` (follow symlinks,
 like magiblot's `stat`). No `\`↔`/` translation seam anywhere.
 
-- **Row 76 `TFileList`** (`tfillist.cpp`, subclass of `TSortedListBox`): owns the
-  row-74 `FileCollection` (`Vec<SearchRec>` + `search_rec_compare`); **reads a
-  directory** (the `readDirectory`/`findfirst(FA_DIREC|find-files)` loop → a
-  `std::fs::read_dir` populating `SearchRec` — the fs-read layer breadcrumbed at
-  rows 73/74 lands here). `getText` formats name + size/date columns; `..` handling.
-  Like row 75, expect owner-coupling to `TFileDialog` (`cmFileFocused`/
-  `cmFileDoubleClicked` broadcasts) — **breadcrumb the owner messages to row 79** if
-  payload-carrying, same pattern as row 75's `select_item`.
-  - **⚠ NOT a routine MECHANICAL leaf — the row-70/75 item-source seam comes fully
-    due here.** `TFileList` stores `Vec<SearchRec>` with an overridden `getText`, so
-    (like row 75) it **cannot be a D2 delegate** over `SortedListBox` — it must be a
-    **direct `ListViewer` impl** over `Vec<SearchRec>`. But unlike `DirListBox` it
-    *also* needs `SortedListBox`'s **incremental type-to-search**, which today lives
-    *inside* `SortedListBox` operating on its inner `ListBox`'s `Vec<String>`. A
-    plain direct impl would have to **duplicate** that search. **Before implementing
-    76, extract `SortedListBox`'s search** (the `curString` re-seed + binary search,
-    `src/widgets/list_box.rs`) into a **free function over the `ListViewer` trait**
-    (mirroring `list_viewer::draw`/`handle_event`), so `FileList` is a direct
-    `ListViewer` impl over `Vec<SearchRec>` *and* gets search for free. This is the
-    deferred "list-viewer item-source seam refactor" — a FOUNDATION sub-step, not a
-    leaf. (`get_key`/`shift_state` breadcrumbs in `list_box.rs` were left for this.)
-- Then **77 `TFileInputLine`**, **78 `TFileInfoPane`**, **79 `TFileDialog`**
-  (assembles 76+77+78+buttons), **80 `TChDirDialog`** (assembles `TInputLine` +
-  the row-75 `DirListBox` + buttons).
+- **Row 77 `TFileInputLine`** (`sfinputl.cpp` + member code in `stddlg.cpp`; no
+  `t*` file): a `TInputLine` subclass — the filename field. It **reacts to
+  `cmFileFocused`** broadcasts (updates its text from the focused file) and emits
+  `cmFileDoubleClicked` on Enter. D2 embed-delegate over `InputLine` is the likely
+  shape. The `cmFileFocused`/`cmFileDoubleClicked` consumer side is part of the
+  **row-79 owner-message seam** (see below) — 77 is a leaf that participates in it,
+  so it may need to land alongside 79's wiring rather than standalone.
+- Then **78 `TFileInfoPane`** (`sfinfpne.cpp`; a `TView` showing the focused file's
+  size/date — needs the `time`/date packing breadcrumbed at row 76), **79
+  `TFileDialog`** (assembles 76+77+78+buttons), **80 `TChDirDialog`** (assembles
+  `TInputLine` + the row-75 `DirListBox` + buttons).
+
+### Row 79 owns the file-dialog owner-message seam (row 76 breadcrumbs come due)
+Row 76 `FileList` left **three** owner broadcasts deferred to **row 79
+`TFileDialog`** (all payload-carrying — rstv's `Event::Broadcast` is payload-less,
+so this is the same typed-payload-command seam row 80 also needs; design it once at
+its first consumer):
+1. `FileList::focus_item` → `cmFileFocused` carrying the focused `SearchRec`, on
+   **every** focus change (live-updates `TFileInfoPane`/`TFileInputLine`). Because
+   rstv `focus_item` is a free fn (not virtual), row 79 should build this on the
+   `old_value != focused` diff **already computed in `sorted_handle_event`** — i.e.
+   a focus-change *observation* hook, broader than row 75's commit-only `select_item`.
+2. `FileList::read_directory`'s post-`new_list` `cmFileFocused` for item 0 (or a
+   `noFile` sentinel when the listing is empty).
+3. `FileList::select_item` → `cmFileDoubleClicked` carrying the chosen `SearchRec`
+   (the no-op `select_item` deliberately does NOT call the base — no `cmListItemSelected`).
+All three are `TODO(row 79 TFileDialog)` in `src/dialog/filedlg.rs`.
 
 ### Row 80 will need the typed-payload-command seam (row 75 breadcrumbs come due)
 Row 75 left two owner-coupling breadcrumbs that **row 80 `TChDirDialog` must

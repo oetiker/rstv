@@ -5,6 +5,56 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — row 76 `TFileList`
+
+Ported **row 76 `TFileList`** as `FileList` in `src/dialog/filedlg.rs` (on top of
+the sorted-search seam below). 810→822 lib tests (+12). Two-stage subagent review
+(spec ✅ then quality ✅) before integration; two cosmetic NITs fixed.
+
+**Shape (the row-70/75 item-source seam, now fully due).** `TFileList` is a C++
+subclass of `TSortedListBox` but stores a `TFileCollection` (`Vec<SearchRec>`) with
+an overridden `getText` — so, exactly like `DirListBox` (row 75), it **cannot** be a
+D2 embed-delegate (a delegated `View::draw` would consult the inner list's
+`Vec<String>`). It is a **direct `ListViewer` impl** over `Vec<SearchRec>`. What made
+this row *not* a routine leaf: it also needs `TSortedListBox`'s incremental
+type-to-search — which is why the FOUNDATION seam (next section) was extracted first,
+so `FileList` gets the search machine for free by implementing `SortedSearch` and
+overriding only `search`.
+
+**`search` — the load-bearing override (fuses C++ `getKey` + `list()->search`).** The
+key is a `SearchRec` whose `attr = FA_DIREC` iff `(shift_state & KB_SHIFT) != 0` OR
+the typed prefix starts with `.`, else 0; the name is the typed prefix **verbatim —
+no `strupr`** (the C++ `strupr` is under `#ifndef __FLAT__`, i.e. skipped on the
+Linux/flat build → case-sensitive, matching `search_rec_compare`'s `strcmp`). It
+binary-searches `self.items` via **`search_rec_compare` over the raw recs, NOT over
+`get_text`** — because the `attr=FA_DIREC` key must route the search into the
+*directory* section of the collection, an ordering that exists only in
+`search_rec_compare` (and `get_text` carries a `/` suffix that would mis-order). A
+discriminating test (`search_attr_routes_into_file_vs_dir_section`) pins this: with
+`shift_state = KB_SHIFT` the same prefix lands in the dir section, not the file
+section. The shared confirm step stays `ci_prefix_eq` (= C++ `equal`/`strnicmp`,
+case-insensitive — faithful even against the case-sensitive collection).
+
+**`read_directory` (D14, native `/`).** Pure `build_listing(dir, wildcard, raw)`
+split from the `std::fs` read for testability (row-75 precedent): files kept iff a
+minimal `*`/`?` `wildcard_match` matches; **directories always kept** (the wildcard
+does NOT apply to dirs — C++ pass 2 resets the pattern to `*.*`) iff `name[0] != '.'`
+(drops `.`/`..`/hidden); `..` appended iff `dir != "/"`; sorted via
+`FileCollection::insert`. The fs read uses `std::fs::metadata` (follows symlinks like
+magiblot's `findfirst`/`stat`; broken symlink → skip), `size` saturated to i32,
+`time = 0` (DOS date packing → row 78). `num_cols = 2`; `get_text` appends `/` (not
+`\`) for dirs; `value() = None` (C++ getData/setData/dataSize are no-op/0).
+
+**Deferred (breadcrumbed).** All three owner broadcasts are payload-carrying, which
+rstv's payload-less `Event::Broadcast` can't express → **row 79 `TFileDialog`**:
+`focusItem` → `cmFileFocused` on *every* focus change (a focus-change *observation*
+seam, broader than row 75's commit-only `select_item`; row 79 can build it on the
+`old_value != focused` diff already computed in `sorted_handle_event`), the post-
+`newList` item-0/noFile `cmFileFocused`, and `selectItem` → `cmFileDoubleClicked`
+(`select_item` is a true no-op that does NOT call the base, so no stray
+`cmListItemSelected`). The `tooManyFiles` OOM box, `DirSearchRec::operator new`
+safety pool, and `fexpand`/`squeeze` DOS path canonicalization are dropped.
+
 ## Session — sorted-search seam extraction (FOUNDATION sub-step for row 76)
 
 The HANDOVER flagged **row 76 `TFileList`** as *not* a routine leaf: like
