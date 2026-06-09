@@ -303,6 +303,16 @@ enum ModalCompletion {
         picker: ViewId,
         sink: std::rc::Rc<std::cell::Cell<Option<crate::color::Color>>>,
     },
+    /// `TFileEditor::saveAs` result (the view-triggered `FileDialog` seam): on a
+    /// non-cancel close, read the filename from the in-tree `FileDialog`
+    /// (`value()` → `FieldValue::Text`), set it on the `FileEditor` (`editor_id`),
+    /// flag `pending_title_update`, and re-inject `Command::SAVE` so the normal
+    /// `cmSave` path runs `save_file` with a full `ctx`. On cancel, nothing.
+    ///
+    /// The accept test is `result != Command::CANCEL` (NOT `== OK`): the
+    /// `FileDialog`'s FD_OK_BUTTON ends the modal with `cmFileOpen`, not `cmOK`
+    /// (faithful to C++ `saveAs`'s `editorDialog(edSaveAs, …) != cmCancel`).
+    SaveAsPick { editor_id: ViewId },
 }
 
 impl Program {
@@ -1678,7 +1688,6 @@ impl Program {
                                 // but the editor is NOT a Scroller, so it is its own
                                 // concrete downcast target.
                                 Deferred::SyncEditorDelta { editor, h, v } => {
-                                    use crate::widgets::Editor;
                                     let dx = h
                                         .and_then(|id| group.find_mut(id))
                                         .and_then(|view| view.value())
@@ -1687,10 +1696,11 @@ impl Program {
                                         .and_then(|id| group.find_mut(id))
                                         .and_then(|view| view.value())
                                         .and_then(field_int);
-                                    if let Some(ed) = group
-                                        .find_mut(editor)
-                                        .and_then(|view| view.as_any_mut())
-                                        .and_then(|a| a.downcast_mut::<Editor>())
+                                    // The editor id may resolve to a FileEditor (in an
+                                    // EditWindow) or a plain Editor/Memo — editor_mut
+                                    // peels to the inner Editor in either case.
+                                    if let Some(ed) =
+                                        group.find_mut(editor).and_then(crate::widgets::editor_mut)
                                     {
                                         ed.apply_scroll_delta(dx, dy, &mut ctx);
                                     }
@@ -1723,13 +1733,12 @@ impl Program {
                                 // further deferred scrollbar-param ops that settle
                                 // next pump (ONE-pass drain — expected).
                                 Deferred::EditorPaste(id) => {
-                                    use crate::widgets::Editor;
                                     let txt = renderer.backend_mut().get_clipboard();
+                                    // The id may resolve to a FileEditor or a plain
+                                    // Editor/Memo — editor_mut peels to the inner Editor.
                                     if let Some(t) = txt
-                                        && let Some(ed) = group
-                                            .find_mut(id)
-                                            .and_then(|view| view.as_any_mut())
-                                            .and_then(|a| a.downcast_mut::<Editor>())
+                                        && let Some(ed) =
+                                            group.find_mut(id).and_then(crate::widgets::editor_mut)
                                     {
                                         ed.insert_text(t.as_bytes(), false, &mut ctx);
                                     }
@@ -1836,6 +1845,58 @@ impl Program {
                                     // matching the sync `message_box_rect` + inline
                                     // `validate_modal_close` paths.
                                     *pending_modal = Some((Box::new(d), completion, first));
+                                }
+                                // -- saveAs: the view-triggered FileDialog seam ----
+                                //
+                                // A FileEditor leaf requested a save-as picker (it
+                                // holds only &mut Context and cannot exec a nested
+                                // modal — same structural constraint as OpenHistory /
+                                // OpenMessageBox). Build the C++ edSaveAs dialog
+                                // (`TFileDialog("*.*", "Save file as", "~N~ame",
+                                // fdOKButton, 101)`), pre-fill the input line with the
+                                // editor's current filename (C++ passes `fileName` to
+                                // editorDialog → setData), and stash it into
+                                // pending_modal for the outer pump_and_drive. The
+                                // SaveAsPick completion reads the picked name back +
+                                // re-injects cmSave.
+                                Deferred::OpenSaveAsDialog { editor_id } => {
+                                    use crate::dialog::{FD_OK_BUTTON, FileDialog};
+                                    // Pre-fill: the editor's current filename, if any
+                                    // (C++ saveAs starts the input at `fileName`).
+                                    let initial = group
+                                        .find_mut(editor_id)
+                                        .and_then(|v| v.as_any_mut())
+                                        .and_then(|a| {
+                                            a.downcast_mut::<crate::widgets::FileEditor>()
+                                        })
+                                        .and_then(|fe| {
+                                            fe.file_name
+                                                .as_ref()
+                                                .map(|p| p.to_string_lossy().into_owned())
+                                        });
+                                    // C++ edSaveAs: TFileDialog("*.*", "Save file as",
+                                    // "~N~ame", fdOKButton, 101). The dialog self-centers
+                                    // (ofCentered + its 49x19 floor) — no bounds param.
+                                    let mut fd = FileDialog::new(
+                                        "*.*",
+                                        "Save file as",
+                                        "~N~ame",
+                                        FD_OK_BUTTON,
+                                        101,
+                                    );
+                                    if let Some(name) = initial {
+                                        crate::view::View::set_value(
+                                            &mut fd,
+                                            crate::data::FieldValue::Text(name),
+                                        );
+                                    }
+                                    // FileDialog manages its own focus (reset_current
+                                    // focuses the input line) — no initial_focus.
+                                    *pending_modal = Some((
+                                        Box::new(fd),
+                                        ModalCompletion::SaveAsPick { editor_id },
+                                        None,
+                                    ));
                                 }
                             }
                         }
@@ -2029,6 +2090,41 @@ fn apply_modal_completion(
                     .and_then(|a| a.downcast_mut::<crate::dialog::ColorPicker>())
                     .map(|p| p.color());
                 sink.set(c);
+            }
+            None
+        }
+        // saveAs result: read the picked filename from the in-tree FileDialog,
+        // set it on the editor, flag the title update, and re-inject cmSave so the
+        // normal save path runs save_file(ctx). The accept test is `!= CANCEL`
+        // (the FileDialog's FD_OK_BUTTON ends with cmFileOpen, not cmOK — faithful
+        // to C++ `saveAs`'s `editorDialog(edSaveAs, …) != cmCancel`).
+        ModalCompletion::SaveAsPick { editor_id } => {
+            if result != Command::CANCEL {
+                // Read the chosen filename while the FileDialog is still in tree.
+                // `value()` returns the resolved_name cache, kept current by the
+                // `validate_modal_close → valid(endState)` that just ran.
+                let filename = group
+                    .find_mut(modal_id)
+                    .and_then(|v| v.value())
+                    .and_then(|fv| match fv {
+                        crate::data::FieldValue::Text(s) => Some(s),
+                        _ => None,
+                    })
+                    .filter(|s| !s.is_empty());
+                if let Some(name) = filename
+                    && let Some(ed) = group
+                        .find_mut(editor_id)
+                        .and_then(|v| v.as_any_mut())
+                        .and_then(|a| a.downcast_mut::<crate::widgets::FileEditor>())
+                {
+                    // C++ saveAs: fexpand(fileName); message(owner, cmUpdateTitle);
+                    // res = saveFile(). We set the name + flag the title broadcast,
+                    // then re-inject cmSave to run save_file with a full ctx (the
+                    // editor's cmSave handler fires the cmUpdateTitle broadcast).
+                    ed.file_name = Some(std::path::PathBuf::from(&name));
+                    ed.pending_title_update = true;
+                    return Some(Event::Command(Command::SAVE));
+                }
             }
             None
         }
@@ -2841,6 +2937,136 @@ mod tests {
         );
     }
 
+    // -- saveAs: the SaveAsPick modal completion -------------------------------
+
+    /// `apply_modal_completion(SaveAsPick, FILE_OPEN, …)` reads the picked filename
+    /// from the in-tree modal, sets it on the `FileEditor`, flags the title update,
+    /// and returns a re-injected `cmSave`. The accept command is `cmFileOpen` (the
+    /// FileDialog's FD_OK_BUTTON), NOT `cmOK` — the `!= CANCEL` test must accept it.
+    #[test]
+    fn save_as_pick_sets_filename_and_reinjects_save() {
+        use crate::data::FieldValue;
+        use crate::widgets::{FileEditor, InputLine};
+
+        let mut group = Group::new(Rect::new(0, 0, 80, 25));
+        let editor_id = group.insert(Box::new(FileEditor::new(
+            Rect::new(0, 0, 40, 10),
+            None,
+            None,
+            None,
+            None,
+        )));
+        // Stand-in modal whose `value()` yields the picked Text (a FileDialog's
+        // resolved_name role) — an InputLine returns FieldValue::Text by default.
+        let mut il = InputLine::with_limit(Rect::new(0, 0, 40, 1), 256);
+        il.set_value(FieldValue::Text("/tmp/picked.txt".to_string()));
+        let modal_id = group.insert(Box::new(il));
+
+        let reinject = apply_modal_completion(
+            ModalCompletion::SaveAsPick { editor_id },
+            Command::FILE_OPEN, // FD_OK_BUTTON ends the modal with cmFileOpen
+            &mut group,
+            modal_id,
+        );
+
+        assert_eq!(
+            reinject,
+            Some(Event::Command(Command::SAVE)),
+            "SaveAsPick re-injects cmSave"
+        );
+        let fe = group
+            .find_mut(editor_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<FileEditor>())
+            .expect("editor resolves");
+        assert_eq!(
+            fe.file_name.as_deref(),
+            Some(std::path::Path::new("/tmp/picked.txt")),
+            "picked filename set on the editor"
+        );
+        assert!(fe.pending_title_update, "title-update flag set");
+    }
+
+    /// `SaveAsPick` on cmCancel sets nothing and re-injects nothing.
+    #[test]
+    fn save_as_pick_cancel_is_noop() {
+        use crate::data::FieldValue;
+        use crate::widgets::{FileEditor, InputLine};
+
+        let mut group = Group::new(Rect::new(0, 0, 80, 25));
+        let editor_id = group.insert(Box::new(FileEditor::new(
+            Rect::new(0, 0, 40, 10),
+            None,
+            None,
+            None,
+            None,
+        )));
+        let mut il = InputLine::with_limit(Rect::new(0, 0, 40, 1), 256);
+        il.set_value(FieldValue::Text("/tmp/ignored.txt".to_string()));
+        let modal_id = group.insert(Box::new(il));
+
+        let reinject = apply_modal_completion(
+            ModalCompletion::SaveAsPick { editor_id },
+            Command::CANCEL,
+            &mut group,
+            modal_id,
+        );
+        assert_eq!(reinject, None, "cancel re-injects nothing");
+        let fe = group
+            .find_mut(editor_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<FileEditor>())
+            .unwrap();
+        assert!(fe.file_name.is_none(), "cancel leaves the editor untitled");
+        assert!(!fe.pending_title_update, "cancel sets no title flag");
+    }
+
+    /// The `OpenSaveAsDialog` deferred, when drained by the pump, builds a
+    /// `FileDialog` and stashes it into `pending_modal` with a `SaveAsPick`
+    /// completion. Driven directly through the pump's deferred-drain arm (not via
+    /// `pump_and_drive`, which would launch the modal loop and hang headless).
+    #[test]
+    fn open_save_as_dialog_deferred_stashes_pending_modal() {
+        use crate::widgets::FileEditor;
+
+        let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+        let editor_id = program.group_mut().insert(Box::new(FileEditor::new(
+            Rect::new(0, 0, 40, 10),
+            None,
+            None,
+            None,
+            None,
+        )));
+        program.out_events.clear();
+
+        // Queue the request + a benign broadcast so the pump reaches its deferred
+        // drain (event-gated on !ev.is_nothing()).
+        program
+            .deferred
+            .push(Deferred::OpenSaveAsDialog { editor_id });
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.pump_once();
+
+        let stashed = program.pending_modal.take().expect("pending_modal set");
+        let (view, completion, focus) = stashed;
+        assert!(
+            matches!(completion, ModalCompletion::SaveAsPick { editor_id: e } if e == editor_id),
+            "SaveAsPick completion targets the editor"
+        );
+        assert!(focus.is_none(), "FileDialog manages its own focus");
+        // The stashed view is a FileDialog (downcast via as_any_mut on the box).
+        let mut view = view;
+        assert!(
+            view.as_any_mut()
+                .and_then(|a| a.downcast_mut::<crate::dialog::FileDialog>())
+                .is_some(),
+            "the stashed modal is a FileDialog"
+        );
+    }
+
     // -- colorpick: Deferred::ColorPickerDrag wires through the pump -----------
 
     /// **End-to-end test of the `ColorPickerDrag` pump arm + capture lifecycle.**
@@ -3406,7 +3632,11 @@ mod tests {
         program.pump_once();
 
         // The modal view receives the outside click (delivery path confirmed).
-        assert_eq!(modal_log.borrow().len(), 1, "outside click delivered to modal");
+        assert_eq!(
+            modal_log.borrow().len(),
+            1,
+            "outside click delivered to modal"
+        );
         // No endModal was posted — end_state stays None (the plain Probe does
         // not call ctx.end_modal, so no modal close).
         assert!(
@@ -7191,7 +7421,7 @@ mod tests {
         use crate::event::{Key, KeyEvent, KeyModifiers};
         use crate::validate::Validator;
         use crate::view::{StateFlag, View};
-        use crate::widgets::{EditWindow, Editor, InputLine, LimitMode};
+        use crate::widgets::{EditWindow, InputLine, LimitMode};
 
         /// A validator that rejects every final value (so `valid()` fails) AND pops
         /// an error box — mirrors the concrete validators (whose `error` emits the
@@ -7250,12 +7480,13 @@ mod tests {
                 let mut ev = Event::KeyDown(KeyEvent::new(Key::Char('Z'), KeyModifiers::default()));
                 g.find_mut(editor_id).unwrap().handle_event(&mut ev, ctx);
             });
-            // Setup assertion: the buffer is genuinely modified now.
+            // Setup assertion: the buffer is genuinely modified now. The child is a
+            // FileEditor (EditWindow's editor), so peel to its inner Editor via
+            // editor_mut (its own as_any_mut returns the FileEditor).
             let modified = program
                 .group_mut()
                 .find_mut(editor_id)
-                .and_then(|v| v.as_any_mut())
-                .and_then(|a| a.downcast_mut::<Editor>())
+                .and_then(crate::widgets::editor_mut)
                 .map(|e| e.modified())
                 .unwrap_or(false);
             assert!(modified, "setup: the editor must be modified before close");
@@ -7407,8 +7638,7 @@ mod tests {
             let still_modified = program
                 .group_mut()
                 .find_mut(editor_id)
-                .and_then(|v| v.as_any_mut())
-                .and_then(|a| a.downcast_mut::<Editor>())
+                .and_then(crate::widgets::editor_mut)
                 .map(|e| e.modified())
                 .unwrap_or(false);
             assert!(still_modified, "Cancel → buffer still modified");

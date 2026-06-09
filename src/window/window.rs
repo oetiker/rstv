@@ -207,6 +207,26 @@ impl Window {
         self.title.as_deref()
     }
 
+    /// Update the window title in both the `Window` record and the [`Frame`] child.
+    /// Called from `EditWindow::handle_event` on the `cmUpdateTitle` broadcast
+    /// (`TFileEditor::saveAs` fires it after a rename). The C++ `TEditWindow` has no
+    /// stored title — `getTitle()` reads the editor's `fileName` live and
+    /// `cmUpdateTitle` just `frame->drawView()`s. rstv stores the title and the
+    /// frame draws it, so the faithful equivalent recomputes the title from the
+    /// editor and re-pushes it to the frame here. Pattern mirrors [`set_flags`]:
+    /// find the frame child, downcast, call the frame setter.
+    pub(crate) fn set_title(&mut self, title: Option<String>) {
+        self.title = title.clone();
+        if let Some(frame) = self
+            .group
+            .child_mut(self.frame_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<Frame>())
+        {
+            frame.set_title(title);
+        }
+    }
+
     // -- setters (subclass field overrides, e.g. TDialog) -------------------
 
     /// Override the decoration flags after construction (`TDialog::TDialog` sets

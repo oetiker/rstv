@@ -2062,10 +2062,15 @@ impl View for Memo {
 /// `valid` requests an `OpenMessageBox`, caches the answer in
 /// [`set_modal_answer`](View::set_modal_answer), re-validates).
 ///
+/// `saveAs` / `Command::SAVE_AS` / untitled `save()` open a `TFileDialog` via the
+/// **view-triggered FileDialog seam** ([`Context::request_save_as_dialog`] →
+/// `Deferred::OpenSaveAsDialog` → `ModalCompletion::SaveAsPick`): the pump builds +
+/// runs the dialog, the completion sets `file_name` + [`pending_title_update`] and
+/// re-injects `cmSave`, which then `save_file`s and broadcasts `cmUpdateTitle`
+/// (refreshing the hosting [`EditWindow`]'s frame title). See `save()` for the
+/// modified-close LIMITATION.
+///
 /// Deferred (forced by not-yet-ported substrate):
-/// * `saveAs` / `Command::SAVE_AS` / save of an untitled buffer — needs
-///   `TFileDialog` (not yet ported). `Command::SAVE_AS` is left unhandled (not
-///   cleared); `save()` on an untitled buffer is a no-op returning `false`.
 /// * `edReadError` on **load** — `load_file` is only called from the ctor, which
 ///   has no `Context` and no inserted view, so it cannot request a modal; kept
 ///   `is_valid = false` with no box. `edCreateError`/`edWriteError` are MERGED:
@@ -2075,7 +2080,8 @@ impl View for Memo {
 /// * `efBackupFiles` backup-rename in `saveFile` — deferred (flag defaults off).
 /// * `shutDown` cmSave/cmSaveAs disable-on-close — no rstv `shut_down` View
 ///   analogue exists; dropped.
-/// * `cmUpdateTitle` broadcast — folded into the deferred `saveAs`.
+/// * `isClipboard()→*fileName = EOS` reset after saveAs — the internal-clipboard
+///   editor (row-66 deferral) is not wired, so the reset is moot.
 /// * `TStreamable` write/read/build — D12 dropped (like every other row).
 pub struct FileEditor {
     /// The editor engine, in file-editor mode.
@@ -2088,6 +2094,12 @@ pub struct FileEditor {
     /// the re-validate that consumes it (the async-modal-from-a-view round-trip).
     /// `None` until an answer is routed back; consumed (taken) on the next `valid`.
     pending_save_answer: Option<crate::command::Command>,
+    /// Set by the `SaveAsPick` modal completion (after the user picks a save-as
+    /// filename) so the next successful `cmSave` broadcasts `cmUpdateTitle` to
+    /// refresh the hosting `EditWindow`'s frame title. Faithful to C++ `saveAs`'s
+    /// `message(owner, evBroadcast, cmUpdateTitle, 0)` — but deferred to the
+    /// re-injected `cmSave` so the broadcast fires from a full `ctx`.
+    pub pending_title_update: bool,
 }
 
 impl FileEditor {
@@ -2105,6 +2117,7 @@ impl FileEditor {
             editor: Editor::new_file_editor(bounds, h_scroll_bar, v_scroll_bar, indicator),
             file_name: None,
             pending_save_answer: None,
+            pending_title_update: false,
         };
         if let Some(path) = file_name {
             // C++ fexpand canonicalizes; best-effort here (canonicalize fails for a
@@ -2183,11 +2196,28 @@ impl FileEditor {
     }
 
     /// `TFileEditor::save` — save to the existing file, or (untitled) saveAs.
+    ///
+    /// C++ `save()`: `if( *fileName == EOS ) return saveAs(); else return saveFile();`.
+    /// The untitled branch is asynchronous in rstv: C++ `saveAs` runs a *nested*
+    /// modal `FileDialog` inline (`execDialog`) and returns the saved bool; a
+    /// FileEditor leaf holds only `&mut Context` and cannot exec a nested modal, so
+    /// it **requests** the dialog ([`Context::request_save_as_dialog`]) and returns
+    /// `false` for now. The real save happens after the dialog closes: the
+    /// `SaveAsPick` completion sets `file_name` + re-injects `cmSave`, which re-runs
+    /// `save()` — now with a non-empty `file_name` → `save_file`.
+    ///
+    /// LIMITATION: the `valid()` modified-close path (cmClose → Yes → `save()` here)
+    /// returns this `false` and so VETOES the close, then the dialog opens
+    /// separately; a full fix requires `validate_modal_close` to drive an
+    /// `OpenSaveAsDialog` request inline (the §6 modal-close twin of this seam).
+    /// Breadcrumbed; no consumer exercises the untitled close+Yes path yet.
     pub fn save(&mut self, ctx: &mut Context) -> bool {
         if self.file_name.is_some() {
             self.save_file(ctx)
         } else {
-            // TODO(row 68 saveAs): untitled save needs TFileDialog (not yet ported).
+            if let Some(id) = View::state(self).id() {
+                ctx.request_save_as_dialog(id);
+            }
             false
         }
     }
@@ -2195,21 +2225,48 @@ impl FileEditor {
 
 #[crate::delegate(to = editor)]
 impl View for FileEditor {
-    /// `TFileEditor::handleEvent` — base editor first, then cmSave (cmSaveAs deferred).
+    /// Concrete-reach hatch: the pump (the `OpenSaveAsDialog` / `SaveAsPick` brokers)
+    /// and `EditWindow::handle_event` downcast a group child back to `&mut FileEditor`
+    /// to set `file_name` / read `pending_title_update`. WITHOUT this override the
+    /// `#[delegate(to = editor)]` macro would forward `as_any_mut` to the inner
+    /// `Editor`, so the downcast would silently miss (return the inner `Editor`'s Any).
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        Some(self)
+    }
+
+    /// `TFileEditor::handleEvent` — base editor first, then cmSave / cmSaveAs.
     fn handle_event(&mut self, ev: &mut crate::event::Event, ctx: &mut Context) {
         use crate::command::Command;
         use crate::event::Event;
         self.editor.handle_event(ev, ctx);
-        // cmSave handled here; cmSaveAs is left unhandled (not cleared).
-        // TODO(row 68 saveAs): Command::SAVE_AS needs TFileDialog (not yet ported).
+        // cmSaveAs (C++ `case cmSaveAs: saveAs();`): always open the FileDialog to
+        // pick a (possibly new) name, regardless of whether the buffer is titled.
+        // The SaveAsPick completion sets the picked name + re-injects cmSave.
+        if let Event::Command(cmd) = ev
+            && *cmd == Command::SAVE_AS
+        {
+            if let Some(id) = View::state(self).id() {
+                ctx.request_save_as_dialog(id);
+            }
+            ev.clear();
+            return; // do NOT fall through to the cmSave arm below.
+        }
         if let Event::Command(cmd) = ev
             && *cmd == Command::SAVE
         {
-            self.save(ctx);
+            let ok = self.save(ctx);
             // C++ saveFile's update(ufUpdate) flushes inline; publish modified=false
             // to the indicator and re-gray the save commands now (the inner editor
             // already flushed with modified still true, since cmSave isn't an edit).
             self.editor.flush_if_unlocked(ctx);
+            // After a successful saveAs (the SaveAsPick completion set the flag and
+            // re-injected this cmSave), broadcast cmUpdateTitle so the hosting
+            // EditWindow refreshes its frame title (C++ saveAs's
+            // `message(owner, evBroadcast, cmUpdateTitle, 0)`).
+            if ok && self.pending_title_update {
+                self.pending_title_update = false;
+                ctx.broadcast(Command::UPDATE_TITLE, View::state(self).id());
+            }
             ev.clear();
         }
     }
@@ -2275,6 +2332,25 @@ impl View for FileEditor {
     }
 }
 
+/// Reach the inner [`Editor`] engine of a group child that may be a plain
+/// [`Editor`], a [`Memo`], or a [`FileEditor`].
+///
+/// `FileEditor::as_any_mut` returns the `FileEditor` itself (so the saveAs brokers
+/// can downcast to it), NOT the inner `Editor`. The editor cross-view brokers
+/// (`SyncEditorDelta` / `EditorPaste`) target the inserted view's id — which, in an
+/// `EditWindow`, IS a `FileEditor` — yet they need the inner `Editor`. This helper
+/// bridges that: it tries the `FileEditor` downcast first (peeling to its
+/// `.editor`), and otherwise falls back to a direct `Editor` downcast (covering a
+/// plain `Editor` and a `Memo`, both of whose `as_any_mut` forward to the inner
+/// `Editor`). The `is::<>()`-first form avoids the NLL conditional-borrow error.
+pub(crate) fn editor_mut(v: &mut dyn View) -> Option<&mut Editor> {
+    let any = v.as_any_mut()?;
+    if any.is::<FileEditor>() {
+        return any.downcast_mut::<FileEditor>().map(|fe| &mut fe.editor);
+    }
+    any.downcast_mut::<Editor>()
+}
+
 // ---------------------------------------------------------------------------
 // EditWindow — TEditWindow (teditwnd.cpp), row 69
 // ---------------------------------------------------------------------------
@@ -2285,10 +2361,6 @@ impl View for FileEditor {
 /// id, mirroring the C++ ctor.
 ///
 /// Deferrals (breadcrumbed):
-/// * Dynamic `getTitle` refresh on save — the C++ `cmUpdateTitle` broadcast is
-///   fired only by `FileEditor::saveAs`, which needs `TFileDialog` (deferred).
-///   The title is derived once at construction; the refresh path lands with
-///   saveAs. No `handle_event` override and no `cmUpdateTitle` handler now.
 /// * `close()` clipboard branch (`isClipboard()→hide()`) — the internal-clipboard
 ///   editor (row-66 deferral) is not wired, so close is always the base
 ///   `TWindow::close` (cmClose → request_close). `close()` is not a View method.
@@ -2378,6 +2450,44 @@ impl EditWindow {
     )
 )]
 impl View for EditWindow {
+    /// `TEditWindow::handleEvent` — `TWindow::handleEvent` first, then refresh the
+    /// frame title on a `cmUpdateTitle` broadcast (the hosted [`FileEditor`]'s
+    /// `saveAs` fires it after a rename).
+    ///
+    /// C++ `TEditWindow::getTitle` reads `editor->fileName` live and `cmUpdateTitle`
+    /// just `frame->drawView()`s; rstv stores the title, so we recompute it from the
+    /// editor's current `file_name` (or "Untitled") and re-push it to the frame via
+    /// [`Window::set_title`](crate::window::Window).
+    ///
+    /// We do NOT clear the event (the C++ clears it). C++'s `saveAs` uses a narrow
+    /// `message(owner, …)` to the editor's own window; rstv's `ctx.broadcast`
+    /// **fans out to every window**. Under fan-out, clearing on the first window
+    /// dispatched would starve the others — so every EditWindow refreshes its own
+    /// title from its own editor (idempotent for windows that did not save,
+    /// order-independent) and the event stays live (D4 source-as-filter would let us
+    /// gate + clear, but is unneeded here).
+    fn handle_event(&mut self, ev: &mut crate::event::Event, ctx: &mut crate::view::Context) {
+        use crate::command::Command;
+        use crate::event::Event;
+        self.window.handle_event(ev, ctx);
+        if let Event::Broadcast { command, .. } = ev
+            && *command == Command::UPDATE_TITLE
+        {
+            let title = self
+                .window
+                .child_mut(self.editor_id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<FileEditor>())
+                .map(|fe| match &fe.file_name {
+                    Some(p) => p.to_string_lossy().into_owned(),
+                    None => "Untitled".to_string(),
+                });
+            if let Some(t) = title {
+                self.window.set_title(Some(t));
+            }
+        }
+    }
+
     /// `TEditWindow::sizeLimits` — minimum window size is {24, 6}
     /// (`minEditWinSize`). `calc_bounds` is in the skip list so an
     /// owner-driven resize routes through this override (via the trait default
@@ -3424,6 +3534,145 @@ mod tests {
         assert!(
             fe.valid(Command::CLOSE, &mut cx.ctx()),
             "unmodified buffer allows close"
+        );
+    }
+
+    // -- saveAs: the view-triggered FileDialog seam (row 68/69) ---------------
+
+    /// `cmSaveAs` on a FileEditor requests the save-as `FileDialog` (the deferred
+    /// push), regardless of whether the buffer is titled, and clears the event.
+    #[test]
+    fn save_as_requests_dialog() {
+        let mut group = Group::new(Rect::new(0, 0, 40, 10));
+        let id = group.insert(Box::new(untitled_fe()));
+        let mut cx = Cx::new();
+        {
+            let mut ctx = cx.ctx();
+            let mut ev = Event::Command(Command::SAVE_AS);
+            group.find_mut(id).unwrap().handle_event(&mut ev, &mut ctx);
+            assert!(ev.is_nothing(), "cmSaveAs is consumed (cleared)");
+        }
+        assert!(
+            cx.deferred
+                .iter()
+                .any(|d| matches!(d, Deferred::OpenSaveAsDialog { editor_id } if *editor_id == id)),
+            "cmSaveAs queues OpenSaveAsDialog for the editor"
+        );
+    }
+
+    /// An untitled `save()` (the `*fileName == EOS` branch, reached via `cmSave`)
+    /// also requests the dialog — it cannot save without a name.
+    #[test]
+    fn untitled_save_requests_dialog() {
+        let mut group = Group::new(Rect::new(0, 0, 40, 10));
+        let id = group.insert(Box::new(untitled_fe()));
+        let mut cx = Cx::new();
+        {
+            let mut ctx = cx.ctx();
+            let v = group.find_mut(id).unwrap();
+            let fe = v
+                .as_any_mut()
+                .unwrap()
+                .downcast_mut::<FileEditor>()
+                .unwrap();
+            assert!(
+                !fe.save(&mut ctx),
+                "untitled save returns false (async path)"
+            );
+        }
+        assert!(
+            cx.deferred
+                .iter()
+                .any(|d| matches!(d, Deferred::OpenSaveAsDialog { editor_id } if *editor_id == id)),
+            "untitled save queues OpenSaveAsDialog"
+        );
+    }
+
+    /// After `SaveAsPick` set `file_name` + `pending_title_update`, the re-injected
+    /// `cmSave` saves to the new file AND broadcasts `cmUpdateTitle` (the EditWindow
+    /// title refresh). Drives the editor through a real `cmSave` over a temp path.
+    #[test]
+    fn save_as_then_save_writes_and_broadcasts_title() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("rstv_saveas_test_{}.txt", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let mut group = Group::new(Rect::new(0, 0, 40, 10));
+        let id = group.insert(Box::new(untitled_fe()));
+        // Put some content + the SaveAsPick post-conditions on the editor.
+        {
+            let v = group.find_mut(id).unwrap();
+            let fe = v
+                .as_any_mut()
+                .unwrap()
+                .downcast_mut::<FileEditor>()
+                .unwrap();
+            fe.editor.set_text(b"hello saveAs");
+            fe.file_name = Some(path.clone());
+            fe.pending_title_update = true;
+        }
+        let mut cx = Cx::new();
+        {
+            let mut ctx = cx.ctx();
+            let mut ev = Event::Command(Command::SAVE);
+            group.find_mut(id).unwrap().handle_event(&mut ev, &mut ctx);
+            assert!(ev.is_nothing(), "cmSave consumed");
+        }
+
+        // The file was written with the buffer contents.
+        let written = std::fs::read(&path).expect("file written");
+        assert_eq!(written, b"hello saveAs");
+        let _ = std::fs::remove_file(&path);
+
+        // cmUpdateTitle was broadcast (sourced from the editor) and the flag cleared.
+        assert!(
+            cx.out.iter().any(|e| matches!(
+                e,
+                Event::Broadcast { command, source } if *command == Command::UPDATE_TITLE && *source == Some(id)
+            )),
+            "successful saveAs broadcasts cmUpdateTitle"
+        );
+        {
+            let v = group.find_mut(id).unwrap();
+            let fe = v
+                .as_any_mut()
+                .unwrap()
+                .downcast_mut::<FileEditor>()
+                .unwrap();
+            assert!(!fe.pending_title_update, "title-update flag consumed");
+        }
+    }
+
+    /// `EditWindow::handle_event` refreshes its frame title on a `cmUpdateTitle`
+    /// broadcast, recomputing it from the hosted editor's current `file_name`.
+    #[test]
+    fn edit_window_updates_title_on_broadcast() {
+        let mut ew = EditWindow::new(Rect::new(0, 0, 40, 15), None, 0);
+        assert_eq!(ew.window.title(), Some("Untitled"));
+        let editor_id = ew.editor_id;
+        // Rename the hosted editor (simulating a completed saveAs).
+        {
+            let fe = ew
+                .window
+                .child_mut(editor_id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<FileEditor>())
+                .expect("editor child");
+            fe.file_name = Some(std::path::PathBuf::from("/tmp/renamed.txt"));
+        }
+        let mut cx = Cx::new();
+        {
+            let mut ctx = cx.ctx();
+            let mut ev = Event::Broadcast {
+                command: Command::UPDATE_TITLE,
+                source: Some(editor_id),
+            };
+            View::handle_event(&mut ew, &mut ev, &mut ctx);
+        }
+        assert_eq!(
+            ew.window.title(),
+            Some("/tmp/renamed.txt"),
+            "frame title refreshed from the editor's new file_name"
         );
     }
 

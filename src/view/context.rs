@@ -416,6 +416,20 @@ pub enum Deferred {
         /// re-validates inline).
         then_command: Option<crate::command::Command>,
     },
+
+    // -- saveAs: the view-triggered FileDialog seam ---------------------------
+    /// Request the pump to open a [`FileDialog`](crate::dialog::FileDialog) for the
+    /// given editor (a view-triggered async-modal, the `HistoryPick`/`OpenMessageBox`
+    /// shape). A [`FileEditor`](crate::widgets::FileEditor) leaf holds only `&mut
+    /// Context`, so it cannot run the nested file-picker modal inline; it requests
+    /// it here. The pump builds the `FileDialog` ("Save file as", FD_OK_BUTTON) and
+    /// stashes it into `Program::pending_modal` with a `SaveAsPick { editor_id }`
+    /// completion, which the outer `pump_and_drive` runs at top level. On accept the
+    /// completion sets the chosen filename on the editor and re-injects `cmSave`.
+    OpenSaveAsDialog {
+        /// The [`FileEditor`](crate::widgets::FileEditor) to save the picked name to.
+        editor_id: ViewId,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -988,6 +1002,17 @@ impl<'a> Context<'a> {
             answer_to,
             then_command,
         });
+    }
+
+    /// Request the pump to open a [`FileDialog`](crate::dialog::FileDialog) for
+    /// `editor_id` to pick a save-as filename — **deferred**
+    /// ([`Deferred::OpenSaveAsDialog`]). Called from
+    /// `FileEditor::handle_event(cmSaveAs)` and `FileEditor::save()` when the buffer
+    /// is untitled (`*fileName == EOS`). The pump builds + stashes the dialog; the
+    /// `SaveAsPick` completion sets the picked name on the editor and re-injects
+    /// `cmSave`.
+    pub fn request_save_as_dialog(&mut self, editor_id: ViewId) {
+        self.deferred.push(Deferred::OpenSaveAsDialog { editor_id });
     }
 
     /// Request the `TEditor` `editor` re-read its scrollbars' values and update its

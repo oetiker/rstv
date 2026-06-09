@@ -166,15 +166,16 @@ and `tvision::Tab`. A future **theme editor** will consume `color_dialog` — th
 needs the D7 "Theme extension point" (runtime `Role→Style` registration) first,
 a separate sub-project not on the critical path.
 
-**`FileEditor::saveAs` is UNBLOCKED** (row 79 `FileDialog` landed): read the
-chosen filename from `FileDialog::value()` → `FieldValue::Text`. Still open
-(a follow-up, not on the PORT-ORDER critical path).
-
-**`FileEditor::saveAs` is UNBLOCKED** (row 79 `FileDialog` landed): read the chosen
-filename from `FileDialog::value()` → `FieldValue::Text`, as is `EditWindow`'s
-dynamic-title (`cmUpdateTitle`) path. Still open (a follow-up, not on the PORT-ORDER
-critical path): wire `FileEditor::saveAs`/`edSaveAs` to exec a `FileDialog` and read
-its `value()`.
+**`FileEditor::saveAs` is DONE** (view-triggered FileDialog seam): `cmSaveAs` /
+untitled `cmSave` open a `FileDialog` via `Deferred::OpenSaveAsDialog` →
+`ModalCompletion::SaveAsPick`; the completion sets `file_name` + re-injects `cmSave`,
+which saves and broadcasts `cmUpdateTitle` to refresh the `EditWindow` frame title
+(`Window::set_title`). See the IMPLEMENTATION-LOG entry. **Accept test is
+`!= CANCEL` (FD_OK_BUTTON ends with `cmFileOpen`, not `cmOK`).** New reusable hatch:
+`widgets::editor_mut(&mut dyn View) -> Option<&mut Editor>` peels a `FileEditor`
+(whose own `as_any_mut` now returns the `FileEditor`) or a plain `Editor`/`Memo` to
+the inner `Editor` — the editor brokers (`SyncEditorDelta`/`EditorPaste`) go through
+it.
 
 **Editor seam leftovers (still open, latent):**
 - **cmQuit veto.** `valid_end`'s app-quit path *vetoes* close of a modified
@@ -184,9 +185,11 @@ its `value()`.
   (no runnable app wires a `FileEditor` yet); the fix is a whole-tree analogue of
   `validate_modal_close`. *(Cheap interim if a quit prompt is wanted sooner: gate
   `FileEditor::valid`'s prompt to `cmd == cmClose` so cmQuit reverts to allow-close.)*
-- **Still breadcrumbed:** `saveAs`/`edSaveAs` — `TFileDialog` (row 79) has now
-  landed, so this is **unblocked** (exec a `FileDialog`, read `value()`); just not
-  yet wired. `edReadError` on **load** (the ctor has no `ctx`) remains.
+- **saveAs modified-close path.** `valid()` (cmClose → Yes → untitled `save()`)
+  vetoes the close, then the saveAs dialog opens *separately* (the deferred fires
+  next pump). A full fix needs `validate_modal_close` to drive an
+  `OpenSaveAsDialog` inline (the §6 modal-close twin). Breadcrumbed in `save()`.
+- **Still breadcrumbed:** `edReadError` on **load** (the ctor has no `ctx`) remains.
 
 ### Other non-gating seam still open (independent of the above)
 - **The `ModalFrame` deliver-outside-to-modal seam** (row 56/57 deferred — STILL

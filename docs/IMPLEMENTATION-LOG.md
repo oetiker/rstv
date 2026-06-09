@@ -5,6 +5,71 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — FileEditor::saveAs (view-triggered FileDialog seam)
+
+Wired **`TFileEditor::saveAs`** (`tfiledtr.cpp`) — the last unported editor
+behavior after all 92 PORT-ORDER rows landed. `cmSaveAs` / `cmSave`-on-untitled
+now open a `FileDialog`, read the chosen filename, save, and refresh the hosting
+`EditWindow`'s frame title. Modelled on the existing async-modal-from-a-view
+seams (`OpenHistory` / `OpenMessageBox`).
+
+### The seam (HistoryPick shape + a re-inject twist)
+
+- **`Deferred::OpenSaveAsDialog { editor_id }`** + `Context::request_save_as_dialog`
+  (`context.rs`): a `FileEditor` leaf holds only `&mut Context` and cannot run a
+  nested modal inline, so it requests one.
+- **Pump arm** (`program.rs` `pump_once` deferred drain): builds the C++ `edSaveAs`
+  dialog — `FileDialog::new("*.*", "Save file as", "~N~ame", FD_OK_BUTTON, 101)`,
+  pre-filled with the editor's current filename — and stashes it into
+  `pending_modal` with `ModalCompletion::SaveAsPick { editor_id }` (self-centering,
+  no bounds / no initial-focus).
+- **`apply_modal_completion(SaveAsPick, …)`**: the accept test is **`!= CANCEL`**,
+  NOT `== OK` — the `FileDialog`'s `FD_OK_BUTTON` ends the modal with `cmFileOpen`,
+  not `cmOK` (faithful to C++ `editorDialog(edSaveAs,…) != cmCancel`). On accept it
+  reads `value()` (the `resolved_name` cache, kept current by
+  `validate_modal_close → valid()`), sets `file_name` + `pending_title_update` on
+  the editor, and **re-injects `Command::SAVE`** so the normal `cmSave` path runs
+  `save_file` with a full `ctx`.
+
+### Editor + window wiring (`editor.rs`)
+
+- `FileEditor::pending_title_update` flag; `save()` untitled branch requests the
+  dialog; `handle_event` adds a `cmSaveAs` arm and, after a flagged `cmSave`,
+  broadcasts `cmUpdateTitle` (C++ `message(owner, …, cmUpdateTitle)`).
+- `EditWindow::handle_event` override listens for the `cmUpdateTitle` broadcast and
+  recomputes its frame title from the editor's current `file_name` via the new
+  `Window::set_title` (`window.rs`, mirrors `set_flags`). The event is **not
+  cleared** (unlike C++): rstv's `broadcast` fans out to every window, so clearing
+  would starve non-first windows; each refreshes its own title idempotently.
+
+### The `as_any_mut` foundation fix (load-bearing)
+
+The seam needs to downcast a group child back to `&mut FileEditor`, but
+`#[delegate(to = editor)]` forwarded `as_any_mut` to the inner `Editor` — so the
+downcast silently missed. Added an `as_any_mut → self` override to `FileEditor`,
+which would have **regressed the editor scroll-sync/paste brokers**
+(`SyncEditorDelta` / `EditorPaste` target the inserted view's id = a `FileEditor`
+in an `EditWindow`, yet need the inner `Editor`). Introduced
+`widgets::editor_mut(&mut dyn View) -> Option<&mut Editor>` (FileEditor-first,
+else Editor/Memo) and routed both broker arms + two close-test helpers through it.
+
+### Tests
+
+7 new (957 → 964): `save_as_requests_dialog`, `untitled_save_requests_dialog`,
+`save_as_then_save_writes_and_broadcasts_title`,
+`edit_window_updates_title_on_broadcast` (editor.rs);
+`save_as_pick_sets_filename_and_reinjects_save`, `save_as_pick_cancel_is_noop`,
+`open_save_as_dialog_deferred_stashes_pending_modal` (program.rs).
+
+### Known limitation (breadcrumbed in `save()`)
+
+The `valid()` modified-close path (cmClose → Yes → untitled `save()`) returns
+`false` and so VETOES the close, then the dialog opens separately. A full fix
+requires `validate_modal_close` to drive an `OpenSaveAsDialog` inline (the §6
+modal-close twin of this seam). No consumer exercises the untitled-close+Yes path.
+
+---
+
 ## Session — terminal family (rows 91–92)
 
 Ported **`TTextDevice`** (row 91) and **`TTerminal`** (row 92) from
