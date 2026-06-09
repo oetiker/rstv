@@ -13,6 +13,7 @@ pub mod model;
 pub(crate) mod plane;
 pub(crate) mod presets;
 pub(crate) mod rgb;
+pub(crate) mod xterm256;
 
 use crate::color::Color;
 use crate::event::Event;

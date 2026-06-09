@@ -1,0 +1,33 @@
+---
+source: src/dialog/colorpick/xterm256.rs
+expression: render_xterm(&s)
+---
+size: 8x5
+cursor: hidden
+text:
+|        |
+|████████|
+|████████|
+|███◘████|
+|████████|
+attr:
+|........|
+|aaaaaaaa|
+|aabbccdd|
+|eefghhii|
+|jjkkllmm|
+legend:
+  . default
+  a fg=RGB(0,0,0) bg=RGB(0,0,0)
+  b fg=RGB(0,0,95) bg=RGB(0,0,95)
+  c fg=RGB(0,0,135) bg=RGB(0,0,135)
+  d fg=RGB(0,0,175) bg=RGB(0,0,175)
+  e fg=RGB(0,135,215) bg=RGB(0,135,215)
+  f fg=RGB(0,135,255) bg=RGB(0,135,255)
+  g fg=RGB(255,255,255) bg=RGB(0,135,255)
+  h fg=RGB(0,175,0) bg=RGB(0,175,0)
+  i fg=RGB(0,175,95) bg=RGB(0,175,95)
+  j fg=RGB(0,255,135) bg=RGB(0,255,135)
+  k fg=RGB(0,255,175) bg=RGB(0,255,175)
+  l fg=RGB(0,255,215) bg=RGB(0,255,215)
+  m fg=RGB(0,255,255) bg=RGB(0,255,255)
