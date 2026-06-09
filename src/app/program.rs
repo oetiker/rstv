@@ -286,6 +286,14 @@ enum ModalCompletion {
     /// (a validator `error`, a `FileEditor` save-error popup). The box just shows;
     /// nothing happens on close.
     Informational,
+    /// `color_dialog` result extraction (the `HistoryPick`/`get_selection` shape):
+    /// on `cmOK`, downcast the in-tree modal `ColorPicker` and write its `color()`
+    /// into the caller's sink. NOT a `FieldValue` (the `color()` accessor is the
+    /// contract; the spec's explicit non-goal forbids `FieldValue::Color`).
+    ColorPick {
+        picker: ViewId,
+        sink: std::rc::Rc<std::cell::Cell<Option<crate::color::Color>>>,
+    },
 }
 
 impl Program {
@@ -765,6 +773,50 @@ impl Program {
         let desk_size = self.desktop_size();
         r.r#move((desk_size.x - 60) / 2, (desk_size.y - 8) / 2);
         self.input_box_rect(r, title, label, initial, limit)
+    }
+
+    /// Open the truecolor color-picker modal seeded with `initial`; return the
+    /// chosen [`Color`](crate::color::Color) on OK, or `None` on Cancel/Esc.
+    ///
+    /// An rstv-original extension (not a faithful TV port). The result is read by
+    /// downcasting the in-tree modal [`ColorPicker`](crate::dialog::ColorPicker)
+    /// to `color()` via a [`ModalCompletion::ColorPick`] sink — the
+    /// `HistoryPick`/`get_selection` shape. No `FieldValue::Color` (spec non-goal).
+    pub fn color_dialog(&mut self, initial: crate::color::Color) -> Option<crate::color::Color> {
+        use crate::dialog::{ColorPicker, Dialog};
+        use crate::widgets::{Button, ButtonFlags};
+
+        // 60 x 23 dialog, centered on the desktop (mirrors input_box centering).
+        let mut r = Rect::new(0, 0, 60, 23);
+        let desk = self.desktop_size();
+        r.r#move((desk.x - 60) / 2, (desk.y - 23) / 2);
+        let mut d = Dialog::new(r, Some("Select Color".to_string()));
+
+        let picker_id =
+            d.insert_child(Box::new(ColorPicker::new(Rect::new(2, 2, 58, 20), initial)));
+        d.insert_child(Box::new(Button::new(
+            Rect::new(20, 20, 30, 22),
+            "O~K~",
+            Command::OK,
+            ButtonFlags {
+                default: true,
+                ..Default::default()
+            },
+        )));
+        d.insert_child(Box::new(Button::new(
+            Rect::new(31, 20, 41, 22),
+            "~C~ancel",
+            Command::CANCEL,
+            ButtonFlags::default(),
+        )));
+
+        let sink = std::rc::Rc::new(std::cell::Cell::new(None));
+        let completion = ModalCompletion::ColorPick {
+            picker: picker_id,
+            sink: sink.clone(),
+        };
+        self.exec_view_with_completion(Box::new(d), Some(completion), Some(picker_id), None);
+        sink.get()
     }
 
     /// The unified `exec_view` body (row 57). Identical to the sync `exec_view`
@@ -1843,6 +1895,19 @@ fn apply_modal_completion(
         }
         // Informational box: nothing to route or re-post.
         ModalCompletion::Informational => None,
+        // color_dialog result extraction: downcast the in-tree modal ColorPicker,
+        // read color(), and write into the caller's sink on cmOK.
+        ModalCompletion::ColorPick { picker, sink } => {
+            if result == Command::OK {
+                let c = group
+                    .find_mut(picker)
+                    .and_then(|v| v.as_any_mut())
+                    .and_then(|a| a.downcast_mut::<crate::dialog::ColorPicker>())
+                    .map(|p| p.color());
+                sink.set(c);
+            }
+            None
+        }
     }
 }
 
@@ -6806,6 +6871,48 @@ mod tests {
             let (cmd, text) = program.input_box("Enter", "Path", "/tmp", 40);
             assert_eq!(cmd, Command::OK);
             assert_eq!(text, "/tmp");
+        }
+
+        // -- color_dialog (Task 10, rstv-original extension) --------------------
+
+        /// OK returns `Some(color)` — the initial color is returned unchanged when
+        /// nothing is edited (the ModalCompletion::ColorPick sink is written on cmOK).
+        #[test]
+        fn color_dialog_ok_returns_initial_color() {
+            use crate::color::Color;
+            let (mut program, _handle, _clock) = program_with_desktop(80, 30);
+            program.out_events.push_back(Event::Command(Command::OK));
+            let result = program.color_dialog(Color::Rgb(30, 144, 255));
+            assert_eq!(
+                result,
+                Some(Color::Rgb(30, 144, 255)),
+                "OK with no edits returns the seeded initial color"
+            );
+            assert_eq!(program.capture_len(), 0, "ModalFrame popped on close");
+        }
+
+        /// Cancel returns `None` — the sink is never written when the dialog ends
+        /// with `cmCancel`, so `color_dialog` returns `None`.
+        #[test]
+        fn color_dialog_cancel_returns_none() {
+            use crate::color::Color;
+            let (mut program, _handle, _clock) = program_with_desktop(80, 30);
+            program
+                .out_events
+                .push_back(Event::Command(Command::CANCEL));
+            let result = program.color_dialog(Color::Rgb(255, 0, 0));
+            assert_eq!(result, None, "Cancel yields None (sink not written)");
+            assert_eq!(program.capture_len(), 0, "ModalFrame popped on cancel");
+        }
+
+        /// Esc triggers cmCancel via the Dialog's key handler, returning `None`.
+        #[test]
+        fn color_dialog_esc_returns_none() {
+            use crate::color::Color;
+            let (mut program, _handle, _clock) = program_with_desktop(80, 30);
+            program.out_events.push_back(key(Key::Esc));
+            let result = program.color_dialog(Color::Default);
+            assert_eq!(result, None, "Esc → cmCancel → None");
         }
     }
 

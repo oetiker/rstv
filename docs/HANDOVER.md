@@ -15,42 +15,37 @@
 
 ## Current state
 
-- **DIRECTION CHANGE (2026-06-09): the faithful color-selection cluster
-  (PORT-ORDER 81–87, `colordlg`) is DROPPED — superseded by a *modern truecolor
-  color-picker* extension.** Why: the C++ `TColorDialog` family exists solely to
-  edit `app->palette->data[index]` — the flat runtime-mutable BIOS palette that
-  rstv **deleted under D7** (palette → `Theme`; `Role` is a closed enum resolved
-  at draw time; `WindowPalette` is only a Blue/Cyan/Gray *tag*, not data). A
-  faithful 83–87 would edit a `TPalette` nothing in rstv reads — dead code by
-  construction. The user chose to build a reusable truecolor color-picker instead
-  (a runtime **theme editor** becomes a later consumer). **This is an
-  rstv-original extension, like `RegexValidator` — off the faithful critical
-  path.**
-- **The color-picker design is APPROVED** (brainstorm complete, spec committed):
-  [`docs/superpowers/specs/2026-06-09-color-picker-design.md`](file:///home/oetiker/checkouts/rstv/docs/superpowers/specs/2026-06-09-color-picker-design.md).
-  Summary: one `ColorPicker` view owning a shared `ColorModel` (Approach A,
-  surfaces as internal components, NOT separate Views); produces any `Color`
-  variant (Default/Bios/Indexed/Rgb); four **tabbed** surfaces (Presets · RGB+hex
-  · HSV plane · xterm-256 grid); old/new swatch + variant readout; keyboard +
-  **full mouse-drag** (the `window.rs` capture seam + one new
-  `Deferred::ColorPickerDrag`); `color_dialog(initial) -> Option<Color>` modal
-  entry. **Next step in the brainstorming flow is `writing-plans`** (the impl plan
-  was not yet written).
-- **HEAD = the design-spec commit, on top of row 82.** The two *faithful* color
-  rows landed earlier this session — **row 81** (`ColorItem`/`ColorGroup`/
-  `ColorIndex`, `c92ed19`) and **row 82** (`ColorSelector`, `f3c34ad`) — are
-  **superseded and will be REVERTED as the first step of the picker work** (the
-  picker's Presets surface subsumes the 16-color grid; the palette-bookkeeping
-  data classes have no consumer). They are still committed for now. The 3
-  `COLOR_*` commands in `command.rs` may be kept or dropped (unused by the
-  picker — see spec open items). Build currently: **924 lib tests** green; clippy
-  (forced re-lint) + fmt clean.
-- **Still valid & reusable from row 82:** **raw-BIOS-color drawing** — the first
-  widget to draw colors literally via `Style::new(Color::Bios(..), ..)` rather
-  than theme `Role`s. The picker's surfaces draw raw truecolor the same way
-  (`Color::Rgb`), and the existing `ColorDepth` quantization ladder degrades it on
-  lesser terminals. (The row-82 *color-changed broadcast seam* does NOT carry
-  over — the picker is one view, so it needs no cross-view color sync.)
+- **The truecolor color-picker extension (tasks 0–9) is COMPLETE and on `main`.**
+  Rows 81–82 were reverted (`9aa8e12`); the picker is built in
+  `src/dialog/colorpick/` — `ColorModel` + `Hsv` + conversions, four surfaces
+  (`PresetsSurface`, `RgbSurface`, `PlaneSurface`, `Xterm256Surface`), the
+  `ColorPicker` view (tabs, info column, `color()`), and the mouse-drag broker
+  (`Deferred::ColorPickerDrag` + `ColorDragCapture` + pump arm).
+  **HEAD = `2b0751f` (mouse drag broker); 921 lib tests green; clippy + fmt
+  clean.**
+- **Still missing from the picker: Task 10 (`color_dialog`) + Task 11 (docs).**
+  The `color_dialog(initial) -> Option<Color>` modal entry point is not yet wired
+  (`ModalCompletion::ColorPick` + `Program::color_dialog`). See *Next* below.
+- **Direction change summary:** PORT-ORDER rows 81–87 (`colordlg`) are DROPPED —
+  the C++ `TColorDialog` family edits a flat BIOS `TPalette` rstv deleted under
+  D7 (palette → `Theme`; `Role` is a closed enum). The truecolor picker replaces
+  them (spec:
+  [`docs/superpowers/specs/2026-06-09-color-picker-design.md`](file:///home/oetiker/checkouts/rstv/docs/superpowers/specs/2026-06-09-color-picker-design.md),
+  plan:
+  [`docs/superpowers/plans/2026-06-09-color-picker.md`](file:///home/oetiker/checkouts/rstv/docs/superpowers/plans/2026-06-09-color-picker.md)).
+  A future **theme editor** will consume `color_dialog` (needs the D7 "Theme
+  extension point" first — a separate sub-project, not on the critical path).
+- **Key seams the picker adds (reusable):**
+  - **`Deferred::ColorPickerDrag` + pump arm** — the `window.rs DragCapture`
+    pattern reused for a non-window view: a `CaptureHandler` converts absolute
+    `MouseMove` → picker-local, posts the deferred, pump downcasts to
+    `ColorPicker::apply_drag`. Coordinate contract: ONE frame (picker-local)
+    everywhere; each surface subtracts `body.a` exactly once.
+  - **`ModalCompletion::ColorPick { picker, sink }`** (Task 10, not yet built):
+    on `cmOK`, downcasts the in-tree modal `ColorPicker` to read `color()` and
+    write into an `Rc<Cell<Option<Color>>>` — same shape as `HistoryPick`.
+    **No `FieldValue::Color`** (the spec's explicit non-goal; `color()` is the
+    contract). Do not edit `data.rs`.
 - **The makeDefault broker is now built** (FOUNDATION, row 80):
   `Deferred::MakeButtonDefault { button, enable }` + `Context::make_button_default`
   + a pump arm that downcasts `Button` and calls `make_default(enable, ctx)`.
@@ -136,37 +131,37 @@
   payload-command + `set_state` `chDirButton` poke breadcrumbed → row 80. The
   `#[delegate]` proc-macro is landed and adopted codebase-wide.
 
-## Next — build the color-picker extension, then resume PORT-ORDER at row 88
+## Next — finish the color-picker (tasks 10–11), then resume PORT-ORDER at row 88
 
-**Immediate next: `writing-plans`** — turn the approved spec
-([`docs/superpowers/specs/2026-06-09-color-picker-design.md`](file:///home/oetiker/checkouts/rstv/docs/superpowers/specs/2026-06-09-color-picker-design.md))
-into an implementation plan, then build it **subagent-driven** (the standard
-implementer → review → integrate cycle). Read the spec first — it has the full
-architecture, module layout (`src/dialog/colorpick/`), the four surfaces, the
-mouse-drag capture design, the testing plan, and the **plan-level open items**
-(exact `Hsv` repr + rounding for deterministic snapshots, dialog/sub-rect
-geometry, the curated preset list, where the BIOS→RGB table lives).
+**Task 10: `color_dialog` modal shell + result extraction.**
+See plan §Task 10. Three additions to `program.rs`:
 
-**Step 0 of the picker work: REVERT rows 81–82** — delete `src/dialog/colordlg.rs`
-+ its 3 `colordlg` snapshots + the `dialog/mod.rs` exports (and decide on the 3
-`COLOR_*` commands). The picker supersedes them. Then mark **PORT-ORDER rows
-81–87** as dropped/superseded (a documented D7 consequence, like `TStreamable`),
-pointing at the spec. *(PORT-ORDER still shows 81/82 ✅ and 83–87 as pending — it
-needs this reconciliation; the user asked only for HANDOVER this turn.)*
+1. `ModalCompletion::ColorPick { picker: ViewId, sink: Rc<Cell<Option<Color>>> }`
+   variant (near the `HistoryPick` variant).
+2. `apply_modal_completion` arm: on `cmOK` downcast in-tree modal → `ColorPicker`,
+   read `color()`, write into sink; return `None`. (Like the `HistoryPick` arm.)
+3. `Program::color_dialog(&mut self, initial: Color) -> Option<Color>`:
+   - Build a 60×23 `Dialog` titled "Select Color", centered on the desktop.
+   - `ColorPicker` child at dialog-local `Rect::new(2, 2, 58, 20)`.
+   - OK `Rect::new(20, 20, 30, 22)` (`bfDefault`, `Command::OK`) + Cancel
+     `Rect::new(31, 20, 41, 22)` (`Command::CANCEL`).
+   - `exec_view_with_completion(Box::new(d), Some(completion), Some(picker_id), None)`.
+   - Return `sink.get()`.
 
-**Reusable seams the picker leans on (already built — see the spec):** raw-color
-drawing (row 82), the `window.rs` `DragCapture` capture-handler pattern (proven —
-you can drag window frames in `examples/hello.rs`), the
-"`Deferred` variant + pump downcast via `as_any_mut`" broker shape (scroller/
-editor/`MakeButtonDefault`), and the `exec_view_with_completion` gather-closure
-(inputBox) for returning the chosen `Color`.
+   Note: `Dialog::insert_child` is `pub(crate)` (`dialog.rs:66`) and
+   `color_dialog` is in the same crate — no visibility issue.
 
-**After the picker lands: resume the faithful port at the lowest incomplete row,
-which is now `row 88` (`TNode` / the outline family 88–90)** — 81–87 are dropped,
-so 88 is the next faithful work. The terminal family (91–92) follows. A future
-**theme editor** (consuming this picker) needs the D7 "Theme extension point"
-(runtime `Role→Style` registration) built first — a separate sub-project, not on
-the critical path.
+Re-export `ColorPicker` from `dialog/mod.rs` (already done: `pub use
+colorpick::{ColorPicker, Tab};`) and from `lib.rs` (`pub use dialog::{...,
+ColorPicker, Tab, ...}`). Integration tests: OK → `Some(_)`; Cancel/Esc → `None`
+(follow `fn input_box_centered_ok_round_trip` for the harness shape).
+
+**Task 11: Docs reconciliation** (PORT-ORDER, IMPLEMENTATION-LOG, HANDOVER,
+PORTING-GUIDE). See plan §Task 11.
+
+**After the picker (rows 81–87 dropped): resume faithful port at row 88** (`TNode`
+/ the outline family 88–90), then the terminal family (91–92). The `FileEditor::saveAs`
+seam and all editor breadcrumbs remain open but are not on the critical path.
 
 **`FileEditor::saveAs` is UNBLOCKED** (row 79 `FileDialog` landed): read the chosen
 filename from `FileDialog::value()` → `FieldValue::Text`, as is `EditWindow`'s
