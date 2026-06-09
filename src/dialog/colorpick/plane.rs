@@ -162,6 +162,18 @@ impl Surface for PlaneSurface {
 
         match *ev {
             Event::KeyDown(ke) => match ke.key {
+                // Shift+Up/Down: step hue by one sub-row (360/bh degrees).
+                // Symmetric with how Up/Down steps value by 1/bh.
+                Key::Up if ke.modifiers.shift => {
+                    let new_h = (m.hsv.h - 360.0 / bh as f32).rem_euclid(360.0);
+                    m.set_hsv(Hsv { h: new_h, ..m.hsv });
+                    ev.clear();
+                }
+                Key::Down if ke.modifiers.shift => {
+                    let new_h = (m.hsv.h + 360.0 / bh as f32).rem_euclid(360.0);
+                    m.set_hsv(Hsv { h: new_h, ..m.hsv });
+                    ev.clear();
+                }
                 Key::Right => {
                     let new_s = (m.hsv.s + 1.0 / bw as f32).clamp(0.0, 1.0);
                     m.set_hsv(Hsv { s: new_s, ..m.hsv });
@@ -285,6 +297,59 @@ mod tests {
         with_ctx(|ctx| s.handle_event(&mut ev, BODY, &mut m, ctx));
         assert!(m.hsv.s > s0, "saturation should rise");
         assert!(matches!(m.color, Color::Rgb(..)));
+    }
+
+    fn shift_key(k: Key) -> Event {
+        Event::KeyDown(KeyEvent::new(
+            k,
+            KeyModifiers {
+                shift: true,
+                ..Default::default()
+            },
+        ))
+    }
+
+    #[test]
+    fn shift_down_increases_hue() {
+        let mut s = PlaneSurface::new();
+        let mut m = ColorModel::new(Color::Rgb(255, 0, 0)); // hue 0
+        let h0 = m.hsv.h;
+        let mut ev = shift_key(Key::Down);
+        with_ctx(|ctx| s.handle_event(&mut ev, BODY, &mut m, ctx));
+        assert!(m.hsv.h > h0, "Shift+Down should advance hue");
+        assert!(matches!(ev, Event::Nothing), "event consumed");
+    }
+
+    #[test]
+    fn shift_up_decreases_hue_with_wraparound() {
+        let mut s = PlaneSurface::new();
+        let mut m = ColorModel::new(Color::Rgb(255, 0, 0)); // hue 0
+        let mut ev = shift_key(Key::Up);
+        with_ctx(|ctx| s.handle_event(&mut ev, BODY, &mut m, ctx));
+        // Wrap: 0 - step → near 360
+        assert!(m.hsv.h > 300.0, "Shift+Up from hue 0 wraps to near 360");
+    }
+
+    #[test]
+    fn shift_up_down_does_not_change_saturation_or_value() {
+        let mut s = PlaneSurface::new();
+        let mut m = ColorModel::new(Color::Rgb(200, 100, 50));
+        let s0 = m.hsv.s;
+        let v0 = m.hsv.v;
+        let mut ev = shift_key(Key::Down);
+        with_ctx(|ctx| s.handle_event(&mut ev, BODY, &mut m, ctx));
+        assert!((m.hsv.s - s0).abs() < 0.001, "saturation unchanged");
+        assert!((m.hsv.v - v0).abs() < 0.001, "value unchanged");
+    }
+
+    #[test]
+    fn plain_up_down_does_not_change_hue() {
+        let mut s = PlaneSurface::new();
+        let mut m = ColorModel::new(Color::Rgb(255, 165, 0)); // orange, hue ≈ 38.8
+        let h0 = m.hsv.h;
+        let mut ev = key(Key::Down);
+        with_ctx(|ctx| s.handle_event(&mut ev, BODY, &mut m, ctx));
+        assert!((m.hsv.h - h0).abs() < 0.5, "plain Down must not change hue");
     }
 
     #[test]
