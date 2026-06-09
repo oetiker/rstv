@@ -162,8 +162,8 @@ impl Surface for PlaneSurface {
 
         match *ev {
             Event::KeyDown(ke) => match ke.key {
-                // Shift+Up/Down: step hue by one sub-row (360/bh degrees).
-                // Symmetric with how Up/Down steps value by 1/bh.
+                // Shift+Up/Down: step hue by one sub-row (360/bh ≈ 10.6°).
+                // Shift+Left/Right: step hue by one column (360/(bh*HUE_COLS) ≈ 2.6°).
                 Key::Up if ke.modifiers.shift => {
                     let new_h = (m.hsv.h - 360.0 / bh as f32).rem_euclid(360.0);
                     m.set_hsv(Hsv { h: new_h, ..m.hsv });
@@ -171,6 +171,16 @@ impl Surface for PlaneSurface {
                 }
                 Key::Down if ke.modifiers.shift => {
                     let new_h = (m.hsv.h + 360.0 / bh as f32).rem_euclid(360.0);
+                    m.set_hsv(Hsv { h: new_h, ..m.hsv });
+                    ev.clear();
+                }
+                Key::Left if ke.modifiers.shift => {
+                    let new_h = (m.hsv.h - 360.0 / (bh * HUE_COLS) as f32).rem_euclid(360.0);
+                    m.set_hsv(Hsv { h: new_h, ..m.hsv });
+                    ev.clear();
+                }
+                Key::Right if ke.modifiers.shift => {
+                    let new_h = (m.hsv.h + 360.0 / (bh * HUE_COLS) as f32).rem_euclid(360.0);
                     m.set_hsv(Hsv { h: new_h, ..m.hsv });
                     ev.clear();
                 }
@@ -339,7 +349,6 @@ mod tests {
         with_ctx(|ctx| s.handle_event(&mut ev, BODY, &mut m, ctx));
         assert!((m.hsv.h - h0).abs() < 0.5, "plain Down must not change hue");
     }
-
 
     #[test]
     fn down_arrow_decreases_value_without_scrambling_hue() {
