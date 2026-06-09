@@ -49,11 +49,30 @@ impl Surface for RgbSurface {
         for (i, (label, val)) in [('R', r), ('G', g), ('B', b)].iter().enumerate() {
             let chan = i as u8;
             let row_y = body.a.y + focus_row(chan);
-            let style = if self.focus == chan { focused } else { normal };
-            // Label area: "R 011" — uses focus/normal theme style.
-            ctx.fill(Rect::new(body.a.x, row_y, bar_x, row_y + 1), ' ', style);
+            // Label bg = the channel's pure color at its current value.
+            // Fg = black or white for legibility; fg flips to the theme accent
+            // color when this channel has keyboard focus.
+            let (lbr, lbg, lbb) = chan_color(chan, *val, 0, 0, 0);
+            let label_bg = Color::Rgb(lbr, lbg, lbb);
+            let lum = 0.299 * lbr as f32 + 0.587 * lbg as f32 + 0.114 * lbb as f32;
+            let base_fg = if lum > 128.0 {
+                Color::Rgb(0, 0, 0)
+            } else {
+                Color::Rgb(255, 255, 255)
+            };
+            let label_fg = if self.focus == chan {
+                focused.fg
+            } else {
+                base_fg
+            };
+            let label_style = Style::new(label_fg, label_bg);
+            ctx.fill(
+                Rect::new(body.a.x, row_y, bar_x, row_y + 1),
+                ' ',
+                label_style,
+            );
             let label_str = format!("{} {:03}", label, val);
-            ctx.put_str(body.a.x, row_y, &label_str, style);
+            ctx.put_str(body.a.x, row_y, &label_str, label_style);
             // Gradient bar: each cell shows the actual color at that channel value.
             for fx in 0..bar_w {
                 let v = (fx * 255 / (bar_w - 1).max(1)) as u8;
