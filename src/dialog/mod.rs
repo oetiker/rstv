@@ -36,13 +36,11 @@
 //!   only [`Group::valid`](crate::view::Group); the return-consuming `message()`
 //!   has no consumer at row 34 (it needs a validating control).
 
-mod colordlg;
 #[allow(clippy::module_inception)]
 mod dialog;
 mod filedlg;
 mod msgbox;
 
-pub use colordlg::{ColorGroup, ColorIndex, ColorItem, ColorSel, ColorSelector};
 pub use dialog::Dialog;
 pub use filedlg::{
     CD_HELP_BUTTON, CD_NO_LOAD_DIR, CD_NORMAL, ChDirDialog, DirCollection, DirEntry, DirListBox,

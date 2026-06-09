@@ -238,21 +238,6 @@ impl Command {
     /// `TFileList::selectItem`. Faithfully payload-less in rstv (the only consumer,
     /// `TFileDialog::handleEvent`, just turns it into `cmOK`).
     pub const FILE_DOUBLE_CLICKED: Command = Command("tv.file_double_clicked");
-
-    // --- Color-dialog commands (colorsel.h) ---
-
-    /// `cmColorForegroundChanged` (colorsel.h `71`) — broadcast by
-    /// `TColorSelector` when the foreground color changes. Payload-less in rstv
-    /// (D4): consumers resolve the color via the source view's `color()` accessor.
-    pub const COLOR_FOREGROUND_CHANGED: Command = Command("tv.color_foreground_changed");
-    /// `cmColorBackgroundChanged` (colorsel.h `72`) — broadcast by
-    /// `TColorSelector` when the background color changes. Payload-less in rstv
-    /// (D4): consumers resolve the color via the source view's `color()` accessor.
-    pub const COLOR_BACKGROUND_CHANGED: Command = Command("tv.color_background_changed");
-    /// `cmColorSet` (colorsel.h `73`) — broadcast by `TColorDisplay` to push a
-    /// new attribute byte into the `TColorSelector` views. D4: the attribute byte
-    /// is carried by resolving the source view at row 83.
-    pub const COLOR_SET: Command = Command("tv.color_set");
 }
 
 /// A set of enabled commands. Faithful to `TCommandSet` (`views.h`,
