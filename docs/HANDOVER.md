@@ -23,9 +23,8 @@
   (`Deferred::ColorPickerDrag` + `ColorDragCapture` + pump arm).
   **HEAD = `2b0751f` (mouse drag broker); 921 lib tests green; clippy + fmt
   clean.**
-- **Still missing from the picker: Task 10 (`color_dialog`) + Task 11 (docs).**
-  The `color_dialog(initial) -> Option<Color>` modal entry point is not yet wired
-  (`ModalCompletion::ColorPick` + `Program::color_dialog`). See *Next* below.
+- **The picker is now fully complete** including `Program::color_dialog` (Task 10,
+  `5b1fabf`). HEAD = `5b1fabf`; 924 lib tests green; clippy + fmt clean.
 - **Direction change summary:** PORT-ORDER rows 81–87 (`colordlg`) are DROPPED —
   the C++ `TColorDialog` family edits a flat BIOS `TPalette` rstv deleted under
   D7 (palette → `Theme`; `Role` is a closed enum). The truecolor picker replaces
@@ -131,37 +130,29 @@
   payload-command + `set_state` `chDirButton` poke breadcrumbed → row 80. The
   `#[delegate]` proc-macro is landed and adopted codebase-wide.
 
-## Next — finish the color-picker (tasks 10–11), then resume PORT-ORDER at row 88
+## Next — resume faithful port at row 88 (outline family)
 
-**Task 10: `color_dialog` modal shell + result extraction.**
-See plan §Task 10. Three additions to `program.rs`:
+**The color-picker extension is fully landed** (tasks 0–10, `5b1fabf`). Rows
+81–87 are dropped and documented. The docs reconciliation (PORT-ORDER, this file,
+IMPLEMENTATION-LOG, PORTING-GUIDE) is the remaining Task 11 — currently in
+progress.
 
-1. `ModalCompletion::ColorPick { picker: ViewId, sink: Rc<Cell<Option<Color>>> }`
-   variant (near the `HistoryPick` variant).
-2. `apply_modal_completion` arm: on `cmOK` downcast in-tree modal → `ColorPicker`,
-   read `color()`, write into sink; return `None`. (Like the `HistoryPick` arm.)
-3. `Program::color_dialog(&mut self, initial: Color) -> Option<Color>`:
-   - Build a 60×23 `Dialog` titled "Select Color", centered on the desktop.
-   - `ColorPicker` child at dialog-local `Rect::new(2, 2, 58, 20)`.
-   - OK `Rect::new(20, 20, 30, 22)` (`bfDefault`, `Command::OK`) + Cancel
-     `Rect::new(31, 20, 41, 22)` (`Command::CANCEL`).
-   - `exec_view_with_completion(Box::new(d), Some(completion), Some(picker_id), None)`.
-   - Return `sink.get()`.
+**Resume the faithful port at row 88** (`TNode` / the outline family 88–90):
+- Row 88: `TNode` — tree node (text/children/expanded), `outline.h` inline,
+  `soutline.cpp`. MECHANICAL leaf.
+- Row 89: `TOutlineViewer` — abstract tree walker + line glyphs. FOUNDATION.
+- Row 90: `TOutline` — concrete `TNode`-backed outline. MECHANICAL.
+Then rows 91–92 (terminal family: `TTextDevice` / `TTerminal`).
 
-   Note: `Dialog::insert_child` is `pub(crate)` (`dialog.rs:66`) and
-   `color_dialog` is in the same crate — no visibility issue.
+**Entry point for `color_dialog`:** `Program::color_dialog(initial: Color) ->
+Option<Color>` at `src/app/program.rs`. Also re-exported as `tvision::ColorPicker`
+and `tvision::Tab`. A future **theme editor** will consume `color_dialog` — that
+needs the D7 "Theme extension point" (runtime `Role→Style` registration) first,
+a separate sub-project not on the critical path.
 
-Re-export `ColorPicker` from `dialog/mod.rs` (already done: `pub use
-colorpick::{ColorPicker, Tab};`) and from `lib.rs` (`pub use dialog::{...,
-ColorPicker, Tab, ...}`). Integration tests: OK → `Some(_)`; Cancel/Esc → `None`
-(follow `fn input_box_centered_ok_round_trip` for the harness shape).
-
-**Task 11: Docs reconciliation** (PORT-ORDER, IMPLEMENTATION-LOG, HANDOVER,
-PORTING-GUIDE). See plan §Task 11.
-
-**After the picker (rows 81–87 dropped): resume faithful port at row 88** (`TNode`
-/ the outline family 88–90), then the terminal family (91–92). The `FileEditor::saveAs`
-seam and all editor breadcrumbs remain open but are not on the critical path.
+**`FileEditor::saveAs` is UNBLOCKED** (row 79 `FileDialog` landed): read the
+chosen filename from `FileDialog::value()` → `FieldValue::Text`. Still open
+(a follow-up, not on the PORT-ORDER critical path).
 
 **`FileEditor::saveAs` is UNBLOCKED** (row 79 `FileDialog` landed): read the chosen
 filename from `FileDialog::value()` → `FieldValue::Text`, as is `EditWindow`'s

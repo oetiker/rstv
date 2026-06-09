@@ -5,6 +5,95 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — truecolor color-picker extension (rows 81–87 dropped)
+
+Built the **truecolor color-picker** (`src/dialog/colorpick/`) as an
+rstv-original extension replacing the faithful `TColorDialog` cluster (rows
+81–87). The faithful cluster edited a flat BIOS `TPalette` that rstv deleted
+under D7 — dead code by construction. The picker is reusable (not locked to a
+specific palette) and produces any `Color` variant (`Default`/`Bios`/`Indexed`/`Rgb`).
+
+### Commits in order
+
+- **`9aa8e12` revert: drop faithful color rows 81–82** — deleted `src/dialog/colordlg.rs`
+  + 3 snapshots, removed the `colordlg` exports from `dialog/mod.rs`, and
+  removed the 3 unused `COLOR_*` commands from `command.rs` (921 lib tests after
+  the revert; was 924 with the now-deleted colordlg tests).
+
+- **`c66a705` feat(colorpick): ColorModel + rgb\<->hsv + BIOS display table** —
+  `src/dialog/colorpick/model.rs`: `ColorModel { color, hsv }` (the picker's
+  shared single-source-of-truth); `Hsv { h, s, v: f32 }` with deterministic
+  round-half-up to u8; `rgb_to_hsv`/`hsv_to_rgb` (standard sextant formula);
+  the 16-entry `BIOS_RGB` display palette (distinct from `quantize.rs` which
+  leaves indices 0..15 = 0); `color_to_display_rgb`. HSV is retained so hue
+  survives brightness→0 and saturation→0 round-trips. Pure logic, unit-tested.
+
+- **`9f3bad1` feat(colorpick): Surface trait + PresetsSurface** —
+  `Surface` trait (`draw`/`handle_event`/`drag_region_at`/`apply_drag`) + shared
+  layout constants (`TAB_BAR_Y`, `INFO_COL_X`, `BODY_TOP`); `PresetsSurface` = a
+  scrolling Default + 16 BIOS + 12 curated `Rgb` preset list with arrow nav,
+  click select, per-row swatches. Snapshot + event tests.
+
+- **`adc4676` feat(colorpick): RgbSurface (R/G/B gauges + hex field)** —
+  Three proportional gauge bars + a `#RRGGBB` hex field + live swatch. Up/Down
+  move field focus (R/G/B/Hex), Left/Right adjust ±1, PgUp/PgDn ±16, typed hex
+  commits on 6 digits, click+drag scrubs a bar. Every edit → `m.set_rgb`.
+
+- **`1303630` feat(colorpick): PlaneSurface (hue strip + half-block SV box)** —
+  A vertical hue strip + a Saturation×Value box in the current hue. Half-blocks
+  (`▀`) double vertical resolution. Cursor derives from `m.hsv` (no local state).
+  Arrows move sat/val, `[`/`]` change hue, click+drag scrubs. Every edit →
+  `m.set_hsv`, retaining hue across value→0.
+
+- **`987c6d0` feat(colorpick): Xterm256Surface (true 16×16 grid)** —
+  A true 16×16 grid of the xterm-256 palette (2 cols/cell), cursor-marked.
+  Arrows move the cursor (clamped, no wrap), click selects. Every move →
+  `m.set_indexed`. Cursor seeds from `Indexed(n)` or `rgb→nearest-256` on entry.
+
+- **`c9f0642` feat(colorpick): ColorPicker view — tabs, info column, color()** —
+  The reusable `ColorPicker: View` assembling the four surfaces under a tab bar +
+  info column. `Ctrl+←/→` cycle tabs, `Alt+hotkey` jumps, tab-label click
+  switches; plain `Tab` passes to the dialog for focus nav. Switching never
+  converts/commits. `color()` is the result contract; `as_any_mut → Some(self)`
+  for the drag broker. `body_origin` cached each draw for the drag-handler
+  coordinate conversion. Per-tab snapshots.
+
+- **`2b0751f` feat(colorpick): mouse drag broker (Deferred::ColorPickerDrag)** —
+  The `window.rs DragCapture` pattern reused for the picker: `MouseDown` in a
+  draggable region sets `active_drag` + pushes a `ColorDragCapture`; each
+  `MouseMove` posts `Deferred::ColorPickerDrag { picker, pos }`; the pump
+  downcasts to `ColorPicker::apply_drag`; `MouseUp` pops. **Coordinate contract:**
+  ONE frame (picker-local) everywhere — `body_origin` converts absolute→picker-
+  local once in the handler; each surface subtracts `body.a` exactly once; nothing
+  pre-subtracts `BODY_TOP`. The prior draft mixed three frames — that was a real
+  bug, now fixed. One new `Deferred` variant + `Context::request_color_drag` +
+  pump arm (deferred `ColorPickerDrag` arm, after `MakeButtonDefault`).
+  Integration test places the picker at non-zero absolute origin (10,5) to lock
+  the frame: wrong-frame path gives a detectably different color.
+
+- **`5b1fabf` feat(colorpick): color_dialog modal shell + result extraction** —
+  `Program::color_dialog(initial) -> Option<Color>`: a 60×23 "Select Color"
+  `Dialog` embedding `ColorPicker` + OK + Cancel, run on the existing modal
+  machinery. Result extracted via a new `ModalCompletion::ColorPick { picker,
+  sink: Rc<Cell<Option<Color>>> }` — on `cmOK` the pump arm downcasts the in-tree
+  modal to `ColorPicker`, reads `color()`, writes to the sink. **No
+  `FieldValue::Color`** (spec non-goal; `color()` is the contract). `Some(color)`
+  on OK, `None` on Cancel/Esc. `ColorPicker` + `Tab` re-exported from `lib.rs`.
+  Three pump-level integration tests. 924 lib tests.
+
+### Key seams reused / established
+
+- **`Deferred` broker shape** (D3/D9): `ColorPickerDrag` is the fourth broker
+  after the scroller/indicator/`MakeButtonDefault` shape — ViewId + primitive
+  position in the deferred enum; the pump downcasts; widget state stays in the
+  widget. No widget-layer types in the FOUNDATION `Deferred` enum.
+- **`ModalCompletion` result extraction**: `ColorPick { picker, sink }` is the
+  same shape as `HistoryPick { link }` — downcast the in-tree modal while it
+  still exists, read a concrete accessor, write the result to a caller-owned sink.
+- **`window.rs DragCapture` pattern**: `ColorDragCapture` is a third drag capture
+  (window frame + window move were the first two). The pattern is proven and
+  directly reusable.
+
 ## Session — row 82 `TColorSelector` (the 16-color grid view)
 
 Landed **row 82 `TColorSelector`** (`ColorSelector`) — the BIOS-color picker grid,

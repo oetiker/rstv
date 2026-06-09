@@ -778,6 +778,35 @@ so the C++ draw code is unchanged.
 
 ---
 
+## rstv-original extensions (beyond the faithful port)
+
+These features have **no C++ tvision counterpart** — they are rstv inventions
+added alongside the faithful port. They do NOT belong in the C++→Rust symbol
+lookup (Appendix A) or the per-class recipe (Appendix B).
+
+### `RegexValidator` (`src/widgets/input_line.rs`)
+A regex-driven string validator using the `regex` crate. The *faithful* port of
+the C++ picture-mask DSL is `PXPictureValidator`; `RegexValidator` is the modern
+alternative living alongside it. Both implement the `Validator` trait. Use
+`RegexValidator` when the picture-mask DSL is too rigid.
+
+### Truecolor color-picker (`src/dialog/colorpick/`, `Program::color_dialog`)
+Replaces the dropped `TColorDialog` cluster (rows 81–87). The faithful cluster
+edited a flat BIOS `TPalette` that rstv deletes under D7 (palette → `Theme`;
+`Role` is a closed enum) — a faithful port would produce dead code by
+construction. The truecolor picker is reusable and produces any `Color` variant:
+
+- **`ColorPicker`** (`dialog::ColorPicker`) — the reusable embeddable view.
+  Owns a shared `ColorModel` + four tabbed surfaces (Presets, RGB+hex, HSV plane,
+  xterm-256 grid). `color() -> Color` is the result contract.
+- **`Program::color_dialog(initial: Color) -> Option<Color>`** — the modal entry
+  point. Returns `Some(color)` on OK, `None` on Cancel/Esc.
+
+See [`docs/superpowers/specs/2026-06-09-color-picker-design.md`](file:///home/oetiker/checkouts/rstv/docs/superpowers/specs/2026-06-09-color-picker-design.md)
+and [`docs/superpowers/plans/2026-06-09-color-picker.md`](file:///home/oetiker/checkouts/rstv/docs/superpowers/plans/2026-06-09-color-picker.md).
+
+---
+
 ## Appendix A — C++ → Rust deviation lookup
 
 > The cheat-sheet for translating any C++ symbol touched by a deviation.
