@@ -44,7 +44,7 @@ attr:
 |......................|
 legend:
   . default
-  a fg=BIOS(4) bg=RGB(30,0,0)
+  a fg=RGB(255,255,255) bg=RGB(30,0,0)
   b fg=RGB(0,144,255) bg=RGB(0,144,255)
   c fg=RGB(255,255,255) bg=RGB(30,144,255)
   d fg=RGB(34,144,255) bg=RGB(34,144,255)

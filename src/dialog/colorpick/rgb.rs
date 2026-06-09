@@ -50,20 +50,15 @@ impl Surface for RgbSurface {
             let chan = i as u8;
             let row_y = body.a.y + focus_row(chan);
             // Label bg = the channel's pure color at its current value.
-            // Fg = black or white for legibility; fg flips to the theme accent
-            // color when this channel has keyboard focus.
+            // Fg = black or white chosen by luminance for legibility.
+            // Focus is shown by the X cursor on the gradient bar, not here.
             let (lbr, lbg, lbb) = chan_color(chan, *val, 0, 0, 0);
             let label_bg = Color::Rgb(lbr, lbg, lbb);
             let lum = 0.299 * lbr as f32 + 0.587 * lbg as f32 + 0.114 * lbb as f32;
-            let base_fg = if lum > 128.0 {
+            let label_fg = if lum > 128.0 {
                 Color::Rgb(0, 0, 0)
             } else {
                 Color::Rgb(255, 255, 255)
-            };
-            let label_fg = if self.focus == chan {
-                focused.fg
-            } else {
-                base_fg
             };
             let label_style = Style::new(label_fg, label_bg);
             ctx.fill(
