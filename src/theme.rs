@@ -179,10 +179,23 @@ pub enum Role {
     /// palette chain: `cpInfoPane` idx 1 → `cpGrayDialog` idx `0x1E` (30) = `0x3D`
     /// → `cpAppColor[0x3D]` = **`0x13`** = BIOS attr fg=cyan(3) on bg=blue(1).
     InfoPane,
+
+    // -- row 89: TOutlineViewer (`cpOutlineViewer "\x6\x7\x3\x8"`) -------------
+    /// `TOutlineViewer` normal item — `cpOutlineViewer` idx 1 (the graph + an
+    /// expanded item's text).
+    OutlineNormal,
+    /// `TOutlineViewer` focused item — `cpOutlineViewer` idx 2 (the focused row
+    /// when the viewer holds `sfFocused`).
+    OutlineFocused,
+    /// `TOutlineViewer` selected item — `cpOutlineViewer` idx 3.
+    OutlineSelected,
+    /// `TOutlineViewer` not-expanded item — `cpOutlineViewer` idx 4 (the dimmer
+    /// text shown for a collapsed node, the `color >> 8` of the normal pair).
+    OutlineNotExpanded,
 }
 
 /// Number of [`Role`] variants — the fixed length of [`Theme`]'s style array.
-const ROLE_COUNT: usize = 58;
+const ROLE_COUNT: usize = 62;
 
 impl Role {
     /// Total mapping of each variant to its index into the style array.
@@ -249,6 +262,10 @@ impl Role {
             Role::StatusDisabled => 54,
             Role::StatusSelDisabled => 55,
             Role::InfoPane => 57,
+            Role::OutlineNormal => 58,
+            Role::OutlineFocused => 59,
+            Role::OutlineSelected => 60,
+            Role::OutlineNotExpanded => 61,
         }
     }
 }
@@ -607,6 +624,14 @@ impl Theme {
         // BIOS attr `(bg<<4)|fg` with fg=cyan(3), bg=blue(1).
         set(&mut styles, Role::InfoPane, 0x3, 0x1); // cyan on blue (0x13)
 
+        // Outline viewer (row 89). Provisional values modelled on the list-box
+        // look (the C++ `cpOutlineViewer` resolves through the dialog/app gray
+        // scheme); they realign with the deferred gray theming.
+        set(&mut styles, Role::OutlineNormal, 0x7, 0x1); // lightgray on blue
+        set(&mut styles, Role::OutlineFocused, 0xF, 0x1); // white on blue
+        set(&mut styles, Role::OutlineSelected, 0x0, 0x3); // black on cyan
+        set(&mut styles, Role::OutlineNotExpanded, 0x8, 0x1); // darkgray on blue
+
         Theme {
             styles,
             glyphs: Glyphs::default(),
@@ -694,6 +719,10 @@ mod tests {
         Role::StatusDisabled,
         Role::StatusSelDisabled,
         Role::InfoPane,
+        Role::OutlineNormal,
+        Role::OutlineFocused,
+        Role::OutlineSelected,
+        Role::OutlineNotExpanded,
     ];
 
     #[test]

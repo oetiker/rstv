@@ -238,6 +238,11 @@ impl Command {
     /// `TFileList::selectItem`. Faithfully payload-less in rstv (the only consumer,
     /// `TFileDialog::handleEvent`, just turns it into `cmOK`).
     pub const FILE_DOUBLE_CLICKED: Command = Command("tv.file_double_clicked");
+
+    /// `cmOutlineItemSelected = 301` (outline.h) — broadcast by
+    /// `TOutlineViewer::selected` overrides (the base does nothing). Faithfully
+    /// payload-less in rstv.
+    pub const OUTLINE_ITEM_SELECTED: Command = Command("tv.outline_item_selected");
 }
 
 /// A set of enabled commands. Faithful to `TCommandSet` (`views.h`,

@@ -163,6 +163,27 @@ pub enum Deferred {
         v: Option<ViewId>,
     },
 
+    // -- row 89: the TOutlineViewer scrollbar read-sync (D3) ------------------
+    /// **Read-direction sync for `TOutlineViewer`** (ports the `cmScrollBarChanged`
+    /// case of `TOutlineViewer::handleEvent`, inherited from `TScroller`). The pump
+    /// resolves both bars, reads each `value` (via [`View::value`] →
+    /// [`FieldValue::Int`](crate::data::FieldValue::Int)), and writes the resulting
+    /// `(dx, dy)` into `viewer`'s `delta` (the pump downcasts it to `Outline` and
+    /// calls `apply_delta`). Like [`SyncScrollerDelta`](Self::SyncScrollerDelta) this
+    /// is **read-only** — it writes nothing back to the bars, so it terminates with
+    /// no change-guard needed (unlike [`SyncListViewer`](Self::SyncListViewer)).
+    ///
+    /// Touches the **view-tree** family (same as the scroller/list broker ops), so
+    /// the insertion-order drain stays order-equivalent.
+    SyncOutlineViewerDelta {
+        /// The outline viewer whose `delta` to update.
+        viewer: ViewId,
+        /// The horizontal scrollbar to read `value` from (`None` = no h bar → 0).
+        h: Option<ViewId>,
+        /// The vertical scrollbar to read `value` from (`None` = no v bar → 0).
+        v: Option<ViewId>,
+    },
+
     // -- row 49: the TMenuView command-graying broker (D3) --------------------
     /// **Command-graying broker for `TMenuView`** (ports `updateMenu`, triggered
     /// by the `cmCommandSetChanged` broadcast). Resolve the menu view by `id` and
@@ -847,6 +868,25 @@ impl<'a> Context<'a> {
     /// `h`/`v` are the bar [`ViewId`]s (`None` = no bar).
     pub fn request_sync_list_viewer(&mut self, list: ViewId, h: Option<ViewId>, v: Option<ViewId>) {
         self.deferred.push(Deferred::SyncListViewer { list, h, v });
+    }
+
+    /// Request a `TOutlineViewer`'s `delta` be refreshed from its sibling
+    /// scrollbars' live `value`s — **deferred**
+    /// ([`Deferred::SyncOutlineViewerDelta`]). The viewer (a leaf, D3) cannot read
+    /// its window-frame sibling bars itself; the pump brokers the read and writes
+    /// the resulting `(dx, dy)` into the viewer's `delta` (a downcast to `Outline`,
+    /// like [`SyncScrollerDelta`](Deferred::SyncScrollerDelta)). `h`/`v` are the bar
+    /// [`ViewId`]s (`None` = no bar → 0). Unlike the list-viewer sync this writes
+    /// nothing back (the outline viewer has no editor cursor / focus write-back), so
+    /// it terminates like the scroller's read-only sync.
+    pub fn request_sync_outline_viewer_delta(
+        &mut self,
+        viewer: ViewId,
+        h: Option<ViewId>,
+        v: Option<ViewId>,
+    ) {
+        self.deferred
+            .push(Deferred::SyncOutlineViewerDelta { viewer, h, v });
     }
 
     /// Request the focused `SearchRec` of the `TFileList` `source` be resolved and

@@ -124,4 +124,5 @@ pub use widgets::{Editor, InputLine, ListBox, ListViewer, ListViewerState, Scrol
 pub use widgets::{
     HistoryViewer, HistoryWindow, THistory, clear_history, history_add, history_count, history_str,
 };
+pub use widgets::{Node, Outline, OutlineViewer, OutlineViewerState};
 pub use window::{ScrollBarOptions, Window, WindowFlags, WindowPalette};

@@ -1,0 +1,22 @@
+---
+source: src/widgets/outline.rs
+expression: "render_outline(&mut outline, 20, 5)"
+---
+size: 20x5
+cursor: hidden
+text:
+|└─+Animals          |
+|                    |
+|                    |
+|                    |
+|                    |
+attr:
+|aaaaaaaaaaaaaaaaaaaa|
+|bbbbbbbbbbbbbbbbbbbb|
+|bbbbbbbbbbbbbbbbbbbb|
+|bbbbbbbbbbbbbbbbbbbb|
+|bbbbbbbbbbbbbbbbbbbb|
+legend:
+  . default
+  a fg=BIOS(15) bg=BIOS(1)
+  b fg=BIOS(7) bg=BIOS(1)

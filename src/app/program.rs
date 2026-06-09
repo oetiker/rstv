@@ -1438,6 +1438,30 @@ impl Program {
                                         s.apply_delta(Point::new(dx, dy));
                                     }
                                 }
+                                // Outline viewer read-sync (row 89): like
+                                // SyncScrollerDelta — read both bars' `value`s,
+                                // write the delta into the viewer's `OutlineViewerState`
+                                // (downcast to `Outline`). Read-only, no write-back.
+                                Deferred::SyncOutlineViewerDelta { viewer, h, v } => {
+                                    use crate::widgets::{Outline, OutlineViewer};
+                                    let dx = h
+                                        .and_then(|id| group.find_mut(id))
+                                        .and_then(|view| view.value())
+                                        .and_then(field_int)
+                                        .unwrap_or(0);
+                                    let dy = v
+                                        .and_then(|id| group.find_mut(id))
+                                        .and_then(|view| view.value())
+                                        .and_then(field_int)
+                                        .unwrap_or(0);
+                                    if let Some(o) = group
+                                        .find_mut(viewer)
+                                        .and_then(|view| view.as_any_mut())
+                                        .and_then(|a| a.downcast_mut::<Outline>())
+                                    {
+                                        o.ov_mut().apply_delta(Point::new(dx, dy));
+                                    }
+                                }
                                 // Write direction (TScrollBar::setParams driven by
                                 // TScroller::setLimit/scrollTo): fill each `None`
                                 // field from the bar's live value, then set_params
