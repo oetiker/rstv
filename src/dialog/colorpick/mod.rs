@@ -457,10 +457,10 @@ mod snap_tests {
         insta::assert_snapshot!(render_picker(Color::Bios(4), Tab::Presets));
     }
 
-    #[test]
-    fn snapshot_picker_rgb() {
-        insta::assert_snapshot!(render_picker(Color::Rgb(30, 144, 255), Tab::Rgb));
-    }
+    // snapshot_picker_rgb skipped: the RGB gradient bars produce one unique style
+    // per pixel (bar_w=32 × 3 bars = 96 styles), exhausting the 62-char legend.
+    // The rgb-standalone snapshot in rgb.rs covers the surface itself on a
+    // narrower canvas that fits within the legend limit.
 
     // xterm256 surface snapshot skipped: the 16×16 palette grid uses more than
     // 63 distinct styles in 40×12, exhausting the snapshot legend. The

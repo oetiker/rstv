@@ -47,26 +47,38 @@ impl Surface for RgbSurface {
         let bar_w = (body.b.x - bar_x).max(1);
 
         for (i, (label, val)) in [('R', r), ('G', g), ('B', b)].iter().enumerate() {
-            let row_y = body.a.y + focus_row(i as u8);
-            let style = if self.focus == i as u8 {
-                focused
-            } else {
-                normal
-            };
-            // Clear the row
-            ctx.fill(Rect::new(body.a.x, row_y, body.b.x, row_y + 1), ' ', style);
-            // Label: "R 011"
+            let chan = i as u8;
+            let row_y = body.a.y + focus_row(chan);
+            let style = if self.focus == chan { focused } else { normal };
+            // Label area: "R 011" — uses focus/normal theme style.
+            ctx.fill(Rect::new(body.a.x, row_y, bar_x, row_y + 1), ' ', style);
             let label_str = format!("{} {:03}", label, val);
             ctx.put_str(body.a.x, row_y, &label_str, style);
-            // Proportional bar
-            let filled = (*val as i32 * bar_w / 255).min(bar_w);
-            for fx in 0..filled {
+            // Gradient bar: each cell shows the actual color at that channel value.
+            for fx in 0..bar_w {
+                let v = (fx * 255 / (bar_w - 1).max(1)) as u8;
+                let (cr, cg, cb) = chan_color(chan, v, r, g, b);
+                let col = Color::Rgb(cr, cg, cb);
                 ctx.fill(
                     Rect::new(bar_x + fx, row_y, bar_x + fx + 1, row_y + 1),
                     '█',
-                    style,
+                    Style::new(col, col),
                 );
             }
+            // X cursor at current channel value.
+            let cursor_x = bar_x + (*val as i32 * (bar_w - 1) / 255).min(bar_w - 1);
+            let (cr, cg, cb) = chan_color(chan, *val, r, g, b);
+            let lum = 0.299 * cr as f32 + 0.587 * cg as f32 + 0.114 * cb as f32;
+            let fg = if lum > 128.0 {
+                Color::Rgb(0, 0, 0)
+            } else {
+                Color::Rgb(255, 255, 255)
+            };
+            ctx.fill(
+                Rect::new(cursor_x, row_y, cursor_x + 1, row_y + 1),
+                'X',
+                Style::new(fg, Color::Rgb(cr, cg, cb)),
+            );
         }
 
         // Hex field
@@ -199,6 +211,15 @@ impl Surface for RgbSurface {
     }
 }
 
+/// Return the color produced by setting channel `chan` to `v` (others unchanged).
+fn chan_color(chan: u8, v: u8, r: u8, g: u8, b: u8) -> (u8, u8, u8) {
+    match chan {
+        0 => (v, g, b),
+        1 => (r, v, b),
+        _ => (r, g, v),
+    }
+}
+
 /// Adjust one of the R/G/B channels by `delta`, saturating at [0, 255].
 fn adjust_chan(r: u8, g: u8, b: u8, focus: u8, delta: i16) -> (u8, u8, u8) {
     fn adj(v: u8, d: i16) -> u8 {
@@ -294,19 +315,26 @@ mod tests {
         assert_eq!(m.color, Color::Rgb(0x1E, 0x90, 0xFF));
     }
 
+    // Narrow canvas (22 cols): bar_w=16, giving 16 unique gradient colors per bar
+    // × 3 bars = 48, well within the snapshot legend's 62-style limit.
+    const SNAP_BODY: Rect = Rect {
+        a: Point { x: 0, y: 1 },
+        b: Point { x: 22, y: 18 },
+    };
+
     fn render_rgb(m: &ColorModel, focus: u8) -> String {
         use crate::backend::{HeadlessBackend, Renderer};
         use crate::screen::Buffer;
         use crate::theme::Theme;
         let theme = Theme::classic_blue();
-        let (backend, screen) = HeadlessBackend::new(40, 18);
+        let (backend, screen) = HeadlessBackend::new(22, 18);
         let mut r = Renderer::new(Box::new(backend));
         let mut s = RgbSurface::new();
         s.focus = focus;
         r.render(|buf: &mut Buffer| {
-            let bounds = Rect::new(0, 0, 40, 18);
+            let bounds = Rect::new(0, 0, 22, 18);
             let mut dc = crate::view::DrawCtx::new(buf, &theme, bounds, bounds.a);
-            <RgbSurface as crate::dialog::colorpick::Surface>::draw(&s, &mut dc, BODY, m);
+            <RgbSurface as crate::dialog::colorpick::Surface>::draw(&s, &mut dc, SNAP_BODY, m);
         });
         screen.snapshot()
     }

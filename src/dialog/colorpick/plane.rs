@@ -26,40 +26,62 @@ impl Surface for PlaneSurface {
         let bw = (body.b.x - box_x).max(1);
         let bh = height * 2; // half-block vertical levels
 
-        // Hue strip — raster layout: hue increases left→right across all 4 cols,
-        // then wraps to the next row (like reading text). Gives 4× more hue steps
-        // per unit height compared to a single vertical column.
-        let total_hue_cells = height * HUE_COLS;
+        // Hue strip — raster half-block layout: hue increases left→right across
+        // all 4 cols, wraps to the next row. Each physical row covers two sub-rows
+        // via ▀ (fg=top, bg=bottom), giving 8× more hue steps than a single column.
+        let total_hue = height * 2 * HUE_COLS;
         for y in body.a.y..body.b.y {
             for cx in 0..HUE_COLS {
-                let idx = (y - body.a.y) * HUE_COLS + cx;
-                let hue = idx as f32 / total_hue_cells as f32 * 360.0;
-                let (r, g, b) = hsv_to_rgb(Hsv {
-                    h: hue,
+                let row = y - body.a.y;
+                let idx_t = (row * 2) * HUE_COLS + cx;
+                let idx_b = (row * 2 + 1) * HUE_COLS + cx;
+                let hue_t = idx_t as f32 / total_hue as f32 * 360.0;
+                let hue_b = idx_b as f32 / total_hue as f32 * 360.0;
+                let (rt, gt, bt) = hsv_to_rgb(Hsv {
+                    h: hue_t,
                     s: 1.0,
                     v: 1.0,
                 });
-                let col = Color::Rgb(r, g, b);
+                let (rb, gb, bb) = hsv_to_rgb(Hsv {
+                    h: hue_b,
+                    s: 1.0,
+                    v: 1.0,
+                });
                 ctx.fill(
                     Rect::new(body.a.x + cx, y, body.a.x + cx + 1, y + 1),
-                    '█',
-                    Style::new(col, col),
+                    '▀',
+                    Style::new(Color::Rgb(rt, gt, bt), Color::Rgb(rb, gb, bb)),
                 );
             }
         }
-        // Cursor: single '+' at the raster cell matching the current hue.
-        let hue_idx = (m.hsv.h / 360.0 * total_hue_cells as f32) as i32;
+        // Hue cursor: ▲/▼ at the sub-row matching the current hue (uniform with
+        // the SV box cursor style). Fg = hue color; bg = black or white by luminance.
+        let hue_idx = (m.hsv.h / 360.0 * total_hue as f32) as i32;
+        let hue_sub = hue_idx / HUE_COLS; // virtual row in the doubled grid
         let hue_col = hue_idx % HUE_COLS;
-        let hue_row = (body.a.y + hue_idx / HUE_COLS).clamp(body.a.y, body.b.y - 1);
+        let hue_phy = (body.a.y + hue_sub / 2).clamp(body.a.y, body.b.y - 1);
+        let hue_is_bot = (hue_sub % 2) == 1;
+        let cursor_hue = hue_idx as f32 / total_hue as f32 * 360.0;
+        let (hcr, hcg, hcb) = hsv_to_rgb(Hsv {
+            h: cursor_hue,
+            s: 1.0,
+            v: 1.0,
+        });
+        let hue_lum = 0.299 * hcr as f32 + 0.587 * hcg as f32 + 0.114 * hcb as f32;
+        let hue_bg = if hue_lum > 128.0 {
+            Color::Rgb(0, 0, 0)
+        } else {
+            Color::Rgb(255, 255, 255)
+        };
         ctx.fill(
             Rect::new(
                 body.a.x + hue_col,
-                hue_row,
+                hue_phy,
                 body.a.x + hue_col + 1,
-                hue_row + 1,
+                hue_phy + 1,
             ),
-            '+',
-            Style::new(Color::Rgb(255, 255, 255), Color::Rgb(0, 0, 0)),
+            if hue_is_bot { '▼' } else { '▲' },
+            Style::new(Color::Rgb(hcr, hcg, hcb), hue_bg),
         );
 
         // SV box — half-block cells, each physical row covers two value levels.
@@ -204,8 +226,9 @@ impl Surface for PlaneSurface {
             ColorDragRegion::HueStrip => {
                 let col = (p.x - body.a.x).clamp(0, HUE_COLS - 1);
                 let row = (p.y - body.a.y).clamp(0, height - 1);
-                let idx = row * HUE_COLS + col;
-                let total = height * HUE_COLS;
+                let total = height * 2 * HUE_COLS;
+                // Map physical row to the top sub-row of the clicked cell.
+                let idx = row * 2 * HUE_COLS + col;
                 let hue = (idx as f32 / total as f32 * 360.0).clamp(0.0, 359.9);
                 m.set_hsv(Hsv { h: hue, ..m.hsv });
             }
