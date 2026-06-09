@@ -146,7 +146,7 @@
 
 **Rows 91–92 (terminal family) are COMPLETE and on `main`.** `TextDevice` (trait)
 and `Terminal` (ring-buffer terminal view) live in `src/widgets/terminal.rs`.
-**952 lib tests green; clippy + fmt clean.**
+**HEAD = `62625e8`; 953 lib tests green; clippy + fmt clean.**
 
 Key design choices:
 - `TextDevice` is a plain trait (D11: `streambuf` dropped); users call `write_bytes`.

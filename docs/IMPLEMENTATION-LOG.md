@@ -29,9 +29,11 @@ last two rows of the 92-class porting checklist — **all rows now done**.
 
 11 unit tests: ring-buffer helper round-trips (`buf_inc`/`buf_dec`/`can_insert`), `prev_lines` (linear + wrap-around), `write_bytes` behavior (newline counting, eviction), and two insta snapshots (`draw_empty_terminal`, `draw_with_lines`).
 
-### Commit
+### Commits
 
-- **feat(terminal): port TTextDevice/TTerminal (rows 91–92)** — `TextDevice` trait, `Terminal` ring-buffer view, 11 tests, 2 snapshots; all 92 PORT-ORDER rows complete.
+- **feat(terminal): port TTextDevice/TTerminal (rows 91–92)** (`0288317`) — `TextDevice` trait, `Terminal` ring-buffer view, 11 tests, 2 snapshots; all 92 PORT-ORDER rows complete.
+- **fix(terminal): faithful prev_lines wrap-scan + draw scratch-per-chunk** (`7a987de`) — `find_lf_backwards` returns `(bool, usize)` so the outer loop continues across the ring-buffer wrap boundary (was returning `que_back` early); draw inner loop uses a fresh scratch buffer per 256-byte chunk (was cumulative, corrupting long lines).
+- **fix(terminal): advance line_pos by raw bytes; guard draw loop on size.y==0** (`62625e8`) — `line_pos` now advances by raw `copy_len`/`fst_len+snd_len` (not trimmed `slen`) so invalid/continuation UTF-8 bytes never cause an infinite loop; outer draw loop is `while y >= 0` (was `loop{…if y==0 break}`, hanging when `size.y==0`). Added ring-wrap draw snapshot and tighter eviction test assertions.
 
 ---
 
