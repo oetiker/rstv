@@ -6,6 +6,11 @@ use crate::dialog::colorpick::{Surface, drag::ColorDragRegion};
 use crate::event::{Event, Key};
 use crate::view::{Context, DrawCtx, Point, Rect};
 
+// Hue strip is 4 columns wide; SV box starts at box_x = body.a.x + HUE_COLS + 1
+// (one gap column between strip and box for visual separation).
+const HUE_COLS: i32 = 4;
+const BOX_OFFSET: i32 = HUE_COLS + 1; // 5
+
 pub(crate) struct PlaneSurface;
 
 impl PlaneSurface {
@@ -17,35 +22,50 @@ impl PlaneSurface {
 impl Surface for PlaneSurface {
     fn draw(&self, ctx: &mut DrawCtx, body: Rect, m: &ColorModel) {
         let height = (body.b.y - body.a.y).max(1);
-        let box_x = body.a.x + 3;
+        let box_x = body.a.x + BOX_OFFSET;
         let bw = (body.b.x - box_x).max(1);
         let bh = height * 2; // half-block vertical levels
 
-        // Hue strip (leftmost 2 cols)
-        let hue_cursor_y = body.a.y + (m.hsv.h / 360.0 * height as f32) as i32;
+        // Hue strip — raster layout: hue increases left→right across all 4 cols,
+        // then wraps to the next row (like reading text). Gives 4× more hue steps
+        // per unit height compared to a single vertical column.
+        let total_hue_cells = height * HUE_COLS;
         for y in body.a.y..body.b.y {
-            let hue = (y - body.a.y) as f32 / height as f32 * 360.0;
-            let (r, g, b) = hsv_to_rgb(Hsv {
-                h: hue,
-                s: 1.0,
-                v: 1.0,
-            });
-            let col = Color::Rgb(r, g, b);
-            let st = Style::new(col, col);
-            ctx.fill(Rect::new(body.a.x, y, body.a.x + 2, y + 1), '█', st);
+            for cx in 0..HUE_COLS {
+                let idx = (y - body.a.y) * HUE_COLS + cx;
+                let hue = idx as f32 / total_hue_cells as f32 * 360.0;
+                let (r, g, b) = hsv_to_rgb(Hsv {
+                    h: hue,
+                    s: 1.0,
+                    v: 1.0,
+                });
+                let col = Color::Rgb(r, g, b);
+                ctx.fill(
+                    Rect::new(body.a.x + cx, y, body.a.x + cx + 1, y + 1),
+                    '█',
+                    Style::new(col, col),
+                );
+            }
         }
-        // Hue cursor marker
-        let hue_cx = hue_cursor_y.clamp(body.a.y, body.b.y - 1);
+        // Cursor: single '+' at the raster cell matching the current hue.
+        let hue_idx = (m.hsv.h / 360.0 * total_hue_cells as f32) as i32;
+        let hue_col = hue_idx % HUE_COLS;
+        let hue_row = (body.a.y + hue_idx / HUE_COLS).clamp(body.a.y, body.b.y - 1);
         ctx.fill(
-            Rect::new(body.a.x + 1, hue_cx, body.a.x + 2, hue_cx + 1),
-            '◄',
+            Rect::new(
+                body.a.x + hue_col,
+                hue_row,
+                body.a.x + hue_col + 1,
+                hue_row + 1,
+            ),
+            '+',
             Style::new(Color::Rgb(255, 255, 255), Color::Rgb(0, 0, 0)),
         );
 
-        // SV box with half-blocks
-        let sv_cursor_cx = (box_x + (m.hsv.s * bw as f32) as i32).clamp(box_x, body.b.x - 1);
-        let sv_cursor_cy =
-            (body.a.y + ((1.0 - m.hsv.v) * (bh as f32 / 2.0)) as i32).clamp(body.a.y, body.b.y - 1);
+        // SV box — half-block cells, each physical row covers two value levels.
+        let sv_cx = (box_x + (m.hsv.s * bw as f32) as i32).clamp(box_x, body.b.x - 1);
+        let sv_cy =
+            (body.a.y + ((1.0 - m.hsv.v) * height as f32) as i32).clamp(body.a.y, body.b.y - 1);
 
         for cy in body.a.y..body.b.y {
             for cx in box_x..body.b.x {
@@ -62,26 +82,59 @@ impl Surface for PlaneSurface {
                     s: sat,
                     v: val_bot.clamp(0.0, 1.0),
                 });
-                let st = Style::new(Color::Rgb(rt, gt, bt), Color::Rgb(rb, gb, bb));
-                ctx.fill(Rect::new(cx, cy, cx + 1, cy + 1), '▀', st);
+                ctx.fill(
+                    Rect::new(cx, cy, cx + 1, cy + 1),
+                    '▀',
+                    Style::new(Color::Rgb(rt, gt, bt), Color::Rgb(rb, gb, bb)),
+                );
             }
         }
-        // SV cursor
+
+        // SV cursor — ▲ when pointing at the top sub-cell, ▼ at the bottom
+        // sub-cell. The triangle's fg uses the actual gradient color at the
+        // cursor position; bg is black or white chosen by luminance so the cursor
+        // is always visible (a fully-gradient cursor vanishes at s≈0 where the
+        // two sub-colors converge).
+        let sub_val = (1.0 - m.hsv.v) * bh as f32;
+        let sub_row = (sub_val as i32).clamp(0, bh - 1);
+        let is_bottom_sub = (sub_row % 2) == 1;
+
+        let sat_c = (sv_cx - box_x) as f32 / bw as f32;
+        let val_top_c = 1.0 - (((sv_cy - body.a.y) * 2) as f32 / bh as f32);
+        let val_bot_c = 1.0 - (((sv_cy - body.a.y) * 2 + 1) as f32 / bh as f32);
+        let (rt, gt, bt) = hsv_to_rgb(Hsv {
+            h: m.hsv.h,
+            s: sat_c,
+            v: val_top_c.clamp(0.0, 1.0),
+        });
+        let (rb, gb, bb) = hsv_to_rgb(Hsv {
+            h: m.hsv.h,
+            s: sat_c,
+            v: val_bot_c.clamp(0.0, 1.0),
+        });
+
+        let (cursor_ch, (cr, cg, cb)) = if is_bottom_sub {
+            ('▼', (rb, gb, bb)) // cursor in lower sub-cell → down-pointing triangle
+        } else {
+            ('▲', (rt, gt, bt)) // cursor in upper sub-cell → up-pointing triangle
+        };
+        // Pick bg that guarantees contrast: dark on bright, light on dark.
+        let lum = 0.299 * cr as f32 + 0.587 * cg as f32 + 0.114 * cb as f32;
+        let bg = if lum > 128.0 {
+            Color::Rgb(0, 0, 0)
+        } else {
+            Color::Rgb(255, 255, 255)
+        };
         ctx.fill(
-            Rect::new(
-                sv_cursor_cx,
-                sv_cursor_cy,
-                sv_cursor_cx + 1,
-                sv_cursor_cy + 1,
-            ),
-            '+',
-            Style::new(Color::Rgb(255, 255, 255), Color::Rgb(0, 0, 0)),
+            Rect::new(sv_cx, sv_cy, sv_cx + 1, sv_cy + 1),
+            cursor_ch,
+            Style::new(Color::Rgb(cr, cg, cb), bg),
         );
     }
 
     fn handle_event(&mut self, ev: &mut Event, body: Rect, m: &mut ColorModel, _ctx: &mut Context) {
         let height = (body.b.y - body.a.y).max(1);
-        let box_x = body.a.x + 3;
+        let box_x = body.a.x + BOX_OFFSET;
         let bw = (body.b.x - box_x).max(1);
         let bh = height * 2;
 
@@ -133,9 +186,10 @@ impl Surface for PlaneSurface {
         if p.y < body.a.y || p.y >= body.b.y {
             return None;
         }
-        if p.x >= body.a.x && p.x < body.a.x + 2 {
+        let box_x = body.a.x + BOX_OFFSET;
+        if p.x >= body.a.x && p.x < body.a.x + HUE_COLS {
             Some(ColorDragRegion::HueStrip)
-        } else if p.x >= body.a.x + 3 && p.x < body.b.x {
+        } else if p.x >= box_x && p.x < body.b.x {
             Some(ColorDragRegion::SvBox)
         } else {
             None
@@ -143,17 +197,21 @@ impl Surface for PlaneSurface {
     }
 
     fn apply_drag(&mut self, region: ColorDragRegion, p: Point, body: Rect, m: &mut ColorModel) {
-        let height = (body.b.y - body.a.y).max(1) as f32;
-        let box_x = body.a.x + 3;
+        let height = (body.b.y - body.a.y).max(1);
+        let box_x = body.a.x + BOX_OFFSET;
         let bw = (body.b.x - box_x).max(1) as f32;
         match region {
             ColorDragRegion::HueStrip => {
-                let hue = ((p.y - body.a.y) as f32 / height * 360.0).clamp(0.0, 359.9);
+                let col = (p.x - body.a.x).clamp(0, HUE_COLS - 1);
+                let row = (p.y - body.a.y).clamp(0, height - 1);
+                let idx = row * HUE_COLS + col;
+                let total = height * HUE_COLS;
+                let hue = (idx as f32 / total as f32 * 360.0).clamp(0.0, 359.9);
                 m.set_hsv(Hsv { h: hue, ..m.hsv });
             }
             ColorDragRegion::SvBox => {
                 let sat = ((p.x - box_x) as f32 / bw).clamp(0.0, 1.0);
-                let val = (1.0 - (p.y - body.a.y) as f32 / height).clamp(0.0, 1.0);
+                let val = (1.0 - (p.y - body.a.y) as f32 / height as f32).clamp(0.0, 1.0);
                 m.set_hsv(Hsv {
                     h: m.hsv.h,
                     s: sat,
@@ -230,12 +288,11 @@ mod tests {
         );
     }
 
-    // Small body: 2-col hue strip + 3-col SV box = 5 cols wide, 4 rows tall.
-    // body.a.x=0, body.b.x=5 → box_x=3, bw=2, bh=8.
-    // Keeping the area small stays well under the 63-style snapshot limit.
+    // Snapshot body: 4-col hue strip + 1-col gap + 4-col SV box = 9 cols wide, 4 rows tall.
+    // body.a.x=0 → box_x=5, bw=4, bh=8.
     const SNAP_BODY: Rect = Rect {
         a: Point { x: 0, y: 0 },
-        b: Point { x: 5, y: 4 },
+        b: Point { x: 9, y: 4 },
     };
 
     fn render_plane(m: &ColorModel) -> String {
@@ -243,12 +300,11 @@ mod tests {
         use crate::screen::Buffer;
         use crate::theme::Theme;
         let theme = Theme::classic_blue();
-        // Canvas is exactly snap body size.
-        let (backend, screen) = HeadlessBackend::new(5, 4);
+        let (backend, screen) = HeadlessBackend::new(9, 4);
         let mut r = Renderer::new(Box::new(backend));
         let s = PlaneSurface::new();
         r.render(|buf: &mut Buffer| {
-            let bounds = Rect::new(0, 0, 5, 4);
+            let bounds = Rect::new(0, 0, 9, 4);
             let mut dc = crate::view::DrawCtx::new(buf, &theme, bounds, bounds.a);
             <PlaneSurface as crate::dialog::colorpick::Surface>::draw(&s, &mut dc, SNAP_BODY, m);
         });

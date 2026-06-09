@@ -2838,11 +2838,11 @@ mod tests {
             program.pump_once();
         }
 
-        // MouseDown at absolute (13, 6) = picker-local (3, 1) = top-left of the SV
-        // box. The picker's handle_event: drag_region_at returns SvBox; sets
-        // active_drag, applies the immediate click (sat=0, val=1 → white), pushes
-        // the ColorDragCapture (deferred → applied this pump).
-        program.out_events.push_back(mouse_down_at(13, 6));
+        // MouseDown at absolute (15, 6) = picker-local (5, 1) = top-left of the SV
+        // box (HUE_COLS=4, BOX_OFFSET=5 → box_x=5). The picker's handle_event:
+        // drag_region_at returns SvBox; sets active_drag, applies the immediate
+        // click (sat=0, val=1 → white), pushes the ColorDragCapture.
+        program.out_events.push_back(mouse_down_at(15, 6));
         program.pump_once();
         assert_eq!(
             program.capture_len(),
@@ -2858,10 +2858,10 @@ mod tests {
         // -- Frame-locking assertion -----------------------------------------------
         //
         // Push Deferred::ColorPickerDrag directly for picker-local pos (37, 1).
-        //   sat = (37-3)/35 = 34/35, val = 1-(1-1)/17 = 1.0, hue = 0.0
-        //   → hsv_to_rgb(0, 34/35, 1) = Rgb(255, 7, 7).
+        //   box_x=5, bw=33: sat = (37-5)/33 = 32/33, val = 1-(1-1)/17 = 1.0, hue=0
+        //   → hsv_to_rgb(0, 32/33, 1) = Rgb(255, 8, 8).
         // Wrong-frame path (absolute coords as picker-local, i.e. pos (47, 6)):
-        //   sat = (47-3)/35 = 44/35 clamped to 1.0, val = 1-(6-1)/17 = 12/17
+        //   sat = (47-5)/33 = 42/33 clamped to 1.0, val = 1-(6-1)/17 = 12/17
         //   → hsv_to_rgb(0, 1, 12/17) = Rgb(180, 0, 0) — different, so the test
         //   would fail if the broker forwarded absolute coords.
         program.deferred.push(Deferred::ColorPickerDrag {
@@ -2875,22 +2875,23 @@ mod tests {
         program.pump_once();
         assert_eq!(
             picker_color(&mut program, picker_id),
-            Color::Rgb(255, 7, 7),
-            "frame-locking: picker-local (37,1) gives Rgb(255,7,7); wrong-frame would give Rgb(180,0,0)"
+            Color::Rgb(255, 8, 8),
+            "frame-locking: picker-local (37,1) gives Rgb(255,8,8); wrong-frame would give Rgb(180,0,0)"
         );
 
         // -- Capture lifecycle (MouseMove → scrub, MouseUp → pop) -----------------
 
         // MouseMove at absolute (35, 15).
         // ColorDragCapture: local = (35-10, 15-5) = (25, 10). Posts ColorPickerDrag.
-        // apply_drag(SvBox, (25,10)): sat=(25-3)/35=22/35, val=1-(10-1)/17=8/17.
-        //   c = (22/35)*(8/17) = 176/595, m = 8/17-176/595 = 104/595
-        //   r = (280/595)*255+0.5 = 120, g = b = (104/595)*255+0.5 = 45 → Rgb(120,45,45)
+        // apply_drag(SvBox, (25,10)): box_x=5, bw=33: sat=(25-5)/33=20/33,
+        //   val=1-(10-1)/17=8/17.
+        //   c = (20/33)*(8/17) = 160/561, m = 8/17-160/561 = 104/561
+        //   r = (264/561)*255+0.5 = 120, g = b = (104/561)*255+0.5 = 47 → Rgb(120,47,47)
         program.out_events.push_back(mouse_move_at(35, 15));
         program.pump_once();
         assert_eq!(
             picker_color(&mut program, picker_id),
-            Color::Rgb(120, 45, 45),
+            Color::Rgb(120, 47, 47),
             "MouseMove scrubs via the capture→broker→apply_drag chain"
         );
         assert_eq!(
