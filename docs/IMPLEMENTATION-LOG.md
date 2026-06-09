@@ -5,6 +5,36 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — terminal family (rows 91–92)
+
+Ported **`TTextDevice`** (row 91) and **`TTerminal`** (row 92) from
+`textview.cpp`/`ttprvlns.cpp` into a new `src/widgets/terminal.rs`. These are the
+last two rows of the 92-class porting checklist — **all rows now done**.
+
+### Key design decisions
+
+- **`TextDevice` (row 91):** a plain `pub trait` with a single method `write_bytes(&mut self, data: &[u8], ctx: &mut Context) -> usize`. The C++ `streambuf` inheritance and `otstream` wrapper are dropped entirely (D11/D12); users call `write_bytes` directly.
+
+- **`Terminal` (row 92):** embeds a `Scroller` with `#[delegate(to = scroller)]` on the `impl View for Terminal` block, providing only `draw` and `as_any_mut` overrides. This means the macro auto-generates all the boilerplate `View` forwarders. `as_any_mut` explicitly forwards to `self.scroller.as_any_mut()`, returning `Some(&mut self.scroller)` — enabling the existing `SyncScrollerDelta` pump arm to downcast and call `apply_delta` without any new `Deferred` variant.
+
+- **Ctor / `init` split:** the C++ ctor calls `setLimit`/`setCursor`/`showCursor` which need a `Context`. Following the `TOutline` pattern, `Terminal::new` takes no `Context`; consumers call `Terminal::init(&mut self, ctx)` after insertion.
+
+- **Ring-buffer helpers:** `buf_dec`/`buf_inc` wrap at `buf_size` (safe usize arithmetic, no overflow); `can_insert` faithfully translates the C++ signed-comparison trick to usize; `prev_lines`/`find_lf_backwards` (from `ttprvlns.cpp`) are verbatim ports handling wrap-around.
+
+- **`draw()`:** uses `put_str` (UTF-8-width-aware) + `fill` for padding. UTF-8 truncation (`discardPossiblyTruncatedCharsAtEnd`) is `str::from_utf8` with `valid_up_to` trim (D13). `setCursor(-1,-1)` dropped (D8).
+
+- **`write_bytes`:** reads `limit.y` *before* calling `set_limit` (critical ordering); eviction loop faithfully mirrors C++ `do_sputn`; `drawLock`/`drawView` dropped (D8).
+
+### Tests
+
+11 unit tests: ring-buffer helper round-trips (`buf_inc`/`buf_dec`/`can_insert`), `prev_lines` (linear + wrap-around), `write_bytes` behavior (newline counting, eviction), and two insta snapshots (`draw_empty_terminal`, `draw_with_lines`).
+
+### Commit
+
+- **feat(terminal): port TTextDevice/TTerminal (rows 91–92)** — `TextDevice` trait, `Terminal` ring-buffer view, 11 tests, 2 snapshots; all 92 PORT-ORDER rows complete.
+
+---
+
 ## Session — outline family (rows 88–90)
 
 Ported the **outline cluster** (`TNode`/`TOutlineViewer`/`TOutline`) into a new

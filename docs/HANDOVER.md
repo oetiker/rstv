@@ -142,19 +142,23 @@
   payload-command + `set_state` `chDirButton` poke breadcrumbed → row 80. The
   `#[delegate]` proc-macro is landed and adopted codebase-wide.
 
-## Next — resume faithful port at row 91 (terminal family)
+## Next — all 92 rows complete
 
-**The outline family (88–90) is fully landed** (`7472343`). Rows 81–87 stay
-dropped and documented.
+**Rows 91–92 (terminal family) are COMPLETE and on `main`.** `TextDevice` (trait)
+and `Terminal` (ring-buffer terminal view) live in `src/widgets/terminal.rs`.
+**952 lib tests green; clippy + fmt clean.**
 
-**Resume the faithful port at row 91** (terminal family 91–92) — the last two rows
-of the 92-class checklist. Both port from `textview.cpp` into a new
-`widgets::terminal`, both tagged MECHANICAL:
-- Row 91: `TTextDevice` (`: TScroller`) — abstract scrollable text sink (the C++
-  `streambuf` base; the sink/overflow seam is the thing to design under D11/D13).
-- Row 92: `TTerminal` (`: TTextDevice`) — ring-buffer terminal view (→91).
-The `TScroller` base + the scrollbar read-broker the outline family just reused are
-the precedent.
+Key design choices:
+- `TextDevice` is a plain trait (D11: `streambuf` dropped); users call `write_bytes`.
+- `Terminal` embeds a `Scroller` with `#[delegate(to = scroller)]` on the `View`
+  impl; `as_any_mut` auto-forwards to the inner `Scroller`, so the existing
+  `SyncScrollerDelta` pump arm works without a new `Deferred` variant.
+- Ctor takes no `Context`; consumer calls `Terminal::init(&mut self, ctx)` after
+  insertion (same pattern as `TOutline`).
+- `draw()`: faithful ring-buffer backward scan via `prev_lines`/`find_lf_backwards`
+  (from `ttprvlns.cpp`); UTF-8 boundary trimming via `str::from_utf8`.
+
+**The 92-class porting checklist is now fully complete.**
 
 **Entry point for `color_dialog`:** `Program::color_dialog(initial: Color) ->
 Option<Color>` at `src/app/program.rs`. Also re-exported as `tvision::ColorPicker`

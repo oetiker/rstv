@@ -20,6 +20,7 @@ pub mod outline;
 mod scrollbar;
 mod scroller;
 mod static_text;
+pub mod terminal;
 
 pub use button::{Button, ButtonFlags};
 pub use cluster::{CheckBoxes, Cluster, ClusterKind, MultiCheckBoxes, RadioButtons};
@@ -35,3 +36,4 @@ pub use outline::{Node, Outline, OutlineViewer, OutlineViewerState, ov_update};
 pub use scrollbar::ScrollBar;
 pub use scroller::Scroller;
 pub use static_text::{Label, ParamText, StaticText};
+pub use terminal::{Terminal, TextDevice};

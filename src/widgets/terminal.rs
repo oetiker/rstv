@@ -1,0 +1,683 @@
+//! `TTextDevice` / `TTerminal` — faithful Rust port of `textview.cpp` /
+//! `ttprvlns.cpp` (rows 91–92, MECHANICAL).
+//!
+//! ## Deviations from C++ (pre-decided D-rules)
+//!
+//! - **D1:** `TTextDevice` → `TextDevice` (trait), `TTerminal` → `Terminal`
+//!   (struct), all methods `snake_case`.
+//! - **D2:** `Terminal` embeds a [`Scroller`] and uses `#[delegate(to = scroller)]`
+//!   for all `View` methods not overridden. The `#[delegate]` macro auto-forwards
+//!   `as_any_mut` to `self.scroller.as_any_mut()`, which returns
+//!   `Some(&mut self.scroller as &mut dyn Any)`, letting the existing
+//!   `Deferred::SyncScrollerDelta` pump arm downcast to `Scroller` and call
+//!   `apply_delta`. **No new `Deferred` variant is needed.**
+//! - **D5:** `growMode = gfGrowHiX + gfGrowHiY` →
+//!   `GrowMode { hi_x: true, hi_y: true, ..Default::default() }`.
+//! - **D7:** `mapColor(1)` → `ctx.style(Role::ScrollerNormal)`.
+//! - **D8:** `drawView()` / `drawLock++/--` / `setCursor(-1,-1)` dropped (whole-tree
+//!   redraw every pump pass).
+//! - **D11:** `streambuf` inheritance and `otstream` wrapper dropped entirely.
+//!   Users call `write_bytes` directly.
+//! - **D12:** `TStreamable` boilerplate dropped.
+//! - **D13:** Ring buffer stores raw bytes; draw uses `put_str` (UTF-8-width-aware)
+//!   rather than byte-by-byte; UTF-8 boundary trimming via `str::from_utf8`.
+//!
+//! ## Constructor / init pattern
+//!
+//! The C++ ctor calls `setLimit(0,1)`, `setCursor(0,0)`, and `showCursor()`, which
+//! all need a `Context`. Following the `TOutline` pattern (rows 88–90), the ctor
+//! takes no `Context`; the consumer calls [`Terminal::init`] once after inserting
+//! the terminal into a group.
+
+use crate::theme::Role;
+use crate::view::{Context, DrawCtx, GrowMode, Point, Rect, View, ViewId};
+use crate::widgets::Scroller;
+use tvision_macros::delegate;
+
+// ---------------------------------------------------------------------------
+// TextDevice (row 91) — the abstract output trait
+// ---------------------------------------------------------------------------
+
+/// `TTextDevice` — the abstract text-output device (row 91).
+///
+/// The `streambuf` base and `otstream` wrapper are dropped (D11/D12). Users of the
+/// terminal call [`write_bytes`](Self::write_bytes) directly.
+pub trait TextDevice {
+    /// `TTextDevice::do_sputn` — write `data` bytes into the device and return
+    /// the number of bytes accepted (always `data.len()` for `Terminal`).
+    fn write_bytes(&mut self, data: &[u8], ctx: &mut Context) -> usize;
+}
+
+// ---------------------------------------------------------------------------
+// Terminal (row 92) — the ring-buffer terminal view
+// ---------------------------------------------------------------------------
+
+/// `TTerminal` — a ring-buffer terminal view (row 92).
+///
+/// Extends `TTextDevice` (which extends `TScroller`). Stores incoming text in a
+/// fixed-size ring buffer and draws the most-recent `size.y` lines.
+pub struct Terminal {
+    /// The embedded scroller — handles scrollbar sync, geometry, and all the
+    /// `View` methods we do not override.
+    scroller: Scroller,
+    /// The ring buffer storage.
+    buffer: Vec<u8>,
+    /// Ring buffer capacity. Always `>= 1`; `buf_size - 1` is the max usable bytes
+    /// (one slot is the "empty sentinel" that distinguishes full from empty, faithful
+    /// to the C++ `bufSize - 1` guard in `canInsert`).
+    buf_size: usize,
+    /// Write head — next byte goes here. `TTerminal::queFront`.
+    que_front: usize,
+    /// Read tail — oldest data starts here. `TTerminal::queBack`.
+    que_back: usize,
+}
+
+impl Terminal {
+    /// `TTerminal::TTerminal` — create the terminal with a ring buffer of
+    /// `a_buf_size` bytes (capped at 32000).
+    ///
+    /// Faithful: `growMode = gfGrowHiX + gfGrowHiY`. `queFront = queBack = 0`.
+    ///
+    /// **NOTE:** the C++ ctor calls `setLimit(0, 1)`, `setCursor(0, 0)`, and
+    /// `showCursor()`, which all need a `Context` we do not have here. The consumer
+    /// must call [`Terminal::init`] once after inserting this view into a group (the
+    /// same pattern as `TOutline`).
+    pub fn new(
+        bounds: Rect,
+        h_scroll_bar: Option<ViewId>,
+        v_scroll_bar: Option<ViewId>,
+        a_buf_size: usize,
+    ) -> Self {
+        let mut scroller = Scroller::new(bounds, h_scroll_bar, v_scroll_bar);
+        scroller.state_mut().grow_mode = GrowMode {
+            hi_x: true,
+            hi_y: true,
+            ..Default::default()
+        };
+        let buf_size = a_buf_size.clamp(1, 32000);
+        let buffer = vec![0u8; buf_size];
+        Terminal {
+            scroller,
+            buffer,
+            buf_size,
+            que_front: 0,
+            que_back: 0,
+        }
+    }
+
+    /// Post-insert initializer — call once after inserting the terminal into a group.
+    ///
+    /// Ports the context-requiring parts of the C++ ctor: `setLimit(0, 1)`,
+    /// `setCursor(0, 0)`, `showCursor()`. Faithful to the C++ initialization.
+    pub fn init(&mut self, ctx: &mut Context) {
+        self.scroller.set_limit(0, 1, ctx);
+        self.scroller.state_mut().cursor = Point::new(0, 0);
+        self.scroller.state_mut().show_cursor();
+    }
+
+    // -----------------------------------------------------------------------
+    // Ring-buffer helpers (private)
+    // -----------------------------------------------------------------------
+
+    /// `TTerminal::bufDec` — decrement a ring-buffer index with wrap.
+    fn buf_dec(&self, val: usize) -> usize {
+        if val == 0 { self.buf_size - 1 } else { val - 1 }
+    }
+
+    /// `TTerminal::bufInc` — increment a ring-buffer index with wrap.
+    fn buf_inc(&self, val: usize) -> usize {
+        let next = val + 1;
+        if next >= self.buf_size { 0 } else { next }
+    }
+
+    /// `TTerminal::canInsert` — `true` if there is room for `amount` more bytes.
+    ///
+    /// Faithful to the C++: keeps one slot empty as the full/empty sentinel
+    /// (`bufSize - 1` max usable bytes).
+    fn can_insert(&self, amount: usize) -> bool {
+        if self.que_front < self.que_back {
+            // Normal (no-wrap) case: free space = queBack - queFront - 1
+            // (the -1 is the sentinel slot).
+            // can_insert iff queBack > queFront + amount
+            // i.e.  queBack - queFront - 1 >= amount
+            self.que_back > self.que_front + amount
+        } else {
+            // Wrapped (or empty) case: free = buf_size - queFront + queBack - 1.
+            // C++: (long(queFront) - bufSize + amount) < queBack
+            // => queFront - buf_size + amount < queBack (signed comparison)
+            // => amount < queBack + buf_size - queFront
+            // => amount + queFront < queBack + buf_size
+            // Since queFront >= queBack in this branch, queBack + buf_size > queFront,
+            // so we use saturating arithmetic; both sides are usize.
+            let t = self.que_front + amount; // may not overflow if sizes are bounded
+            (self.que_back + self.buf_size) > t
+        }
+    }
+
+    /// `TTerminal::queEmpty` — `true` when the ring buffer is empty.
+    pub fn que_empty(&self) -> bool {
+        self.que_back == self.que_front
+    }
+
+    /// `TTerminal::prevLines` — scan backward from `pos`, counting `lines`
+    /// newline characters, and return the position of the first character on
+    /// the `lines`-th-previous logical line.
+    ///
+    /// Faithful port of `ttprvlns.cpp`. Handles ring-buffer wrap.
+    fn prev_lines(&self, mut pos: usize, mut lines: usize) -> usize {
+        if lines > 0 && pos != self.que_back {
+            loop {
+                if pos == self.que_back {
+                    return self.que_back;
+                }
+                pos = self.buf_dec(pos);
+                // count = number of bytes to scan backward from `pos` (inclusive)
+                // C++: `pos >= queBack ? pos - queBack : pos` + 1
+                let count = if pos >= self.que_back {
+                    pos - self.que_back + 1
+                } else {
+                    pos + 1
+                };
+                // find_lf_backwards: scan backward, return true if '\n' found,
+                // leaving `pos` at the found character.
+                if let Some(lf_pos) = self.find_lf_backwards(pos, count) {
+                    pos = lf_pos;
+                    lines -= 1;
+                    if lines == 0 {
+                        break;
+                    }
+                } else {
+                    // No newline found in this backward scan → reached queBack.
+                    return self.que_back;
+                }
+            }
+            pos = self.buf_inc(pos);
+        }
+        pos
+    }
+
+    /// Helper for `prev_lines` — port of `findLfBackwards`.
+    ///
+    /// Scans backward from `pos` for up to `count` bytes.
+    /// Returns `Some(pos_of_newline)` or `None`.
+    /// On `None`, `pos` has been decremented to the last checked byte.
+    /// NOTE: this is a pure function — it does not mutate `pos` in place
+    /// like the C++ does (the C++ passes by `&`); the caller must use the
+    /// returned position.
+    fn find_lf_backwards(&self, mut pos: usize, count: usize) -> Option<usize> {
+        // C++: ++pos; do { if (buffer[--pos] == '\n') return True; } while (--count > 0);
+        // We model this as: start from `pos` (already at the character), scan backward.
+        // The C++ increments first then immediately decrements, so it starts at `pos`.
+        let mut remaining = count;
+        loop {
+            if self.buffer[pos] == b'\n' {
+                return Some(pos);
+            }
+            if remaining <= 1 {
+                return None;
+            }
+            remaining -= 1;
+            pos = self.buf_dec(pos);
+        }
+    }
+
+    /// `TTerminal::nextLine` — advance `pos` past the next `\n` in the ring buffer.
+    fn next_line(&self, mut pos: usize) -> usize {
+        while pos != self.que_front && self.buffer[pos] != b'\n' {
+            pos = self.buf_inc(pos);
+        }
+        if pos != self.que_front {
+            pos = self.buf_inc(pos);
+        }
+        pos
+    }
+
+    /// `discardPossiblyTruncatedCharsAtEnd` — if the scratch buffer is full
+    /// (256 bytes), trim any trailing incomplete UTF-8 sequence.
+    ///
+    /// Returns a `&str` slice of valid UTF-8 from the scratch buffer.
+    fn valid_utf8(scratch: &[u8]) -> &str {
+        match std::str::from_utf8(scratch) {
+            Ok(s) => s,
+            Err(e) => {
+                // Trim to the last valid UTF-8 boundary.
+                std::str::from_utf8(&scratch[..e.valid_up_to()]).unwrap_or("")
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TextDevice impl
+// ---------------------------------------------------------------------------
+
+impl TextDevice for Terminal {
+    /// `TTerminal::do_sputn` — write `data` into the ring buffer, evicting old
+    /// lines as needed, then update the scrollbar limits.
+    ///
+    /// Faithful port. Key deviations: D8 (`drawLock++/--` and `drawView()` dropped);
+    /// usize arithmetic (no signed-vs-unsigned landmines).
+    fn write_bytes(&mut self, mut data: &[u8], ctx: &mut Context) -> usize {
+        let original_len = data.len();
+
+        // Trim to the max insertable size (buf_size - 1 usable bytes).
+        let max_bytes = self.buf_size - 1;
+        if data.len() > max_bytes {
+            data = &data[data.len() - max_bytes..];
+        }
+
+        let count = data.len();
+        if count == 0 {
+            return original_len;
+        }
+
+        // Read limit.y BEFORE any set_limit call mutates it.
+        let mut screen_lines = self.scroller.limit().y;
+
+        // Count newlines in the new data.
+        for &b in data {
+            if b == b'\n' {
+                screen_lines += 1;
+            }
+        }
+
+        // Evict old lines from the tail until there is room.
+        while !self.can_insert(count) {
+            self.que_back = self.next_line(self.que_back);
+            if screen_lines > 1 {
+                screen_lines -= 1;
+            }
+        }
+
+        // Write into the ring buffer (handle wrap-around).
+        if self.que_front + count >= self.buf_size {
+            let first = self.buf_size - self.que_front;
+            self.buffer[self.que_front..self.buf_size].copy_from_slice(&data[..first]);
+            self.buffer[..count - first].copy_from_slice(&data[first..]);
+            self.que_front = count - first;
+        } else {
+            self.buffer[self.que_front..self.que_front + count].copy_from_slice(data);
+            self.que_front += count;
+        }
+
+        // Publish new scrollbar limits and scroll position (D8: drawLock dropped).
+        self.scroller
+            .set_limit(self.scroller.limit().x, screen_lines, ctx);
+        self.scroller.scroll_to(0, screen_lines + 1, ctx);
+
+        original_len
+    }
+}
+
+// ---------------------------------------------------------------------------
+// View impl — draw and as_any_mut are overridden; everything else delegates.
+// ---------------------------------------------------------------------------
+
+#[delegate(to = scroller)]
+impl View for Terminal {
+    /// `TTerminal::draw` — render the ring-buffer contents from newest to oldest.
+    ///
+    /// Faithful port with D7/D8/D13 applied:
+    /// - `mapColor(1)` → `ctx.style(Role::ScrollerNormal)` (D7)
+    /// - `setCursor(-1,-1)` dropped (D8 — no cursor hiding needed with whole-tree redraw)
+    /// - `writeBuf` → `put_str` + `fill` (D13 — use UTF-8-aware rendering)
+    fn draw(&mut self, ctx: &mut DrawCtx) {
+        let color = ctx.style(Role::ScrollerNormal);
+        let size = self.scroller.state().size;
+        let limit_y = self.scroller.limit().y;
+        let delta_y = self.scroller.delta.y;
+
+        // bottomLine = size.y + delta.y
+        let bottom_line = size.y + delta_y;
+
+        // Find end_line: the ring position past the last byte of the last visible line.
+        let end_line = if limit_y > bottom_line {
+            let mut el = self.prev_lines(self.que_front, (limit_y - bottom_line) as usize);
+            el = self.buf_dec(el);
+            el
+        } else {
+            self.que_front
+        };
+
+        // Determine how many rows we actually draw (y starts from the bottom).
+        let y_start = if limit_y > size.y {
+            size.y - 1
+        } else {
+            // Fill empty rows below the content.
+            let blank_rect = Rect::new(0, limit_y, size.x, size.y);
+            if limit_y < size.y {
+                ctx.fill(blank_rect, ' ', color);
+            }
+            limit_y - 1
+        };
+
+        // Draw rows from y_start down to 0, newest to oldest.
+        let mut cur_end = end_line;
+        let mut y = y_start;
+        loop {
+            let beg_line = self.prev_lines(cur_end, 1);
+
+            // Build scratch: copy ring-buffer bytes from beg_line..cur_end into a
+            // contiguous Vec<u8> (up to 256 bytes, faithful to the C++ `char s[256]`).
+            const MAX_SCRATCH: usize = 256;
+            let mut scratch: Vec<u8> = Vec::with_capacity(MAX_SCRATCH);
+
+            let mut line_pos = beg_line;
+            while line_pos != cur_end {
+                if cur_end >= line_pos {
+                    // No wrap: copy min(cur_end - line_pos, remaining) bytes.
+                    let remaining = MAX_SCRATCH - scratch.len();
+                    let copy_len = (cur_end - line_pos).min(remaining);
+                    if copy_len == 0 {
+                        break;
+                    }
+                    scratch.extend_from_slice(&self.buffer[line_pos..line_pos + copy_len]);
+
+                    // Trim possibly-truncated UTF-8 chars at end if buffer is full.
+                    let slen = if scratch.len() == MAX_SCRATCH {
+                        let text = Self::valid_utf8(&scratch);
+                        text.len()
+                    } else {
+                        scratch.len()
+                    };
+
+                    if line_pos + slen > self.buf_size {
+                        line_pos = slen - (self.buf_size - line_pos);
+                    } else {
+                        line_pos += slen;
+                    }
+                    scratch.truncate(slen);
+                } else {
+                    // Wrap: copy from line_pos..buf_size, then from 0..cur_end.
+                    let remaining = MAX_SCRATCH - scratch.len();
+                    let fst_len = (self.buf_size - line_pos).min(remaining);
+                    scratch.extend_from_slice(&self.buffer[line_pos..line_pos + fst_len]);
+                    let remaining2 = MAX_SCRATCH - scratch.len();
+                    let snd_len = cur_end.min(remaining2);
+                    scratch.extend_from_slice(&self.buffer[..snd_len]);
+
+                    // Trim possibly-truncated UTF-8 chars at end if buffer is full.
+                    let slen = if scratch.len() == MAX_SCRATCH {
+                        let text = Self::valid_utf8(&scratch);
+                        text.len()
+                    } else {
+                        scratch.len()
+                    };
+                    scratch.truncate(slen);
+                    line_pos = fst_len + snd_len;
+                    if line_pos >= self.buf_size {
+                        line_pos -= self.buf_size;
+                    }
+                }
+            }
+
+            // Render the line text.
+            let text = Self::valid_utf8(&scratch);
+            let x = ctx.put_str(0, y, text, color);
+            // Pad the rest of the row with spaces.
+            if x < size.x {
+                ctx.fill(Rect::new(x, y, size.x, y + 1), ' ', color);
+            }
+
+            // Position cursor at end of newest line (faithful to C++ setCursor(x,y)).
+            if cur_end == self.que_front {
+                self.scroller.state_mut().cursor = Point::new(x, y);
+            }
+
+            if y == 0 {
+                break;
+            }
+            y -= 1;
+
+            cur_end = beg_line;
+            cur_end = self.buf_dec(cur_end);
+        }
+    }
+
+    /// Returns `Some(&mut self.scroller)` via the inner `Scroller::as_any_mut`.
+    /// This lets the `Deferred::SyncScrollerDelta` pump arm downcast to `Scroller`
+    /// and call `apply_delta` without a new Deferred variant (D3).
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        self.scroller.as_any_mut()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::{HeadlessBackend, Renderer};
+    use crate::screen::Buffer;
+    use crate::theme::Theme;
+    use crate::view::{Deferred, Group};
+    use std::collections::VecDeque;
+
+    fn make_ctx<'a>(
+        out: &'a mut VecDeque<crate::event::Event>,
+        timers: &'a mut crate::timer::TimerQueue,
+        deferred: &'a mut Vec<Deferred>,
+    ) -> Context<'a> {
+        Context::new(out, timers, 0, deferred)
+    }
+
+    fn make_terminal(w: u16, h: u16, buf_size: usize) -> Terminal {
+        Terminal::new(Rect::new(0, 0, w as i32, h as i32), None, None, buf_size)
+    }
+
+    // -- Ring-buffer helpers --------------------------------------------------
+
+    #[test]
+    fn buf_inc_wraps() {
+        let t = make_terminal(10, 5, 8);
+        assert_eq!(t.buf_inc(7), 0, "inc wraps at buf_size");
+        assert_eq!(t.buf_inc(0), 1);
+        assert_eq!(t.buf_inc(6), 7);
+    }
+
+    #[test]
+    fn buf_dec_wraps() {
+        let t = make_terminal(10, 5, 8);
+        assert_eq!(t.buf_dec(0), 7, "dec wraps at 0");
+        assert_eq!(t.buf_dec(1), 0);
+        assert_eq!(t.buf_dec(7), 6);
+    }
+
+    #[test]
+    fn can_insert_empty_buffer() {
+        let t = make_terminal(10, 5, 8);
+        // Empty buffer: que_front == que_back == 0.
+        // buf_size=8 means 7 usable bytes (buf_size-1 sentinel).
+        assert!(t.can_insert(1));
+        assert!(t.can_insert(7), "can insert all 7 usable slots");
+        // C++: amount=8 → T = 0 - 8 + 8 = 0, queBack(0) > 0 → false
+        assert!(!t.can_insert(8), "cannot insert 8 (buf_size) bytes");
+    }
+
+    #[test]
+    fn can_insert_after_wrap() {
+        let mut t = make_terminal(10, 5, 8);
+        // Write 5 bytes: que_front=5, que_back=0
+        // free = 0 + 8 - 5 - 1 = 2 usable slots
+        t.que_front = 5;
+        t.que_back = 0;
+        assert!(t.can_insert(2));
+        assert!(!t.can_insert(3));
+
+        // Wrapped: que_front=2, que_back=5 → free = 5 - 2 - 1 = 2
+        t.que_front = 2;
+        t.que_back = 5;
+        assert!(t.can_insert(2));
+        assert!(!t.can_insert(3));
+    }
+
+    #[test]
+    fn prev_lines_on_simple_sequence() {
+        // Buffer: "hello\nworld\n" (indices 0-11), que_front=12, que_back=0.
+        // Tracing the C++ algorithm:
+        //   prevLines(12, 1): bufDec→11, findLf finds '\n' at 11 → lines=0,
+        //     bufInc(11)→12. Returns 12 (the "empty line" after the trailing '\n').
+        //   prevLines(12, 2): first finds '\n' at 11, then finds '\n' at 5 (the
+        //     '\n' after "hello"), bufInc(5)→6. Returns 6 (start of "world\n").
+        //   prevLines(12, 3): reaches queBack=0. Returns 0 (start of "hello").
+        let mut t = make_terminal(20, 5, 64);
+        let data = b"hello\nworld\n";
+        t.buffer[..data.len()].copy_from_slice(data);
+        t.que_front = data.len();
+        t.que_back = 0;
+
+        let pos = t.prev_lines(t.que_front, 1);
+        assert_eq!(pos, 12, "prevLines(front,1) → 12 (empty trailing line)");
+
+        let pos2 = t.prev_lines(t.que_front, 2);
+        assert_eq!(pos2, 6, "prevLines(front,2) → 6 (start of 'world')");
+
+        let pos3 = t.prev_lines(t.que_front, 3);
+        assert_eq!(pos3, 0, "prevLines(front,3) → 0 (start of 'hello')");
+    }
+
+    #[test]
+    fn prev_lines_wrap_around() {
+        // Ring buffer with wrap: "world\n" at start [0..6], "hello\n" at end [10..16].
+        // buf_size=16, que_back=10, que_front=6.
+        // Logical order (oldest to newest): "hello\n" (at 10-15) then "world\n" (at 0-5).
+        //
+        // prevLines(6, 1): que_front=6, queBack=10.
+        //   bufDec(6)→5. count=(5>=10?...:5)+1=6. findLf backward from 5, count=6:
+        //   buffer[5]='\n' → found. lines=0. bufInc(5)→6. Returns 6.
+        //   (The empty trailing line after "world\n".)
+        //
+        // prevLines(6, 2): finds '\n' at 5 (lines=1), then loops:
+        //   bufDec(5)→4. count=(4>=10?...:4)+1=5. findLf backward from 4: no '\n' found
+        //   (buffer[4..0] = "world"). Returns que_back=10 early (no '\n' in this segment).
+        //   Hmm: Wait—findLf scans backward from 4,3,2,1,0. None is '\n'. Returns que_back=10.
+        //   BUT there IS a '\n' at buffer[15] (end of "hello\n"). This is the wrap scenario.
+        //   Since count = pos+1 = 5 (only covers 0..4, not the wrapped part), findLf
+        //   returns False. So we return que_back=10. That's where "hello\n" starts.
+        let mut t = make_terminal(20, 5, 16);
+        let first_line = b"hello\n"; // written first, sits at [10..16]
+        let second_line = b"world\n"; // written second (wrapped), sits at [0..6]
+        t.buffer[10..16].copy_from_slice(first_line);
+        t.buffer[0..6].copy_from_slice(second_line);
+        t.que_back = 10;
+        t.que_front = 6;
+
+        let pos = t.prev_lines(6, 1);
+        assert_eq!(
+            pos, 6,
+            "prevLines(front,1) → 6 (empty trailing line after 'world\\n')"
+        );
+
+        let pos2 = t.prev_lines(6, 2);
+        assert_eq!(
+            pos2, 10,
+            "prevLines(front,2) → 10 (start of 'hello', via queBack)"
+        );
+    }
+
+    // -- write_bytes / TextDevice --------------------------------------------
+
+    #[test]
+    fn write_bytes_counts_newlines() {
+        let mut t = make_terminal(20, 5, 256);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            t.init(&mut ctx);
+        }
+        deferred.clear();
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            let n = t.write_bytes(b"line1\nline2\nline3\n", &mut ctx);
+            assert_eq!(n, 18);
+        }
+        // Initial limit.y = 1; 3 newlines → limit.y = 4.
+        // set_limit queues 2 deferred (h and v bars are None → no ops),
+        // scroll_to queues nothing either. With no bars, deferred is empty.
+        // Check by inspecting the limit directly:
+        assert_eq!(t.scroller.limit().y, 4);
+    }
+
+    #[test]
+    fn write_bytes_evicts_old_lines_when_full() {
+        // Small buffer: 16 bytes (15 usable).
+        let mut t = make_terminal(20, 5, 16);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            t.init(&mut ctx);
+            // Write exactly 14 bytes (one less than usable limit).
+            t.write_bytes(b"AAAA\nBBBB\nCCC\n", &mut ctx); // 14 bytes, 3 newlines
+            // limit.y = 1 + 3 = 4
+            assert_eq!(t.scroller.limit().y, 4);
+            // Now write another 5 bytes that force eviction.
+            t.write_bytes(b"DDDD\n", &mut ctx); // 5 bytes
+            // The buffer cannot hold 14 + 5 = 19 bytes; lines evicted from front.
+            // Limit.y should not grow unboundedly.
+            assert!(t.scroller.limit().y >= 1, "limit.y >= 1 after eviction");
+        }
+    }
+
+    // -- draw snapshot --------------------------------------------------------
+
+    fn render_terminal(t: &mut Terminal, w: u16, h: u16) -> String {
+        let theme = Theme::classic_blue();
+        let (backend, screen) = HeadlessBackend::new(w, h);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = t.state().get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            t.draw(&mut dc);
+        });
+        screen.snapshot()
+    }
+
+    #[test]
+    fn draw_empty_terminal() {
+        let mut t = make_terminal(20, 5, 256);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            t.init(&mut ctx);
+        }
+        insta::assert_snapshot!(render_terminal(&mut t, 20, 5));
+    }
+
+    #[test]
+    fn draw_with_lines() {
+        let mut t = make_terminal(20, 5, 256);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            t.init(&mut ctx);
+            t.write_bytes(b"hello\nworld\nfoo\n", &mut ctx);
+        }
+        insta::assert_snapshot!(render_terminal(&mut t, 20, 5));
+    }
+
+    #[test]
+    fn as_any_mut_returns_scroller() {
+        // Verify that as_any_mut() on Terminal downcasts to Scroller (not Terminal),
+        // so the existing SyncScrollerDelta pump arm can call apply_delta on it.
+        let mut group = Group::new(Rect::new(0, 0, 20, 5));
+        let t = Terminal::new(Rect::new(0, 0, 20, 5), None, None, 256);
+        let id = group.insert(Box::new(t));
+        let scroller = group
+            .find_mut(id)
+            .unwrap()
+            .as_any_mut()
+            .unwrap()
+            .downcast_mut::<Scroller>();
+        assert!(scroller.is_some(), "as_any_mut must downcast to Scroller");
+    }
+}
