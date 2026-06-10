@@ -5,6 +5,28 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — two runtime bugs from the live editor wiring (`63cbc32`)
+
+Wiring a live `FileEditor`/`FileDialog` into `hello.rs` surfaced two bugs that
+unit tests (which bypass the pump) never hit:
+
+1. **FileDialog OK did nothing.** The OK/Open button fires `cmFileOpen` (C++
+   `stddlg.h` 1001 — a `> 255` ALWAYS-enabled command). The D1 allowlist dropped
+   C++'s ">255 always enabled" rule, so `pump_once`'s command filter dropped
+   `cmFileOpen` before `FileDialog::handle_event` could `end_modal`. **Bandaid:**
+   added the file-dialog result commands to `default_command_set()`. The real fix
+   (allowlist→denylist flip, matching C++ `initCommands`) is recorded in HANDOVER
+   "Standing deferrals" + memory `command-set-allowlist-smell` for the post-port
+   architecture pass.
+2. **New/Open editor windows rendered as a flat green field.** `Role::ScrollerNormal`
+   held the degenerate "no-window-remap" color (`0x28` green). Corrected to the
+   faithful in-window palette-chain resolution `0x1E` (yellow on blue) / `0x71`
+   (blue on lightgray) — `cpScroller→cpBlueWindow→cpAppColor`. Regenerated 10
+   scroller/editor/memo/terminal/color-picker snapshots.
+
+Two regression tests added (cmFileOpen survives the pump filter; default set
+enables the file commands). 966 lib tests green.
+
 ## Session — hello.rs: EditWindow + FileDialog wired into the demo app
 
 Enhanced `examples/hello.rs` to be a real editor application: File → Open (F3),
