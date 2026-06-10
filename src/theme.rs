@@ -45,6 +45,30 @@ pub enum Role {
     FrameGrayDragging,
     /// A gray-scheme frame icon (close/zoom/resize glyphs).
     FrameGrayIcon,
+    /// An active (focused) **cyan-scheme** frame (`wpCyanWindow`). The frame
+    /// selects the `FrameCyan*` family when its owner's
+    /// [`WindowPalette`](crate::window::WindowPalette) is `Cyan`.
+    FrameCyanActive,
+    /// A passive (unfocused) cyan-scheme frame.
+    FrameCyanPassive,
+    /// A cyan-scheme frame being dragged/resized.
+    FrameCyanDragging,
+    /// A cyan-scheme frame icon (close/zoom/resize glyphs).
+    FrameCyanIcon,
+    /// `THistory`'s dropdown `↓` glyph (the `~`-hi region of the icon cstr) —
+    /// `cpHistory "\x16\x17"` idx 1 (`getColor(0x0102)` hi).
+    HistoryArrow,
+    /// `THistory`'s icon side blocks `▐` `▌` — `cpHistory` idx 2
+    /// (`getColor(0x0102)` lo).
+    HistorySides,
+    /// `THistoryViewer` item text, normal — `cpHistoryViewer
+    /// "\x06\x06\x07\x06\x06"` indices 1/2/4/5 all map to the same window entry
+    /// 6, so one role serves the active/inactive normals, the selected item and
+    /// the divider (the `getPalette` remap surfaced through
+    /// [`ListViewer::list_roles`](crate::widgets::ListViewer::list_roles)).
+    HistoryViewerNormal,
+    /// `THistoryViewer` focused (cursor) item — `cpHistoryViewer` idx 3.
+    HistoryViewerFocused,
     /// A scroll-bar page (trough) area.
     ScrollBarPage,
     /// Scroll-bar control glyphs (arrows / thumb).
@@ -140,8 +164,8 @@ pub enum Role {
     /// `TInputLine` scroll arrows — `cpInputLine` idx 4 (`0x15`).
     InputArrow,
     /// `TScroller` content fill, normal — `cpScroller "\x06\x07"` idx 1 (`0x06`),
-    /// the app-direct color `cpAppColor[6] = 0x28` (fg 8 on bg 2). **Provisional**;
-    /// a scroller inside a window remaps via the palette chain.
+    /// resolved through the realistic owner chain (a scroller inside a blue
+    /// window): `cpScroller[1]=0x06 → cpBlueWindow[6]=0x0D → cpAppColor[13]=0x1E`.
     ScrollerNormal,
     /// `TEditor` selected-text fill — `cpScroller "\x06\x07"` idx 2 (`0x07`),
     /// the app-direct color `cpAppColor[7] = 0x24` (fg 4 on bg 2). Used by
@@ -211,7 +235,7 @@ pub enum Role {
 }
 
 /// Number of [`Role`] variants — the fixed length of [`Theme`]'s style array.
-const ROLE_COUNT: usize = 67;
+const ROLE_COUNT: usize = 75;
 
 impl Role {
     /// Total mapping of each variant to its index into the style array.
@@ -287,6 +311,14 @@ impl Role {
             Role::FrameGrayPassive => 64,
             Role::FrameGrayDragging => 65,
             Role::FrameGrayIcon => 66,
+            Role::FrameCyanActive => 67,
+            Role::FrameCyanPassive => 68,
+            Role::FrameCyanDragging => 69,
+            Role::FrameCyanIcon => 70,
+            Role::HistoryArrow => 71,
+            Role::HistorySides => 72,
+            Role::HistoryViewerNormal => 73,
+            Role::HistoryViewerFocused => 74,
         }
     }
 }
@@ -505,10 +537,14 @@ pub struct Theme {
 impl Theme {
     /// The default theme — the classic Turbo-Vision blue look.
     ///
-    /// **Provisional colours.** These BIOS values reproduce a plausible classic
-    /// blue palette, but real per-role fidelity lands later when `TFrame` /
-    /// `TButton` etc. map their `getColor` indices onto [`Role`]s; do not treat
-    /// the exact values here as authoritative.
+    /// **Every value is derived from the literal C++ palette chain** and carries
+    /// an inline comment showing the chain: the widget's `getPalette()` string
+    /// indexes into the *realistic owner's* palette (dialog widgets → a GRAY
+    /// DIALOG, `cpGrayDialog`; window-content widgets → a BLUE window,
+    /// `cpBlueWindow`; program-owned widgets → one direct hop), whose entries
+    /// index into `cpAppColor` (app.h); the final byte is a BIOS attr
+    /// `bg << 4 | fg`. rstv collapsed that chain into this flat Role → Style
+    /// table (D7). Roles marked "rstv-native" have no C++ chain.
     pub fn classic_blue() -> Self {
         // BIOS 4-bit palette reminder: 0=black 1=blue 2=green 3=cyan 4=red
         // 5=magenta 6=brown 7=lightgray 8=darkgray 9=lightblue ... F=white.
@@ -517,12 +553,15 @@ impl Theme {
             styles[role.index()] = Style::new(Color::Bios(fg), Color::Bios(bg));
         };
 
-        // Desktop / frames.
-        set(&mut styles, Role::Background, 0x7, 0x1); // lightgray on blue
-        set(&mut styles, Role::FrameActive, 0xF, 0x1); // white on blue
-        set(&mut styles, Role::FramePassive, 0x7, 0x1); // lightgray on blue
-        set(&mut styles, Role::FrameDragging, 0xE, 0x1); // yellow on blue
-        set(&mut styles, Role::FrameIcon, 0xA, 0x1); // light green on blue
+        // Desktop / frames. Faithful palette chains — TFrame's color slots
+        // (tframe.cpp) resolve through cpFrame "\x01\x01\x02\x02\x03" into the
+        // owner's cpBlueWindow (views.h), then into cpAppColor (app.h); the
+        // background resolves through TDeskTop's empty (pass-through) palette.
+        set(&mut styles, Role::Background, 0x7, 0x1); // lightgray on blue (chain: cpBackground[1]=0x01 → TDeskTop pass-through → cpAppColor[1]=0x71)
+        set(&mut styles, Role::FrameActive, 0xF, 0x1); // white on blue (chain: cpFrame[3]=0x02 → cpBlueWindow[2]=0x09 → cpAppColor[9]=0x1F)
+        set(&mut styles, Role::FramePassive, 0x7, 0x1); // lightgray on blue (chain: cpFrame[1]=0x01 → cpBlueWindow[1]=0x08 → cpAppColor[8]=0x17)
+        set(&mut styles, Role::FrameDragging, 0xA, 0x1); // lightgreen on blue (chain: cpFrame[5]=0x03 → cpBlueWindow[3]=0x0A → cpAppColor[10]=0x1A)
+        set(&mut styles, Role::FrameIcon, 0xA, 0x1); // lightgreen on blue (chain: cpFrame[5]=0x03 → cpBlueWindow[3]=0x0A → cpAppColor[10]=0x1A)
 
         // Gray-scheme frames (row 34: TDialog / wpGrayWindow). Faithful palette
         // chains — TFrame's color slots (tframe.cpp) resolve through cpFrame
@@ -537,86 +576,101 @@ impl Theme {
         set(&mut styles, Role::FrameGrayDragging, 0xA, 0x7); // lightgreen on lightgray (0x7A)
         set(&mut styles, Role::FrameGrayIcon, 0xA, 0x7); // lightgreen on lightgray (0x7A)
 
-        set(&mut styles, Role::ScrollBarPage, 0x1, 0x3); // blue on cyan
-        set(&mut styles, Role::ScrollBarControls, 0x1, 0x3); // blue on cyan
+        // Cyan-scheme frames (wpCyanWindow). Same cpFrame slots, resolved
+        // through cpCyanWindow "\x10..\x17" (views.h) into cpAppColor:
+        set(&mut styles, Role::FrameCyanActive, 0xF, 0x3); // white on cyan (chain: cpFrame[3]=0x02 → cpCyanWindow[2]=0x11 → cpAppColor[17]=0x3F)
+        set(&mut styles, Role::FrameCyanPassive, 0x7, 0x3); // lightgray on cyan (chain: cpFrame[1]=0x01 → cpCyanWindow[1]=0x10 → cpAppColor[16]=0x37)
+        set(&mut styles, Role::FrameCyanDragging, 0xA, 0x3); // lightgreen on cyan (chain: cpFrame[5]=0x03 → cpCyanWindow[3]=0x12 → cpAppColor[18]=0x3A)
+        set(&mut styles, Role::FrameCyanIcon, 0xA, 0x3); // lightgreen on cyan (chain: cpFrame[5]=0x03 → cpCyanWindow[3]=0x12 → cpAppColor[18]=0x3A)
 
-        // Generic control states.
+        // History family (rows 55-57). The THistory icon sits in a GRAY DIALOG
+        // (`cpHistory "\x16\x17"` → cpGrayDialog → cpAppColor); the recall
+        // viewer adds one more hop through its THistoryWindow owner
+        // (`cpHistoryViewer` → cpHistoryWindow "\x13\x13\x15\x18\x17\x13\x14"
+        // → cpGrayDialog → cpAppColor).
+        set(&mut styles, Role::HistoryArrow, 0x0, 0x2); // black on green (chain: cpHistory[1]=0x16 → cpGrayDialog[22]=0x35 → cpAppColor[53]=0x20)
+        set(&mut styles, Role::HistorySides, 0x2, 0x7); // green on lightgray (chain: cpHistory[2]=0x17 → cpGrayDialog[23]=0x36 → cpAppColor[54]=0x72)
+        set(&mut styles, Role::HistoryViewerNormal, 0xF, 0x1); // white on blue (chain: cpHistoryViewer[1]=[2]=[4]=[5]=0x06 → cpHistoryWindow[6]=0x13 → cpGrayDialog[19]=0x32 → cpAppColor[50]=0x1F)
+        set(&mut styles, Role::HistoryViewerFocused, 0xF, 0x2); // white on green (chain: cpHistoryViewer[3]=0x07 → cpHistoryWindow[7]=0x14 → cpGrayDialog[20]=0x33 → cpAppColor[51]=0x2F)
+
+        set(&mut styles, Role::ScrollBarPage, 0x1, 0x3); // blue on cyan (chain: cpScrollBar[1]=0x04 → cpBlueWindow[4]=0x0B → cpAppColor[11]=0x31)
+        set(&mut styles, Role::ScrollBarControls, 0x1, 0x3); // blue on cyan (chain: cpScrollBar[2]=cpScrollBar[3]=0x05 → cpBlueWindow[5]=0x0C → cpAppColor[12]=0x31)
+
+        // Generic control states — rstv-native roles (D7 additions, no C++
+        // palette chain exists for them).
         set(&mut styles, Role::Normal, 0x0, 0x3); // black on cyan
         set(&mut styles, Role::Focused, 0xF, 0x2); // white on green
         set(&mut styles, Role::Disabled, 0x8, 0x1); // darkgray on blue
         set(&mut styles, Role::Pressed, 0xF, 0x2); // white on green
 
-        // List matrix (cpListViewer idx 1..5). Provisional colors — the C++
-        // cpListViewer maps into the owning window/dialog's gray scheme; the
-        // window-scheme remap lands with TListBox (row 48) / the window palettes.
-        // TODO(window-scheme remap): derive these from the owning view's scheme.
-        set(&mut styles, Role::ListNormalActive, 0x7, 0x1); // idx 1: lightgray on blue
-        set(&mut styles, Role::ListNormalInactive, 0x8, 0x1); // idx 2: darkgray on blue
-        set(&mut styles, Role::ListFocused, 0xF, 0x1); // idx 3: white on blue
-        set(&mut styles, Role::ListSelected, 0x0, 0x3); // idx 4: black on cyan
-        set(&mut styles, Role::ListDivider, 0x7, 0x1); // idx 5: lightgray on blue
+        // List matrix (cpListViewer idx 1..5). Faithful palette chain for a
+        // TListViewer inside a GRAY DIALOG — the realistic TListBox case:
+        // `cpListViewer "\x1A\x1A\x1B\x1C\x1D"` → cpGrayDialog → cpAppColor.
+        // Indices 1 and 2 map to the same dialog entry 26, so the active and
+        // inactive normals coincide.
+        set(&mut styles, Role::ListNormalActive, 0x0, 0x3); // black on cyan (chain: cpListViewer[1]=0x1A → cpGrayDialog[26]=0x39 → cpAppColor[57]=0x30)
+        set(&mut styles, Role::ListNormalInactive, 0x0, 0x3); // black on cyan (chain: cpListViewer[2]=0x1A → cpGrayDialog[26]=0x39 → cpAppColor[57]=0x30)
+        set(&mut styles, Role::ListFocused, 0xF, 0x2); // white on green (chain: cpListViewer[3]=0x1B → cpGrayDialog[27]=0x3A → cpAppColor[58]=0x2F)
+        set(&mut styles, Role::ListSelected, 0xE, 0x3); // yellow on cyan (chain: cpListViewer[4]=0x1C → cpGrayDialog[28]=0x3B → cpAppColor[59]=0x3E)
+        set(&mut styles, Role::ListDivider, 0x1, 0x3); // blue on cyan (chain: cpListViewer[5]=0x1D → cpGrayDialog[29]=0x3C → cpAppColor[60]=0x31)
 
-        // Feedback family.
+        // Feedback family — rstv-native roles (D7 additions, no C++ chain).
         set(&mut styles, Role::Error, 0xF, 0x4); // white on red
         set(&mut styles, Role::Warning, 0x0, 0x6); // black on brown
         set(&mut styles, Role::Info, 0xF, 0x1); // white on blue
         set(&mut styles, Role::Success, 0xF, 0x2); // white on green
 
-        // Static text + cluster family (rows 36/38). Provisional values modelled
-        // on the classic gray-dialog look (`cpStaticText`/`cpCluster` resolved for
-        // a gray dialog): black on lightgray, red shortcut accents, green for the
-        // selected/cursor item. Not authoritative — they realign with the deferred
-        // gray/cyan dialog theming (`TODO(row 34 gray theming)`).
-        set(&mut styles, Role::StaticText, 0x0, 0x7); // black on lightgray
-        set(&mut styles, Role::ClusterNormal, 0x0, 0x7); // black on lightgray
-        set(&mut styles, Role::ClusterSelected, 0xF, 0x2); // white on green
-        set(&mut styles, Role::ClusterNormalShortcut, 0x4, 0x7); // red on lightgray
-        set(&mut styles, Role::ClusterSelectedShortcut, 0xE, 0x2); // yellow on green
-        set(&mut styles, Role::ClusterDisabled, 0x8, 0x7); // darkgray on lightgray
+        // Static text + cluster family (rows 36/38). Faithful palette chains for
+        // a TStaticText / TCluster inside a GRAY DIALOG (the realistic owner):
+        // `cpStaticText "\x06"` / `cpCluster "\x10\x11\x12\x12\x1f"` →
+        // cpGrayDialog → cpAppColor. Clusters sit on the classic cyan strip
+        // (the BC++-IDE checkbox/radio look); both shortcut indices map to the
+        // same dialog entry 18, so the two shortcut roles coincide.
+        set(&mut styles, Role::StaticText, 0x0, 0x7); // black on lightgray (chain: cpStaticText[1]=0x06 → cpGrayDialog[6]=0x25 → cpAppColor[37]=0x70)
+        set(&mut styles, Role::ClusterNormal, 0x0, 0x3); // black on cyan (chain: cpCluster[1]=0x10 → cpGrayDialog[16]=0x2F → cpAppColor[47]=0x30)
+        set(&mut styles, Role::ClusterSelected, 0xF, 0x3); // white on cyan (chain: cpCluster[2]=0x11 → cpGrayDialog[17]=0x30 → cpAppColor[48]=0x3F)
+        set(&mut styles, Role::ClusterNormalShortcut, 0xE, 0x3); // yellow on cyan (chain: cpCluster[3]=0x12 → cpGrayDialog[18]=0x31 → cpAppColor[49]=0x3E)
+        set(&mut styles, Role::ClusterSelectedShortcut, 0xE, 0x3); // yellow on cyan (chain: cpCluster[4]=0x12 → cpGrayDialog[18]=0x31 → cpAppColor[49]=0x3E)
+        set(&mut styles, Role::ClusterDisabled, 0x8, 0x3); // darkgray on cyan (chain: cpCluster[5]=0x1F → cpGrayDialog[31]=0x3E → cpAppColor[62]=0x38)
 
-        // Indicator (editor row/col display, row 45). Provisional, modelled on the
-        // classic editor-indicator look (`cpIndicator`): black on cyan normally,
-        // bright while the owner is dragging. Realigns with editor theming later.
-        set(&mut styles, Role::IndicatorNormal, 0x0, 0x3); // black on cyan
-        set(&mut styles, Role::IndicatorDragging, 0xF, 0x3); // white on cyan
+        // Indicator (editor row/col display, row 45). Faithful palette chain for
+        // a TIndicator inside a TEditWindow — a BLUE window (teditwnd.cpp does
+        // not override TWindow::getPalette, so cpBlueWindow applies):
+        // `cpIndicator "\x02\x03"` → cpBlueWindow (views.h) → cpAppColor.
+        set(&mut styles, Role::IndicatorNormal, 0xF, 0x1); // white on blue (chain: cpIndicator[1]=0x02 → cpBlueWindow[2]=0x09 → cpAppColor[9]=0x1F)
+        set(&mut styles, Role::IndicatorDragging, 0xA, 0x1); // lightgreen on blue (chain: cpIndicator[2]=0x03 → cpBlueWindow[3]=0x0A → cpAppColor[10]=0x1A)
 
-        // Button family (row 37). Provisional values resolved through the classic
-        // palette chain `cpButton` → `cpGrayDialog` → `cpAppColor` for a gray
-        // dialog: green-faced buttons (black text, white when selected, yellow
-        // shortcut), darkgray-on-lightgray when disabled. The shadow follows the
-        // literal chain value 0x70 (black on lightgray): black half-block shadow
-        // glyphs over the gray dialog surface. Realigns with `TODO(row 34 gray
-        // theming)`.
-        set(&mut styles, Role::ButtonNormal, 0x0, 0x2); // black on green
-        set(&mut styles, Role::ButtonDefault, 0xB, 0x2); // light cyan on green
-        set(&mut styles, Role::ButtonSelected, 0xF, 0x2); // white on green
-        set(&mut styles, Role::ButtonDisabled, 0x8, 0x7); // darkgray on lightgray
-        set(&mut styles, Role::ButtonNormalShortcut, 0xE, 0x2); // yellow on green
-        set(&mut styles, Role::ButtonDefaultShortcut, 0xE, 0x2); // yellow on green
-        set(&mut styles, Role::ButtonSelectedShortcut, 0xE, 0x2); // yellow on green
+        // Button family (row 37). Faithful palette chains for a TButton inside
+        // a GRAY DIALOG (the realistic owner): `cpButton
+        // "\x0A\x0B\x0C\x0D\x0E\x0E\x0E\x0F"` → cpGrayDialog → cpAppColor.
+        // Indices 5..7 all map to the same dialog entry 14, so the three
+        // shortcut roles coincide.
+        set(&mut styles, Role::ButtonNormal, 0x0, 0x2); // black on green (chain: cpButton[1]=0x0A → cpGrayDialog[10]=0x29 → cpAppColor[41]=0x20)
+        set(&mut styles, Role::ButtonDefault, 0xB, 0x2); // lightcyan on green (chain: cpButton[2]=0x0B → cpGrayDialog[11]=0x2A → cpAppColor[42]=0x2B)
+        set(&mut styles, Role::ButtonSelected, 0xF, 0x2); // white on green (chain: cpButton[3]=0x0C → cpGrayDialog[12]=0x2B → cpAppColor[43]=0x2F)
+        set(&mut styles, Role::ButtonDisabled, 0x8, 0x7); // darkgray on lightgray (chain: cpButton[4]=0x0D → cpGrayDialog[13]=0x2C → cpAppColor[44]=0x78)
+        set(&mut styles, Role::ButtonNormalShortcut, 0xE, 0x2); // yellow on green (chain: cpButton[5]=0x0E → cpGrayDialog[14]=0x2D → cpAppColor[45]=0x2E)
+        set(&mut styles, Role::ButtonDefaultShortcut, 0xE, 0x2); // yellow on green (chain: cpButton[6]=0x0E → cpGrayDialog[14]=0x2D → cpAppColor[45]=0x2E)
+        set(&mut styles, Role::ButtonSelectedShortcut, 0xE, 0x2); // yellow on green (chain: cpButton[7]=0x0E → cpGrayDialog[14]=0x2D → cpAppColor[45]=0x2E)
         set(&mut styles, Role::ButtonShadow, 0x0, 0x7); // black on lightgray (chain: cpButton[8]=0x0F → cpGrayDialog[15]=0x2E → cpAppColor[46]=0x70)
 
-        // Label family (row 41). Provisional values modelled on the classic
-        // gray-dialog `cpLabel` chain (dialog palette idx 7/8/9): black on
-        // lightgray when not lit, brighter white when lit (linked control
-        // focused), red shortcut accent (identical in both states, since cpLabel
-        // maps both shortcut indices to dialog entry 9). Not authoritative — they
-        // realign with the deferred gray dialog theming (`TODO(row 34 gray
-        // theming)`).
-        set(&mut styles, Role::LabelNormal, 0x0, 0x7); // black on lightgray
-        set(&mut styles, Role::LabelLight, 0xF, 0x7); // white on lightgray (lit)
-        set(&mut styles, Role::LabelNormalShortcut, 0x4, 0x7); // red on lightgray
-        set(&mut styles, Role::LabelLightShortcut, 0x4, 0x7); // red on lightgray
+        // Label family (row 41). Faithful palette chain for a TLabel inside a
+        // GRAY DIALOG (the realistic owner): `cpLabel "\x07\x08\x09\x09"` →
+        // cpGrayDialog (dialogs.h) → cpAppColor (app.h). Both shortcut indices
+        // map to the same dialog entry 9, so the two shortcut roles coincide.
+        set(&mut styles, Role::LabelNormal, 0x0, 0x7); // black on lightgray (chain: cpLabel[1]=0x07 → cpGrayDialog[7]=0x26 → cpAppColor[38]=0x70)
+        set(&mut styles, Role::LabelLight, 0xF, 0x7); // white on lightgray (chain: cpLabel[2]=0x08 → cpGrayDialog[8]=0x27 → cpAppColor[39]=0x7F)
+        set(&mut styles, Role::LabelNormalShortcut, 0xE, 0x7); // yellow on lightgray (chain: cpLabel[3]=0x09 → cpGrayDialog[9]=0x28 → cpAppColor[40]=0x7E)
+        set(&mut styles, Role::LabelLightShortcut, 0xE, 0x7); // yellow on lightgray (chain: cpLabel[4]=0x09 → cpGrayDialog[9]=0x28 → cpAppColor[40]=0x7E)
 
-        // Input line (row 39). Provisional values modelled on the classic
-        // gray-dialog `cpInputLine` chain (`"\x13\x13\x14\x15"`): a cyan field
-        // (black text) for both passive and active, a green selection
-        // highlight, and a brighter arrow colour. Not authoritative — they
-        // realign with the deferred gray dialog theming (`TODO(row 34 gray
-        // theming)`).
-        set(&mut styles, Role::InputNormal, 0x0, 0x3); // black on cyan
-        set(&mut styles, Role::InputSelected, 0xF, 0x2); // white on green
-        set(&mut styles, Role::InputArrow, 0xE, 0x3); // yellow on cyan
+        // Input line (row 39). Faithful palette chain for a TInputLine inside a
+        // GRAY DIALOG (the realistic owner): `cpInputLine "\x13\x13\x14\x15"` →
+        // cpGrayDialog → cpAppColor. Indices 1 (passive) and 2 (active) both
+        // map to dialog entry 0x13, so one role serves both field states: the
+        // classic white-on-blue input field over the gray dialog surface.
+        set(&mut styles, Role::InputNormal, 0xF, 0x1); // white on blue (chain: cpInputLine[1]=cpInputLine[2]=0x13 → cpGrayDialog[19]=0x32 → cpAppColor[50]=0x1F)
+        set(&mut styles, Role::InputSelected, 0xF, 0x2); // white on green (chain: cpInputLine[3]=0x14 → cpGrayDialog[20]=0x33 → cpAppColor[51]=0x2F)
+        set(&mut styles, Role::InputArrow, 0xA, 0x1); // lightgreen on blue (chain: cpInputLine[4]=0x15 → cpGrayDialog[21]=0x34 → cpAppColor[52]=0x1A)
 
         // Scroller / editor content fill (rows 27, 66). Faithful to the C++ palette
         // chain for a TScroller/TEditor inside a (blue) window — the realistic case,
@@ -629,46 +683,40 @@ impl Theme {
         set(&mut styles, Role::ScrollerNormal, 0xE, 0x1); // yellow on blue (0x1E)
         set(&mut styles, Role::ScrollerSelected, 0x1, 0x7); // blue on lightgray (0x71)
 
-        // Menu family (rows 50/51). Provisional values modelled on the classic
-        // menu look: a lightgray-on-black bar (`cpMenuView` resolves through
-        // `cpMenuBar`/`cpMenuView` into the app gray scheme), a green highlight
-        // for the selected item, a red shortcut accent, and darkgray for greyed
-        // items. Not authoritative — they realign with the deferred gray theming.
-        // TODO(row 34 gray theming): realign provisional menu colours.
-        set(&mut styles, Role::MenuNormal, 0x0, 0x7); // idx 1: black on lightgray
-        set(&mut styles, Role::MenuNormalShortcut, 0x4, 0x7); // idx 3: red on lightgray
-        set(&mut styles, Role::MenuSelected, 0xF, 0x2); // idx 4: white on green
-        set(&mut styles, Role::MenuSelectedShortcut, 0xE, 0x2); // idx 6: yellow on green
-        set(&mut styles, Role::MenuDisabled, 0x8, 0x7); // idx 2: darkgray on lightgray
-        set(&mut styles, Role::MenuSelectedDisabled, 0x8, 0x2); // idx 5: darkgray on green
+        // Menu family (rows 50/51). Faithful palette chain: a TMenuBar/TMenuBox
+        // is owned directly by TProgram, so `cpMenuView` resolves in ONE hop
+        // into `cpAppColor` (app.h) — no window/dialog remap.
+        set(&mut styles, Role::MenuNormal, 0x0, 0x7); // black on lightgray (chain: cpMenuView[1]=0x02 → cpAppColor[2]=0x70)
+        set(&mut styles, Role::MenuNormalShortcut, 0x4, 0x7); // red on lightgray (chain: cpMenuView[3]=0x04 → cpAppColor[4]=0x74)
+        set(&mut styles, Role::MenuSelected, 0x0, 0x2); // black on green (chain: cpMenuView[4]=0x05 → cpAppColor[5]=0x20)
+        set(&mut styles, Role::MenuSelectedShortcut, 0x4, 0x2); // red on green (chain: cpMenuView[6]=0x07 → cpAppColor[7]=0x24)
+        set(&mut styles, Role::MenuDisabled, 0x8, 0x7); // darkgray on lightgray (chain: cpMenuView[2]=0x03 → cpAppColor[3]=0x78)
+        set(&mut styles, Role::MenuSelectedDisabled, 0x8, 0x2); // darkgray on green (chain: cpMenuView[5]=0x06 → cpAppColor[6]=0x28)
 
-        // Status-line family (rows 47/53). Provisional values decoded from the
-        // classic `cpStatusLine` bytes (resolved through `cpAppColor`), each
-        // attr byte being `bg<<4 | fg`: idx1 `0x70` (black on lightgray),
-        // idx2 `0x78` (darkgray on lightgray), idx3 `0x74` (red on lightgray),
-        // idx4 `0x20` (black on green), idx5 `0x28` (darkgray on green), idx6
-        // `0x24` (red on green). Not authoritative — they realign with the
-        // deferred gray theming. TODO(row 34 gray theming): realign provisional
-        // status-line colours.
-        set(&mut styles, Role::StatusNormal, 0x0, 0x7); // 0x70: black on lightgray
-        set(&mut styles, Role::StatusShortcut, 0x4, 0x7); // 0x74: red on lightgray
-        set(&mut styles, Role::StatusSelect, 0x0, 0x2); // 0x20: black on green
-        set(&mut styles, Role::StatusShortcutSelect, 0x4, 0x2); // 0x24: red on green
-        set(&mut styles, Role::StatusDisabled, 0x8, 0x7); // 0x78: darkgray on lightgray
-        set(&mut styles, Role::StatusSelDisabled, 0x8, 0x2); // 0x28: darkgray on green
+        // Status-line family (rows 47/53). Faithful palette chain: a TStatusLine
+        // is owned directly by TProgram, so `cpStatusLine` resolves in ONE hop
+        // into `cpAppColor` (app.h) — identical bytes to the menu family.
+        set(&mut styles, Role::StatusNormal, 0x0, 0x7); // black on lightgray (chain: cpStatusLine[1]=0x02 → cpAppColor[2]=0x70)
+        set(&mut styles, Role::StatusShortcut, 0x4, 0x7); // red on lightgray (chain: cpStatusLine[3]=0x04 → cpAppColor[4]=0x74)
+        set(&mut styles, Role::StatusSelect, 0x0, 0x2); // black on green (chain: cpStatusLine[4]=0x05 → cpAppColor[5]=0x20)
+        set(&mut styles, Role::StatusShortcutSelect, 0x4, 0x2); // red on green (chain: cpStatusLine[6]=0x07 → cpAppColor[7]=0x24)
+        set(&mut styles, Role::StatusDisabled, 0x8, 0x7); // darkgray on lightgray (chain: cpStatusLine[2]=0x03 → cpAppColor[3]=0x78)
+        set(&mut styles, Role::StatusSelDisabled, 0x8, 0x2); // darkgray on green (chain: cpStatusLine[5]=0x06 → cpAppColor[6]=0x28)
 
         // File-info pane (row 78). Faithful palette chain `cpInfoPane "\x1E"`
         // idx 1 → `cpGrayDialog[0x1E]` = `0x3D` → `cpAppColor[0x3D]` = `0x13` =
         // BIOS attr `(bg<<4)|fg` with fg=cyan(3), bg=blue(1).
         set(&mut styles, Role::InfoPane, 0x3, 0x1); // cyan on blue (0x13)
 
-        // Outline viewer (row 89). Provisional values modelled on the list-box
-        // look (the C++ `cpOutlineViewer` resolves through the dialog/app gray
-        // scheme); they realign with the deferred gray theming.
-        set(&mut styles, Role::OutlineNormal, 0x7, 0x1); // lightgray on blue
-        set(&mut styles, Role::OutlineFocused, 0xF, 0x1); // white on blue
-        set(&mut styles, Role::OutlineSelected, 0x0, 0x3); // black on cyan
-        set(&mut styles, Role::OutlineNotExpanded, 0x8, 0x1); // darkgray on blue
+        // Outline viewer (row 89). Faithful palette chain for a TOutlineViewer
+        // inside a (blue) TWindow — the realistic owner (the C++ outline demo
+        // hosts a TOutline in a plain TWindow; same owner pick as the
+        // ScrollerNormal precedent above): `cpOutlineViewer "\x6\x7\x3\x8"` →
+        // cpBlueWindow (views.h) → cpAppColor.
+        set(&mut styles, Role::OutlineNormal, 0xE, 0x1); // yellow on blue (chain: cpOutlineViewer[1]=0x06 → cpBlueWindow[6]=0x0D → cpAppColor[13]=0x1E)
+        set(&mut styles, Role::OutlineFocused, 0x1, 0x7); // blue on lightgray (chain: cpOutlineViewer[2]=0x07 → cpBlueWindow[7]=0x0E → cpAppColor[14]=0x71)
+        set(&mut styles, Role::OutlineSelected, 0xA, 0x1); // lightgreen on blue (chain: cpOutlineViewer[3]=0x03 → cpBlueWindow[3]=0x0A → cpAppColor[10]=0x1A)
+        set(&mut styles, Role::OutlineNotExpanded, 0xF, 0x1); // white on blue (chain: cpOutlineViewer[4]=0x08 → cpBlueWindow[8]=0x0F → cpAppColor[15]=0x1F)
 
         // Window/menu drop shadow — exactly C++ `shadowAttr = 0x08` (tview.cpp:36).
         set(&mut styles, Role::Shadow, 0x8, 0x0); // darkgray on black
@@ -769,6 +817,14 @@ mod tests {
         Role::FrameGrayPassive,
         Role::FrameGrayDragging,
         Role::FrameGrayIcon,
+        Role::FrameCyanActive,
+        Role::FrameCyanPassive,
+        Role::FrameCyanDragging,
+        Role::FrameCyanIcon,
+        Role::HistoryArrow,
+        Role::HistorySides,
+        Role::HistoryViewerNormal,
+        Role::HistoryViewerFocused,
     ];
 
     #[test]
@@ -809,7 +865,7 @@ mod tests {
         );
         assert_eq!(
             t.style(Role::ListSelected),
-            Style::new(Color::Bios(0x0), Color::Bios(0x3))
+            Style::new(Color::Bios(0xE), Color::Bios(0x3))
         );
         assert_eq!(
             t.style(Role::Error),

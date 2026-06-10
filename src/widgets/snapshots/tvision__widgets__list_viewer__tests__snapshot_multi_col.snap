@@ -9,10 +9,11 @@ text:
 | item1  │ item4 |
 | item2  │ item5 |
 attr:
-|aaaaaaaabbbbbbbb|
-|bbbbbbbbbbbbbbbb|
-|bbbbbbbbbbbbbbbb|
+|aaaaaaaabccccccc|
+|ccccccccbccccccc|
+|ccccccccbccccccc|
 legend:
   . default
-  a fg=BIOS(15) bg=BIOS(1)
-  b fg=BIOS(7) bg=BIOS(1)
+  a fg=BIOS(15) bg=BIOS(2)
+  b fg=BIOS(1) bg=BIOS(3)
+  c fg=BIOS(0) bg=BIOS(3)

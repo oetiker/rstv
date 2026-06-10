@@ -123,8 +123,8 @@ pub use view::{
     StateFlag, View, ViewId, ViewState,
 };
 pub use widgets::{
-    EditWindow, Editor, FileEditor, InputLine, ListBox, ListViewer, ListViewerState, ScrollBar,
-    Scroller,
+    EditWindow, Editor, FileEditor, InputLine, ListBox, ListRoles, ListViewer, ListViewerState,
+    ScrollBar, Scroller,
 };
 pub use widgets::{
     HistoryViewer, HistoryWindow, THistory, clear_history, history_add, history_count, history_str,

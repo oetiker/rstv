@@ -30,18 +30,18 @@ attr:
 |...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 |...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 |...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-|...............aaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbcbaaddeddddddaaaa|
+|...............aaabbbbbbbbbbbbbbbbbbbbbbbbbbbbcdcaaddeddddddaaaa|
 |...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 |...............aaafaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
-|...............aaaggggggggggggggghhhhhhhhhhhhhhhhaadddddddddaaaa|
+|...............aaaggggggggggggggghiiiiiiiiiiiiiiiaadddddddddaaaa|
+|...............aaaiiiiiiiiiiiiiiihiiiiiiiiiiiiiiiaaaaaaaaaaaaaaa|
+|...............aaaiiiiiiiiiiiiiiihiiiiiiiiiiiiiiiaaaaaaaaaaaaaaa|
+|...............aaaiiiiiiiiiiiiiiihiiiiiiiiiiiiiiiaaaaaaaaaaaaaaa|
+|...............aaaiiiiiiiiiiiiiiihiiiiiiiiiiiiiiiaaaaaaaaaaaaaaa|
+|...............aaaiiiiiiiiiiiiiiihiiiiiiiiiiiiiiiaaaaaaaaaaaaaaa|
+|...............aaaiiiiiiiiiiiiiiihiiiiiiiiiiiiiiiaaaaaaaaaaaaaaa|
+|...............aaaiiiiiiiiiiiiiiihiiiiiiiiiiiiiiiaaaaaaaaaaaaaaa|
 |...............aaahhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhaaaaaaaaaaaaaaa|
-|...............aaahhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhaaaaaaaaaaaaaaa|
-|...............aaahhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhaaaaaaaaaaaaaaa|
-|...............aaahhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhaaaaaaaaaaaaaaa|
-|...............aaahhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhaaaaaaaaaaaaaaa|
-|...............aaahhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhaaaaaaaaaaaaaaa|
-|...............aaahhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhaaaaaaaaaaaaaaa|
-|...............aaaiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiaaaaaaaaaaaaaaa|
 |...............aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 |...............ajjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjja|
 |...............ajjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjja|
@@ -49,12 +49,12 @@ attr:
 legend:
   . default
   a fg=BIOS(0) bg=BIOS(7)
-  b fg=BIOS(0) bg=BIOS(3)
-  c fg=BIOS(14) bg=BIOS(3)
+  b fg=BIOS(15) bg=BIOS(1)
+  c fg=BIOS(2) bg=BIOS(7)
   d fg=BIOS(0) bg=BIOS(2)
   e fg=BIOS(14) bg=BIOS(2)
-  f fg=BIOS(4) bg=BIOS(7)
-  g fg=BIOS(15) bg=BIOS(1)
-  h fg=BIOS(7) bg=BIOS(1)
-  i fg=BIOS(1) bg=BIOS(3)
+  f fg=BIOS(14) bg=BIOS(7)
+  g fg=BIOS(15) bg=BIOS(2)
+  h fg=BIOS(1) bg=BIOS(3)
+  i fg=BIOS(0) bg=BIOS(3)
   j fg=BIOS(3) bg=BIOS(1)

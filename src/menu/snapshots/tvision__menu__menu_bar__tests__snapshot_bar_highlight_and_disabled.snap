@@ -12,6 +12,6 @@ legend:
   . default
   a fg=BIOS(0) bg=BIOS(7)
   b fg=BIOS(4) bg=BIOS(7)
-  c fg=BIOS(15) bg=BIOS(2)
-  d fg=BIOS(14) bg=BIOS(2)
+  c fg=BIOS(0) bg=BIOS(2)
+  d fg=BIOS(4) bg=BIOS(2)
   e fg=BIOS(8) bg=BIOS(7)

@@ -41,16 +41,14 @@ pub struct WindowFlags {
 /// Under D7 there is no `getPalette` returning a `TPalette*`; the scheme is
 /// recorded here and pushed down to the [`Frame`] child (D3), which selects the
 /// matching role family: `Blue` → `Role::FrameActive` / `FramePassive` /
-/// `FrameDragging` / `FrameIcon`; `Gray` (dialogs, row 34 gray theming) →
-/// `Role::FrameGray*`. `Cyan` still falls back to the blue family
-/// (`TODO(row 34 cyan theming)`).
+/// `FrameDragging` / `FrameIcon`; `Cyan` → `Role::FrameCyan*`; `Gray`
+/// (dialogs, row 34 gray theming) → `Role::FrameGray*`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum WindowPalette {
     /// `wpBlueWindow` — the default window scheme (the ctor default).
     #[default]
     Blue,
-    /// `wpCyanWindow` — the cyan scheme (faithful theming →
-    /// `TODO(row 34 cyan theming)`; renders the blue family for now).
+    /// `wpCyanWindow` — the cyan scheme (`Role::FrameCyan*`).
     Cyan,
     /// `wpGrayWindow` — the gray scheme used by dialogs (`Role::FrameGray*`).
     Gray,
@@ -251,9 +249,8 @@ impl Window {
     /// Override the colour scheme after construction (`TDialog::TDialog` sets
     /// `palette = dpGrayDialog`). Re-pushes to the frame child (D3
     /// owner-data-down, the [`set_flags`](Self::set_flags) pattern) so the frame
-    /// renders the matching role family: `Gray` → `Role::FrameGray*` (row 34
-    /// gray theming, wired); `Cyan` still falls back to the blue family
-    /// (`TODO(row 34 cyan theming)`).
+    /// renders the matching role family: `Blue` → `Role::Frame*`, `Cyan` →
+    /// `Role::FrameCyan*`, `Gray` → `Role::FrameGray*` (row 34 theming).
     pub(crate) fn set_palette(&mut self, palette: WindowPalette) {
         self.palette = palette;
         if let Some(frame) = self

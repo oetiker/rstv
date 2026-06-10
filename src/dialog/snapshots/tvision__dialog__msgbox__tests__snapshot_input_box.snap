@@ -25,6 +25,6 @@ attr:
 legend:
   . default
   a fg=BIOS(0) bg=BIOS(7)
-  b fg=BIOS(0) bg=BIOS(3)
+  b fg=BIOS(15) bg=BIOS(1)
   c fg=BIOS(0) bg=BIOS(2)
   d fg=BIOS(14) bg=BIOS(2)

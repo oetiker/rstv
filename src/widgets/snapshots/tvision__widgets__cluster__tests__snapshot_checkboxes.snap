@@ -14,6 +14,6 @@ attr:
 |aaaaaaaaaaaaaa|
 legend:
   . default
-  a fg=BIOS(0) bg=BIOS(7)
-  b fg=BIOS(4) bg=BIOS(7)
-  c fg=BIOS(15) bg=BIOS(2)
+  a fg=BIOS(0) bg=BIOS(3)
+  b fg=BIOS(14) bg=BIOS(3)
+  c fg=BIOS(15) bg=BIOS(3)

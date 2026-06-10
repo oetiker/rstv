@@ -12,13 +12,14 @@ text:
 | tests/        │              |
 | ../           │              |
 attr:
-|aaaaaaaaaaaaaaabbbbbbbbbbbbbbb|
-|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
-|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
-|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
-|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
-|bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb|
+|aaaaaaaaaaaaaaabcccccccccccccc|
+|cccccccccccccccbcccccccccccccc|
+|cccccccccccccccbcccccccccccccc|
+|cccccccccccccccbcccccccccccccc|
+|cccccccccccccccbcccccccccccccc|
+|cccccccccccccccbcccccccccccccc|
 legend:
   . default
-  a fg=BIOS(15) bg=BIOS(1)
-  b fg=BIOS(7) bg=BIOS(1)
+  a fg=BIOS(15) bg=BIOS(2)
+  b fg=BIOS(1) bg=BIOS(3)
+  c fg=BIOS(0) bg=BIOS(3)

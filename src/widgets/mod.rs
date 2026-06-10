@@ -32,7 +32,7 @@ pub use history::{
 pub use indicator::Indicator;
 pub use input_line::{InputLine, LimitMode};
 pub use list_box::{ListBox, SortedListBox};
-pub use list_viewer::{ListViewer, ListViewerState};
+pub use list_viewer::{ListRoles, ListViewer, ListViewerState};
 pub use outline::{Node, Outline, OutlineViewer, OutlineViewerState, ov_update};
 pub use scrollbar::ScrollBar;
 pub use scroller::Scroller;

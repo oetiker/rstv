@@ -52,7 +52,8 @@
 //! - **D12/D2:** `shutDown`/`write`/`read`/`build`/`streamableName`/`name` dropped.
 //! - **getPalette → Theme roles** (D7): `cpListViewer` → [`Role::ListNormalActive`]
 //!   / [`Role::ListNormalInactive`] / [`Role::ListFocused`] / [`Role::ListSelected`]
-//!   / [`Role::ListDivider`].
+//!   / [`Role::ListDivider`]; a subclass's `getPalette` override surfaces as a
+//!   different [`ListRoles`] quintet from [`ListViewer::list_roles`].
 //! - **mouse press-and-hold / auto-scroll loop** → `TODO(row 31, D9)` (single-shot
 //!   positioning only, like the scrollbar/cluster/input-line).
 //! - **`change_bounds` step republish** → `TODO(resize)` (no consumer yet). NOTE:
@@ -139,6 +140,42 @@ impl ListViewerState {
 }
 
 // ---------------------------------------------------------------------------
+// ListRoles — the per-class getPalette remap under D7
+// ---------------------------------------------------------------------------
+
+/// The role quintet [`draw`] resolves its color matrix through — the D7
+/// successor of a list subclass's `getPalette` override: in the C++ each
+/// `getColor(1..5)` resolves through the CLASS's own palette string, so a
+/// subclass recolors itself by overriding `getPalette` (e.g. `THistoryViewer`
+/// returns `cpHistoryViewer` instead of `cpListViewer`). Under the flat theme
+/// table that remap surfaces as a different role quintet returned from
+/// [`ListViewer::list_roles`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ListRoles {
+    /// `getColor(1)` — a normal item of an active list (also the `<empty>` fill).
+    pub normal_active: Role,
+    /// `getColor(2)` — a normal item of an inactive list.
+    pub normal_inactive: Role,
+    /// `getColor(3)` — the focused (cursor) item of an active list.
+    pub focused: Role,
+    /// `getColor(4)` — a selected item.
+    pub selected: Role,
+    /// `getColor(5)` — the inter-column divider.
+    pub divider: Role,
+}
+
+impl ListRoles {
+    /// The base `cpListViewer` family — `TListViewer::getPalette`.
+    pub const LIST_VIEWER: ListRoles = ListRoles {
+        normal_active: Role::ListNormalActive,
+        normal_inactive: Role::ListNormalInactive,
+        focused: Role::ListFocused,
+        selected: Role::ListSelected,
+        divider: Role::ListDivider,
+    };
+}
+
+// ---------------------------------------------------------------------------
 // ListViewer — the overridable virtuals (a trait, D-A)
 // ---------------------------------------------------------------------------
 
@@ -169,6 +206,13 @@ pub trait ListViewer: View {
     /// `*dest = EOS`); `TListBox` & friends override.
     fn get_text(&self, _item: i32) -> String {
         String::new()
+    }
+
+    /// The role quintet [`draw`] colors items with — the D7 successor of the
+    /// `getPalette` virtual. Base: the `cpListViewer` family;
+    /// `HistoryViewer` overrides with its `cpHistoryViewer` remap.
+    fn list_roles(&self) -> ListRoles {
+        ListRoles::LIST_VIEWER
     }
 
     /// `TListViewer::isSelected` — whether `item` is "selected" (drawn in the
@@ -497,22 +541,24 @@ pub fn draw<L: ListViewer + ?Sized>(this: &L, ctx: &mut DrawCtx) {
     let st = &lv.state.state;
     let active = st.selected && st.active;
 
-    // Color matrix (cpListViewer idx 1..5 via Theme roles, D7).
+    // Color matrix (getColor(1..5) via the class's role quintet, D7 — the
+    // per-class getPalette remap surfaces through `list_roles`).
+    let roles = this.list_roles();
     let (normal, selected, focused_color) = if active {
         (
-            ctx.style(Role::ListNormalActive),  // getColor(1)
-            ctx.style(Role::ListSelected),      // getColor(4)
-            Some(ctx.style(Role::ListFocused)), // getColor(3)
+            ctx.style(roles.normal_active), // getColor(1)
+            ctx.style(roles.selected),      // getColor(4)
+            Some(ctx.style(roles.focused)), // getColor(3)
         )
     } else {
         (
-            ctx.style(Role::ListNormalInactive), // getColor(2)
-            ctx.style(Role::ListSelected),       // getColor(4)
-            None,                                // focusedColor unused
+            ctx.style(roles.normal_inactive), // getColor(2)
+            ctx.style(roles.selected),        // getColor(4)
+            None,                             // focusedColor unused
         )
     };
-    let divider_color = ctx.style(Role::ListDivider); // getColor(5)
-    let empty_color = ctx.style(Role::ListNormalActive); // getColor(1)
+    let divider_color = ctx.style(roles.divider); // getColor(5)
+    let empty_color = ctx.style(roles.normal_active); // getColor(1)
 
     let size = lv.state.size;
     let indent = lv.indent; // the CACHE (not a live h-bar read).

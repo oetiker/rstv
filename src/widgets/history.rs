@@ -172,19 +172,44 @@ pub fn clear_history() {
 /// `THistoryViewer::THistoryViewer` runs `setRange`/`focusItem`/hbar-range
 /// inline in the C++ ctor where `Context` is always available.
 ///
-/// # Palette / theme (provisional)
+/// # Palette / theme
 ///
-/// C++ `getPalette` returns `cpHistoryViewer "\x06\x06\x07\x06\x06"`, a
-/// dialog-context recolor. rstv dropped palettes; `list_viewer::draw` uses
-/// provisional `Role::List*` colors.
-/// `TODO(row 34): cpHistoryViewer remap` — realign colors once row 34 gray
-/// theming lands (same pattern as the menu/status breadcrumbs).
+/// C++ `getPalette` returns `cpHistoryViewer "\x06\x06\x07\x06\x06"` — the
+/// per-class recolor that turns the gray-dialog list matrix into the blue
+/// input-field look. Surfaced under D7 through the
+/// [`ListViewer::list_roles`] override: `Role::HistoryViewerNormal` (indices
+/// 1/2/4/5, chain `0x06 → cpHistoryWindow[6]=0x13 → cpGrayDialog[19]=0x32 →
+/// cpAppColor[50]=0x1F`, white on blue) and `Role::HistoryViewerFocused`
+/// (index 3, chain `0x07 → cpHistoryWindow[7]=0x14 → cpGrayDialog[20]=0x33 →
+/// cpAppColor[51]=0x2F`, white on green).
 pub struct HistoryViewer {
     lv: ListViewerState,
     history_id: u8,
 }
 
 impl HistoryViewer {
+    /// `THistoryViewer::getPalette` → `cpHistoryViewer "\x06\x06\x07\x06\x06"`
+    /// as a [`ListRoles`](crate::widgets::ListRoles) quintet (D7). Indices
+    /// 1/2/4/5 all map to window entry 6 → one normal role
+    /// ([`Role::HistoryViewerNormal`](crate::theme::Role::HistoryViewerNormal),
+    /// chain: `0x06 → cpHistoryWindow[6]=0x13 → cpGrayDialog[19]=0x32 →
+    /// cpAppColor[50]=0x1F`); index 3 is the focused row
+    /// ([`Role::HistoryViewerFocused`](crate::theme::Role::HistoryViewerFocused),
+    /// chain: `0x07 → cpHistoryWindow[7]=0x14 → cpGrayDialog[20]=0x33 →
+    /// cpAppColor[51]=0x2F`).
+    ///
+    /// Lives here (not on `ListRoles` next to `LIST_VIEWER`) because the
+    /// quintet is this class's `getPalette` knowledge — the C++ defines
+    /// `cpHistoryViewer` in `thstview.cpp`, not `tlstview.cpp` — and keeping it
+    /// here spares `list_viewer.rs` any reference to the history roles.
+    pub const LIST_ROLES: crate::widgets::ListRoles = crate::widgets::ListRoles {
+        normal_active: crate::theme::Role::HistoryViewerNormal,
+        normal_inactive: crate::theme::Role::HistoryViewerNormal,
+        focused: crate::theme::Role::HistoryViewerFocused,
+        selected: crate::theme::Role::HistoryViewerNormal,
+        divider: crate::theme::Role::HistoryViewerNormal,
+    };
+
     /// Construct a `HistoryViewer` — ports the data-init portion of
     /// `THistoryViewer::THistoryViewer`.
     ///
@@ -257,6 +282,12 @@ impl ListViewer for HistoryViewer {
             return String::new();
         }
         history_str(self.history_id, item as usize).unwrap_or_default()
+    }
+
+    /// `THistoryViewer::getPalette` → the `cpHistoryViewer` quintet
+    /// ([`HistoryViewer::LIST_ROLES`]); chains documented on the constant.
+    fn list_roles(&self) -> crate::widgets::ListRoles {
+        Self::LIST_ROLES
     }
     // is_selected / select_item: inherit the base (item == focused /
     // broadcast cmListItemSelected). THistoryViewer does NOT override these.
@@ -358,9 +389,21 @@ impl HistoryViewer {
 ///   `initViewer` is inlined.
 /// * `createListViewer` hook (streamability, D12) — inlined with no substitution
 ///   path.
-/// * `getPalette` returns `cpHistoryWindow "\x13\x13\x15\x18\x17\x13\x14"`.
-///   We have no live palette mapping; the window uses the default `Window`/`Frame`
-///   rendering.  `TODO(row 34): cpHistoryWindow palette remap`.
+/// * `getPalette` returns `cpHistoryWindow "\x13\x13\x15\x18\x17\x13\x14"` —
+///   resolved through the gray dialog that opened the popup, the C++ chain
+///   yields: frame passive/active `0x13 → cpGrayDialog[19]=0x32 →
+///   cpAppColor[50]=0x1F`, icon `0x15 → cpGrayDialog[21]=0x34 →
+///   cpAppColor[52]=0x1A`, sb page `0x18 → cpGrayDialog[24]=0x37 →
+///   cpAppColor[55]=0x31`, sb controls `0x17 → cpGrayDialog[23]=0x36 →
+///   cpAppColor[54]=0x72`, scroller `0x13`/`0x14`. The window keeps the
+///   default BLUE `Window`/`Frame` role family, which matches the chain on
+///   every cell the popup actually shows: frame active `0x1F` ✓, icon `0x1A` ✓,
+///   sb page `0x31` ✓. Documented deviations: frame *passive* renders `0x17`
+///   (the chain says `0x1F`, unobservable — the popup is the modal top and is
+///   always active) and sb *controls* render `0x31` (the literal chain byte
+///   `0x72` is the original-TV quirk of pointing the controls slot at the
+///   dialog's HistorySides entry). The viewer's item colors DO remap — see
+///   [`HistoryViewer`]'s `list_roles`.
 /// * `evMouseDown && !mouseInView → endModal(cmCancel)` — ported in
 ///   `handle_event` (C): outside-bounds clicks are delivered by the pump's
 ///   `ModalFrame` redirect; `!extent.contains(position)` → `end_modal(CANCEL)`.
@@ -545,10 +588,12 @@ impl View for HistoryWindow {
 ///   deferred-focus TODOs).
 /// * **`shutDown` (`link = 0`)** is moot — the link is a [`ViewId`], not an owning
 ///   pointer, so there is nothing to null out (D3).
-/// * **palette** — C++ `getPalette` returns `cpHistory "\x16\x17"`, a
-///   dialog-context recolor; rstv dropped palettes, so the icon reuses the
-///   provisional `Role::Input*` colors (it sits next to an input line).
-///   `TODO(row 34): cpHistory palette remap` — same pattern as rows 55/56.
+/// * **palette** — C++ `getPalette` returns `cpHistory "\x16\x17"`; resolved
+///   for the realistic GRAY-DIALOG owner the chain yields the classic green
+///   dropdown button: arrow `cpHistory[1]=0x16 → cpGrayDialog[22]=0x35 →
+///   cpAppColor[53]=0x20` (black on green, [`Role::HistoryArrow`](crate::theme::Role::HistoryArrow)),
+///   sides `cpHistory[2]=0x17 → cpGrayDialog[23]=0x36 → cpAppColor[54]=0x72`
+///   (green on lightgray, [`Role::HistorySides`](crate::theme::Role::HistorySides)).
 pub struct THistory {
     state: ViewState,
     /// The linked input line's id (`link`).
@@ -590,11 +635,12 @@ impl View for THistory {
     ///
     /// The C++ icon is `"\xDE~\x19~\xDD"`: `▐` (U+2590) + a highlighted `↓`
     /// (U+2193, `\x19`) + `▌` (U+258C), where the `~…~` marks the hi region (the
-    /// arrow). `getColor(0x0102)` → lo = palette[1], hi = palette[2]. We render the
-    /// cstr `"▐~↓~▌"` with lo = `Role::InputNormal`, hi = `Role::InputArrow`.
+    /// arrow). `getColor(0x0102)` → lo = palette[2] (the sides), hi = palette[1]
+    /// (the arrow). We render the cstr `"▐~↓~▌"` with lo = `Role::HistorySides`,
+    /// hi = `Role::HistoryArrow` (the `cpHistory` chain — see the type docs).
     fn draw(&mut self, ctx: &mut DrawCtx) {
-        let lo = ctx.style(crate::theme::Role::InputNormal);
-        let hi = ctx.style(crate::theme::Role::InputArrow);
+        let lo = ctx.style(crate::theme::Role::HistorySides);
+        let hi = ctx.style(crate::theme::Role::HistoryArrow);
         ctx.put_cstr(0, 0, "\u{2590}~\u{2193}~\u{258C}", lo, hi);
     }
 

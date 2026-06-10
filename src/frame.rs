@@ -36,10 +36,10 @@
 //!   [`WindowPalette`](crate::window::WindowPalette) (pushed down via
 //!   [`Frame::set_palette`], D3): `Blue` → [`Role::FrameActive`] /
 //!   [`Role::FramePassive`] / [`Role::FrameDragging`] / [`Role::FrameIcon`];
-//!   `Gray` (dialogs) → the `Role::FrameGray*` family. `Cyan` falls back to the
-//!   blue family for now (`TODO(row 34 cyan theming)`). This mirrors the C++,
+//!   `Cyan` → the `Role::FrameCyan*` family; `Gray` (dialogs) → the
+//!   `Role::FrameGray*` family. This mirrors the C++,
 //!   where `TFrame::draw` resolves its colors through the owner's palette
-//!   (`cpBlueWindow` / `cpGrayDialog` / …). The C++ has distinct title palette
+//!   (`cpBlueWindow` / `cpCyanWindow` / `cpGrayDialog`). The C++ has distinct title palette
 //!   entries (2 passive / 4 active) routed through the same chain; those belong
 //!   to row 33, so the title **reuses the border role** here.
 //! * **D8** — no `writeLine`/`TDrawBuffer`/`drawView`; we draw straight through
@@ -173,9 +173,9 @@ impl Frame {
     }
 
     /// Set the owner's colour scheme (`owner->palette` pushed down, D3 — row 34
-    /// gray theming). `Gray` makes [`draw`](View::draw) use the
-    /// `Role::FrameGray*` family; `Cyan` currently falls back to the blue
-    /// family (`TODO(row 34 cyan theming)`).
+    /// theming). [`draw`](View::draw) selects the matching role family:
+    /// `Blue` → `Role::Frame*`, `Cyan` → `Role::FrameCyan*`,
+    /// `Gray` → `Role::FrameGray*`.
     pub(crate) fn set_palette(&mut self, palette: WindowPalette) {
         self.palette = palette;
     }
@@ -222,14 +222,19 @@ impl View for Frame {
         }
 
         // -- Palette → role family (the C++ resolves through the owner's
-        // palette: cpBlueWindow vs cpGrayDialog). Cyan falls back to the blue
-        // family — TODO(row 34 cyan theming): faithful cpCyanWindow values.
+        // palette: cpBlueWindow vs cpCyanWindow vs cpGrayDialog).
         let (r_dragging, r_passive, r_active, r_icon) = match self.palette {
-            WindowPalette::Blue | WindowPalette::Cyan => (
+            WindowPalette::Blue => (
                 Role::FrameDragging,
                 Role::FramePassive,
                 Role::FrameActive,
                 Role::FrameIcon,
+            ),
+            WindowPalette::Cyan => (
+                Role::FrameCyanDragging,
+                Role::FrameCyanPassive,
+                Role::FrameCyanActive,
+                Role::FrameCyanIcon,
             ),
             WindowPalette::Gray => (
                 Role::FrameGrayDragging,
@@ -683,6 +688,49 @@ mod tests {
         assert_eq!(
             bufd.get(0, 0).style(),
             theme.style(Role::FrameGrayDragging),
+            "dragging border corner"
+        );
+    }
+
+    // -- draw: cyan palette → FrameCyan* role family (row 34 cyan theming) ----
+
+    /// With `palette = Cyan` (`wpCyanWindow`), the border AND interior must
+    /// carry the `FrameCyan*` styles — never the blue `Frame*` family.
+    #[test]
+    fn cyan_palette_draws_border_and_interior_in_cyan_roles() {
+        let theme = Theme::classic_blue();
+
+        // Active cyan frame → FrameCyanActive everywhere (border + interior).
+        let mut f = Frame::new(Rect::new(0, 0, 20, 6));
+        f.st.state.active = true;
+        f.set_palette(WindowPalette::Cyan);
+        let buf = render_frame(&mut f, 20, 6);
+        let expected = theme.style(Role::FrameCyanActive);
+        assert_eq!(buf.get(0, 0).style(), expected, "active border corner");
+        assert_eq!(buf.get(5, 2).style(), expected, "active interior fill");
+        assert_ne!(
+            expected,
+            theme.style(Role::FrameActive),
+            "cyan and blue active styles must differ for the test to be meaningful"
+        );
+
+        // Passive cyan frame → FrameCyanPassive.
+        let mut p = Frame::new(Rect::new(0, 0, 20, 6));
+        p.set_palette(WindowPalette::Cyan);
+        let bufp = render_frame(&mut p, 20, 6);
+        let expected_p = theme.style(Role::FrameCyanPassive);
+        assert_eq!(bufp.get(0, 0).style(), expected_p, "passive border corner");
+        assert_eq!(bufp.get(5, 2).style(), expected_p, "passive interior fill");
+
+        // Dragging cyan frame → FrameCyanDragging.
+        let mut d = Frame::new(Rect::new(0, 0, 20, 6));
+        d.st.state.active = true;
+        d.st.state.dragging = true;
+        d.set_palette(WindowPalette::Cyan);
+        let bufd = render_frame(&mut d, 20, 6);
+        assert_eq!(
+            bufd.get(0, 0).style(),
+            theme.style(Role::FrameCyanDragging),
             "dragging border corner"
         );
     }
