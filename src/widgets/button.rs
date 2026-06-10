@@ -84,10 +84,13 @@
 //!
 //! 1. **Command-enabled graying.** The ctor's `if(!commandEnabled) state |=
 //!    sfDisabled` and the `cmCommandSetChanged → setState(sfDisabled,…)` handler
-//!    are not implemented: [`Context`] carries no command-set query. The button
-//!    starts enabled; functional correctness is preserved because the program
-//!    filters disabled `Event::Command` at its boundary. One cosmetic gap: a
-//!    notionally-disabled default button could still flash on `cmDefault`.
+//!    are not implemented. The blocking API gap is closed —
+//!    [`Context::command_enabled`](crate::view::Context::command_enabled) exists
+//!    (added with the A1 denylist flip) — but the graying itself is deferred as
+//!    **backlog row B1** (`docs/BACKLOG.md`). The button starts enabled;
+//!    functional correctness is preserved because the program filters disabled
+//!    `Event::Command` at its boundary. One cosmetic gap: a notionally-disabled
+//!    default button could still flash on `cmDefault`.
 //! 2. **Plain-letter (postProcess) accelerator.** Only Alt+hotkey + focused-Space
 //!    are honored; the C++ `phPostProcess` plain-letter branch needs a phase
 //!    signal on [`Context`] that does not exist (and shipping it ungated would
@@ -182,8 +185,8 @@ impl Button {
     ///
     /// The `eventMask |= evBroadcast` is a no-op under our group (broadcasts reach
     /// every child regardless of `event_mask`); see the module docs. The
-    /// `if(!commandEnabled) state |= sfDisabled` is deferred (no command-set query
-    /// on `Context`) — see deferral 1.
+    /// `if(!commandEnabled) state |= sfDisabled` is deferred as backlog row B1
+    /// (`Context::command_enabled` now exists for it) — see deferral 1.
     pub fn new(bounds: Rect, title: &str, command: Command, flags: ButtonFlags) -> Self {
         let mut state = ViewState::new(bounds);
         state.options = Options {
@@ -193,7 +196,8 @@ impl Button {
             post_process: true,
             ..Default::default()
         };
-        // TODO(button: command-enabled graying — needs a Context command-set query)
+        // TODO(B1 command graying): ctx.command_enabled is available (A1 denylist
+        // flip); port the C++ `if(!commandEnabled) state |= sfDisabled` here.
         Button {
             state,
             title: title.to_string(),

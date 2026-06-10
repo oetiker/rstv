@@ -62,7 +62,7 @@ struct HelloApp {
 impl HelloApp {
     /// `HelloApp::HelloApp` → `TProgInit(initStatusLine, initMenuBar, initDeskTop)`.
     fn new(backend: Box<dyn Backend>) -> Self {
-        let mut program = Program::new(
+        let program = Program::new(
             backend,
             Box::new(SystemClock::new()),
             Theme::classic_blue(),
@@ -70,9 +70,10 @@ impl HelloApp {
             Self::init_status_line,
             Self::init_menu_bar,
         );
-        program.enable_command(CMD_COLOR_PICKER);
-        program.enable_command(CMD_NEW);
-        program.enable_command(CMD_OPEN);
+        // No enable_command registration is needed for the app-minted commands
+        // (CMD_COLOR_PICKER / CMD_NEW / CMD_OPEN): every command is enabled by
+        // default (D1 denylist) — only the five window-management commands start
+        // disabled, until a window grants them on selection.
         HelloApp { program }
     }
 

@@ -245,16 +245,22 @@ impl Command {
     pub const OUTLINE_ITEM_SELECTED: Command = Command("tv.outline_item_selected");
 }
 
-/// A set of enabled commands. Faithful to `TCommandSet` (`views.h`,
-/// `tcmdset.cpp`); per D1 the `uchar cmds[32]` bit array (256 bits) is replaced
-/// by a [`HashSet<Command>`].
+/// A set of commands. Faithful to `TCommandSet` (`views.h`, `tcmdset.cpp`);
+/// per D1 the `uchar cmds[32]` bit array (256 bits) is replaced by a
+/// [`HashSet<Command>`].
 ///
 /// The command space is now **open/unbounded** (commands are namespaced
 /// strings, not `0..=255`), so TV's bit-array machinery is gone: there is no
 /// trackable-range guard, and there is no `all()` constructor — "all commands"
-/// is not enumerable. The framework's enabled-by-default policy (TV's
-/// `TView::initCommands` loop and `commandEnabled`) lives in the later
-/// `TView`/`TProgram` row, not here.
+/// is not enumerable. The set itself is polarity-neutral; the framework's
+/// **enabled-by-default policy** (TV's `TView::initCommands` loop and
+/// `commandEnabled`) lives in `Program`, which keeps `curCommandSet` as its
+/// complement — a **disabled set** (denylist; see
+/// `docs/design/command-enablement.md`). The `enable_cmd`/`disable_cmd` method
+/// names port the C++ API and mean insert/remove regardless of which polarity a
+/// particular owner stores; the polarity-neutral [`insert`](Self::insert) /
+/// [`remove`](Self::remove) aliases are preferred at sites where the set's
+/// meaning is not "enabled commands" (e.g. the disabled set).
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct CommandSet {
     cmds: HashSet<Command>,
@@ -284,6 +290,20 @@ impl CommandSet {
     /// Disable a single command. Ports `TCommandSet::disableCmd(int)`.
     pub fn disable_cmd(&mut self, cmd: Command) {
         self.cmds.remove(&cmd);
+    }
+
+    /// Rust-collection-convention alias for [`enable_cmd`](Self::enable_cmd) —
+    /// set membership, polarity-neutral; prefer it when the set's MEANING is
+    /// not "enabled commands" (e.g. a disabled set).
+    pub fn insert(&mut self, cmd: Command) {
+        self.enable_cmd(cmd);
+    }
+
+    /// Rust-collection-convention alias for [`disable_cmd`](Self::disable_cmd) —
+    /// set membership, polarity-neutral; prefer it when the set's MEANING is
+    /// not "enabled commands" (e.g. a disabled set).
+    pub fn remove(&mut self, cmd: Command) {
+        self.disable_cmd(cmd);
     }
 
     /// Enable every command in `other` (set union). Ports
@@ -404,6 +424,32 @@ mod tests {
         assert!(cs.contains(Command::OK));
         cs.disable_cmd(Command::OK);
         assert!(!cs.has(Command::OK));
+    }
+
+    #[test]
+    fn insert_remove_alias_enable_disable_cmd() {
+        // The polarity-neutral aliases are behaviorally identical to the
+        // faithful port names (insert == enable_cmd, remove == disable_cmd).
+        let mut via_alias = CommandSet::new();
+        let mut via_port = CommandSet::new();
+
+        via_alias.insert(Command::OK);
+        via_port.enable_cmd(Command::OK);
+        via_alias.insert(Command::ZOOM);
+        via_port.enable_cmd(Command::ZOOM);
+        assert_eq!(via_alias, via_port);
+        assert!(via_alias.has(Command::OK) && via_alias.has(Command::ZOOM));
+
+        via_alias.remove(Command::OK);
+        via_port.disable_cmd(Command::OK);
+        assert_eq!(via_alias, via_port);
+        assert!(!via_alias.has(Command::OK));
+        assert!(via_alias.has(Command::ZOOM));
+
+        // Idempotent like the underlying HashSet ops.
+        via_alias.remove(Command::OK);
+        via_port.disable_cmd(Command::OK);
+        assert_eq!(via_alias, via_port);
     }
 
     #[test]

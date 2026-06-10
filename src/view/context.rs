@@ -16,7 +16,7 @@
 
 use crate::capture::CaptureHandler;
 use crate::color::{Color, Style};
-use crate::command::Command;
+use crate::command::{Command, CommandSet};
 use crate::event::Event;
 use crate::screen::Buffer;
 use crate::theme::{Glyphs, Role, Theme};
@@ -195,10 +195,14 @@ pub enum Deferred {
     /// A broker — **not** a `&CommandSet` read-accessor on [`Context`] — because
     /// the command set lives on `Program` and the apply-phase `Context` is alive
     /// across a loop whose `EnableCommand`/`DisableCommand` arms mutate
-    /// `command_set` (`&mut`); a `&CommandSet` on `Context` would alias that
-    /// borrow. The view (a child, D3) cannot read the command set inline, so it
-    /// requests this by its own id and the pump calls back at apply time, exactly
-    /// like [`SyncListViewer`](Self::SyncListViewer) + `apply_list_scroll`.
+    /// `disabled_commands` (`&mut`); a `&CommandSet` on `Context` would alias
+    /// that borrow. The view (a child, D3) cannot read the command set inline, so
+    /// it requests this by its own id and the pump calls back at apply time,
+    /// exactly like [`SyncListViewer`](Self::SyncListViewer) + `apply_list_scroll`.
+    /// (For a plain *read* a view does NOT need this broker:
+    /// [`Context::command_enabled`] answers from an owned per-pump **snapshot**
+    /// of the disabled set — a clone, not a borrow, so the aliasing problem never
+    /// arises. The broker remains the write-back path for regraying caches.)
     ///
     /// Touches the **view-tree** family (same as the scroller/list broker ops), so
     /// the insertion-order drain stays order-equivalent.
@@ -827,6 +831,18 @@ pub struct Context<'a> {
     /// capture its limits at *push time* (inside the window's `handle_event`, where
     /// `owner_size` is correctly set), never read them at drag time.
     owner_size: Point,
+    /// An owned **snapshot** of the program's disabled-command set (denylist,
+    /// D1), backing [`command_enabled`](Self::command_enabled) — the read-only
+    /// `TView::commandEnabled` for views, which hold no `&Program`. Owned (a
+    /// cheap clone — the set typically holds ≤ a dozen entries), NOT a
+    /// `&CommandSet`: the pump's deferred-apply `Context` is alive while the
+    /// `EnableCommand`/`DisableCommand` arms mutate the live set `&mut`, so a
+    /// shared borrow would alias (see [`Deferred::UpdateMenu`]). The pump
+    /// refreshes it once per `pump_once` ([`set_disabled_commands`](Self::set_disabled_commands));
+    /// contexts built outside the pump (tests, ctor plumbing) default to empty =
+    /// everything enabled. Snapshot semantics: an enable/disable deferred in the
+    /// SAME dispatch becomes visible on the next pump.
+    disabled_commands: CommandSet,
 }
 
 impl<'a> Context<'a> {
@@ -843,7 +859,28 @@ impl<'a> Context<'a> {
             now_ms,
             deferred,
             owner_size: Point::default(),
+            disabled_commands: CommandSet::new(),
         }
+    }
+
+    /// Refresh the disabled-command **snapshot** backing
+    /// [`command_enabled`](Self::command_enabled). Called by the pump once per
+    /// `pump_once` pass with a clone of the program's live disabled set; a
+    /// default-constructed `Context` (tests, ctor plumbing) keeps the empty set
+    /// (= everything enabled, matching the denylist default).
+    pub fn set_disabled_commands(&mut self, snapshot: CommandSet) {
+        self.disabled_commands = snapshot;
+    }
+
+    /// Whether `cmd` is currently enabled (`TView::commandEnabled`, view-side,
+    /// D1 denylist: enabled iff not in the disabled set) — answered from the
+    /// per-pump **snapshot** (see the field doc): a `ctx.enable_command` /
+    /// `ctx.disable_command` requested during this dispatch is deferred and
+    /// becomes visible here on the *next* pump. Lets a widget self-gray (e.g. a
+    /// button checking its own command) without the aliasing problem a live
+    /// `&CommandSet` accessor would have.
+    pub fn command_enabled(&self, cmd: Command) -> bool {
+        !self.disabled_commands.has(cmd)
     }
 
     /// Post a targeted command (`Event::Command`) into the loop's queue.

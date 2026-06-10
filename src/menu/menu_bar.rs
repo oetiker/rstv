@@ -21,8 +21,8 @@
 //!   command would draw it enabled until the first `cmCommandSetChanged`. **DONE**
 //!   (Phase 4): [`Program::new`](crate::app::Program::new) seeds each inserted
 //!   bar/line by calling [`update_menu_commands`](View::update_menu_commands)
-//!   directly with the initial command set, since `cmCommandSetChanged` does not
-//!   fire at startup.
+//!   directly with the initial disabled-command set, since `cmCommandSetChanged`
+//!   does not fire at startup.
 //! - `TStreamable` (`build`) → D12 dropped.
 
 use crate::event::Event;
@@ -156,15 +156,15 @@ impl View for MenuBar {
 
     /// The §2 command-graying broker hook (`TMenuView::updateMenu`). The pump
     /// calls this at apply time (via [`Deferred::UpdateMenu`]) with the live
-    /// [`CommandSet`](crate::command::CommandSet) in hand, and the ctor calls it
+    /// **disabled-command set** (denylist, D1) in hand, and the ctor calls it
     /// once at startup ([`Program::new`](crate::app::Program::new)) to seed the
     /// initial graying; it walks the menu tree setting each command item's
-    /// `disabled = !cs.has(command)` (the shared [`menu_view::update_menu_commands`]
-    /// free function). Without this override the broker would silently no-op on the
-    /// trait default (the gap the ctor seed + the `cmCommandSetChanged` broadcast
-    /// both depend on).
-    fn update_menu_commands(&mut self, cs: &crate::command::CommandSet) {
-        menu_view::update_menu_commands(&mut self.mv.menu, cs);
+    /// `disabled = disabled_cmds.has(command)` (the shared
+    /// [`menu_view::update_menu_commands`] free function). Without this override
+    /// the broker would silently no-op on the trait default (the gap the ctor
+    /// seed + the `cmCommandSetChanged` broadcast both depend on).
+    fn update_menu_commands(&mut self, disabled_cmds: &crate::command::CommandSet) {
+        menu_view::update_menu_commands(&mut self.mv.menu, disabled_cmds);
     }
 
     /// Write the session-owned highlight cache (`TMenuView::current`) — the

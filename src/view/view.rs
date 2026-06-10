@@ -53,12 +53,16 @@
 //!   gives absolute coords; `shutDown` (`hide(); owner->remove(this)`) becomes
 //!   `Drop` + the group's child removal (row 26, D3).
 //!
-//! * **Command-enable policy.** The program-global enabled set
+//! * **Command-enable policy.** The program-global set
 //!   (`curCommandSet`/`enableCommand`/`disableCommand`/`commandEnabled`) lives at
-//!   TProgram (row 31), reached through `Context` at routing time. The C++
-//!   "commands > 255 are always enabled" rule is **DROPPED** (D1: a command's
-//!   identity is a string, not a 0..255 int); the default-enabled vocabulary is
-//!   seeded by TProgram and queried through `Context`.
+//!   TProgram (row 31) as its complement — a **disabled set** (denylist, D1):
+//!   every command, including app-minted ones, is enabled unless explicitly
+//!   disabled, and only the five window commands `initCommands` disables are
+//!   seeded. The C++ "commands > 255 are always enabled" rule is **subsumed**
+//!   (all commands are maskable; all default to enabled). Views write through
+//!   `Context::enable_command`/`disable_command` (deferred) and read through
+//!   the `Context::command_enabled` per-pump snapshot
+//!   (`docs/design/command-enablement.md`).
 //!
 //! * **Dropped entirely (D8/D12):** the occlusion/damage family
 //!   (`drawView`/`exposed`/`drawHide`/`drawShow`/`drawUnder*`) and the TVWrite
@@ -835,21 +839,25 @@ pub trait View {
 
     /// The `TMenuView` command-graying broker hook (row 49). Defaulted no-op;
     /// menu views override to regray their menu tree against the program's live
-    /// command set (the free fn
-    /// [`menu::menu_view::update_menu_commands`](crate::menu::menu_view::update_menu_commands),
-    /// the port of `TMenuView::updateMenu`).
+    /// **disabled-command set** (denylist, D1 — the argument is the set of
+    /// commands currently *disabled*; an item grays iff its command is in it).
+    /// The free fn
+    /// [`menu::menu_view::update_menu_commands`](crate::menu::menu_view::update_menu_commands)
+    /// is the port of `TMenuView::updateMenu`.
     ///
     /// This is the §2 broker, the exact precedent of
     /// [`apply_list_scroll`](View::apply_list_scroll): a menu view (a child, D3)
-    /// cannot read the program's [`CommandSet`](crate::CommandSet) inline — the
+    /// cannot borrow the program's [`CommandSet`](crate::CommandSet) inline — the
     /// pump owns it, and storing a `&CommandSet` on [`Context`] would alias the
-    /// apply-loop's `&mut command_set` mutation (the
+    /// apply-loop's `&mut disabled_commands` mutation (the
     /// `EnableCommand`/`DisableCommand` arms). So the view requests
     /// [`Deferred::UpdateMenu`](crate::view::Deferred::UpdateMenu) by its own id,
-    /// and the pump calls back here at apply time with the live set in hand. The
-    /// C++ `updateMenu` return-bool (`if changed drawView`) is dropped — under
-    /// whole-tree redraw (D8) the next pump repaints unconditionally.
-    fn update_menu_commands(&mut self, _cs: &CommandSet) {}
+    /// and the pump calls back here at apply time with the live set in hand. (A
+    /// plain *read* needs no broker — `Context::command_enabled` answers from an
+    /// owned per-pump snapshot.) The C++ `updateMenu` return-bool (`if changed
+    /// drawView`) is dropped — under whole-tree redraw (D8) the next pump
+    /// repaints unconditionally.
+    fn update_menu_commands(&mut self, _disabled_cmds: &CommandSet) {}
 
     /// The `TMenuView` highlight write-back hook (rows 50–52). Defaulted no-op;
     /// menu views ([`MenuBar`](crate::menu::MenuBar) /

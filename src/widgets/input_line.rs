@@ -49,9 +49,12 @@
 //!    mouse-down does a **single-shot** position/select. `TODO(row 31, D9)`.
 //! 2. **The `evCommand` clipboard block** (`cmCut`/`cmCopy`/`cmPaste`) — there is
 //!    no `Context`-level clipboard accessor yet. `TODO(clipboard)`.
-//! 3. **`updateCommands`/`canUpdateCommands`** (graying cmCut/Copy/Paste) — needs
-//!    a `Context` command-set query (TButton deferred the same).
-//!    `TODO(button/inputline: command-set query for command graying)`.
+//! 3. **`updateCommands`/`canUpdateCommands`** (graying cmCut/Copy/Paste) — the
+//!    blocking API gap is closed (`Context::command_enabled` exists, added with
+//!    the A1 denylist flip); the graying itself is backlog row B1
+//!    (`docs/BACKLOG.md`), same as TButton.
+//!    `TODO(B1 command graying): ctx.command_enabled is available; port the C++
+//!    graying logic here.`
 //! 4. **`valid()`'s `select()` side-effect** — focusing the bad field needs
 //!    `&mut Context`; `valid(&self)` returns the faithful boolean only.
 //!    `TODO(valid-select)`.
@@ -279,7 +282,8 @@ impl InputLine {
             self.first_pos = (self.displayed_pos(self.cur_pos) - self.state.size.x + 2).max(0);
         }
         self.sync_cursor();
-        // TODO(button/inputline: command-set query for command graying)
+        // TODO(B1 command graying): ctx.command_enabled is available (A1 denylist
+        // flip); port the C++ updateCommands graying logic here.
     }
 
     // -- validator save/restore/check --------------------------------------
@@ -669,7 +673,8 @@ impl View for InputLine {
 
     /// `TInputLine::setState` — base flag flip then, on `sfSelected` (or
     /// `sfActive` while selected), `selectAll(enable, false)`. The
-    /// `updateCommands` half is deferred (no command-set query).
+    /// `updateCommands` half is deferred as backlog row B1
+    /// (`Context::command_enabled` now exists for it).
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
         // Base behaviour (replicated from View::set_state — no `super`).
         self.state.set_flag(flag, enable);
@@ -687,7 +692,8 @@ impl View for InputLine {
         if flag == StateFlag::Selected || (flag == StateFlag::Active && self.state.state.selected) {
             self.select_all(enable, false);
         }
-        // TODO(button/inputline: command-set query for command graying)
+        // TODO(B1 command graying): ctx.command_enabled is available (A1 denylist
+        // flip); port the C++ updateCommands graying logic here.
     }
 
     /// `TInputLine::valid` — with a validator: `cmValid` → status OK; any other

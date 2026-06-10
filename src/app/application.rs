@@ -249,8 +249,8 @@ mod tests {
             app.desktop().is_some(),
             "desktop() must return Some after construction with a desktop factory"
         );
-        // CLOSE starts disabled (per Program's default_command_set); enable it and
-        // verify the forwarding path.
+        // CLOSE starts disabled (per Program's initial_disabled_commands seed);
+        // enable it and verify the forwarding path.
         assert!(
             !app.command_enabled(Command::CLOSE),
             "cmClose starts disabled"

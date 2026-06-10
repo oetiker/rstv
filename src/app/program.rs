@@ -29,8 +29,12 @@
 //! * **D11 — injected [`Clock`] + [`Backend`].** Headless never blocks, so tests
 //!   drive `pump_once` synchronously with a [`ManualClock`](crate::timer::ManualClock).
 //!
-//! * **D1 — string commands, no ">255 always enabled".** The enabled set
-//!   (`curCommandSet`) is seeded explicitly (see [`default_command_set`]).
+//! * **D1 — string commands, enabled-by-default (denylist).** `curCommandSet`
+//!   is stored as its complement: the **disabled** set, seeded with the five
+//!   startup-disabled window commands (see [`initial_disabled_commands`]). Every
+//!   command not in it — including any app-minted [`Command::custom`] — is
+//!   enabled, which subsumes C++'s ">255 always enabled" bit-array artifact
+//!   (see `docs/design/command-enablement.md`).
 //!
 //! ## Deferred to later rows (grep-able breadcrumbs)
 //!
@@ -72,62 +76,28 @@ use crate::view::{Context, Deferred, DrawCtx, Group, Point, Rect, SelectMode, Vi
 /// per second). Headless ignores it (D11).
 const EVENT_TIMEOUT_MS: u64 = 20;
 
-/// The default-enabled command vocabulary — ports the initial `curCommandSet`
-/// (`tview.cpp` static init: everything *except* the window-management commands
-/// that start disabled, `cmZoom`/`cmClose`/`cmResize`/`cmNext`/`cmPrev`).
+/// The startup-disabled command seed — ports `TView::initCommands` (`tview.cpp`
+/// static init: enable all 256, then disable `cmZoom`/`cmClose`/`cmResize`/
+/// `cmNext`/`cmPrev`), stored as its complement.
 ///
-/// The C++ "all commands enabled, then disable a few" cannot be expressed over an
-/// open string-command space (D1), so we enumerate the enabled set explicitly:
-/// the framework's shared vocabulary minus the disabled-at-startup window
-/// commands. Apps/widgets toggle it via [`Program::enable_command`] /
-/// [`Program::disable_command`].
-fn default_command_set() -> CommandSet {
+/// rstv keeps `curCommandSet` as a **disabled set** (denylist): everything not
+/// in it is enabled, so the open string-command space (D1) is enabled-by-default
+/// exactly like C++'s "all bits on" init — and any app-minted
+/// [`Command::custom`] works without registration, subsuming the C++ ">255
+/// always enabled" bit-array artifact. Only the five window-management commands
+/// C++ disables at startup are seeded here (a window grants them on selection).
+/// Apps/widgets toggle commands via [`Program::enable_command`] /
+/// [`Program::disable_command`]. See `docs/design/command-enablement.md`.
+fn initial_disabled_commands() -> CommandSet {
     let mut cs = CommandSet::new();
-    // Core / dialog-result / editing / window-management / app-menu commands
-    // that are enabled by default (cmZoom/cmClose/cmResize/cmNext/cmPrev are
-    // deliberately omitted — they start disabled in C++ until a window grants
-    // them).
     for cmd in [
-        Command::VALID,
-        Command::QUIT,
-        Command::ERROR,
-        Command::MENU,
-        Command::HELP,
-        Command::OK,
-        Command::CANCEL,
-        Command::YES,
-        Command::NO,
-        Command::DEFAULT,
-        Command::CUT,
-        Command::COPY,
-        Command::PASTE,
-        Command::UNDO,
-        Command::CLEAR,
-        Command::TILE,
-        Command::CASCADE,
-        Command::NEW,
-        Command::OPEN,
-        Command::SAVE,
-        Command::SAVE_AS,
-        Command::SAVE_ALL,
-        Command::CH_DIR,
-        Command::DOS_SHELL,
-        Command::CLOSE_ALL,
-        // File-dialog result commands (stddlg.h 1001–1006). In C++ these are
-        // `> 255`, so `commandEnabled` treats them as ALWAYS enabled (never
-        // maskable). The D1 allowlist dropped that ">255" rule, so we must list
-        // them explicitly or the pump's command filter silently drops the
-        // FileDialog OK/Open button result (cmFileOpen) before the dialog's
-        // handle_event can end the modal. (BANDAID — the real fix is to flip
-        // CommandSet to a denylist; tracked for the post-port architecture pass.)
-        Command::FILE_OPEN,
-        Command::FILE_REPLACE,
-        Command::FILE_CLEAR,
-        Command::FILE_INIT,
-        Command::CHANGE_DIR,
-        Command::REVERT,
+        Command::ZOOM,
+        Command::CLOSE,
+        Command::RESIZE,
+        Command::NEXT,
+        Command::PREV,
     ] {
-        cs.enable_cmd(cmd);
+        cs.insert(cmd); // insert into the DISABLED set: these start disabled
     }
     cs
 }
@@ -242,15 +212,19 @@ pub struct Program {
     out_events: VecDeque<Event>,
     /// Deferred effects on loop-owned state ([`Deferred`]), applied *after* each
     /// dispatch — capture pushes (→ `captures`), command enable/disable (→
-    /// `command_set`), and tree mutations (bounds / state-flag / close → `group`).
+    /// `disabled_commands`), and tree mutations (bounds / state-flag / close →
+    /// `group`).
     /// A downward-borrowed view / capture handler cannot touch the capture stack,
     /// the command set, or the tree inline (D3/D9), so it requests the effect via
     /// `Context` and the loop drains this one queue. A distinct field for the same
     /// disjoint-borrow reason as `out_events`. One channel — a new capability adds a
     /// [`Deferred`] variant, not a field.
     deferred: Vec<Deferred>,
-    /// The enabled-command set (`curCommandSet`); see [`default_command_set`].
-    command_set: CommandSet,
+    /// The **disabled**-command set — `curCommandSet` stored as its complement
+    /// (denylist; D1): a command is enabled iff it is NOT in here, so the open
+    /// string-command space is enabled-by-default like C++'s all-bits-on
+    /// `initCommands`. Seeded by [`initial_disabled_commands`].
+    disabled_commands: CommandSet,
     /// The inserted desktop child's id (`canMoveFocus` / Alt-N target).
     desktop: Option<ViewId>,
     /// The inserted menu-bar child's id (`TProgram::menuBar`), if one was created.
@@ -390,16 +364,16 @@ impl Program {
         // INITIAL REGRAY (the carried gap). The menu bar / status line are born
         // all-enabled and only regray on a `cmCommandSetChanged` broadcast, which
         // does NOT fire at startup (it is queued only by an enable/disable change).
-        // We hold `group` + the command set here, so seed each view's
+        // We hold `group` + the disabled set here, so seed each view's
         // command-graying cache directly via the established broker hook
-        // (`View::update_menu_commands`) — no need to defer (the deferred queue is
-        // not drained on the first idle pump anyway). C++ gets this for free because
-        // `commandEnabled` is read live in `drawSelect`; our snapshot cache must be
-        // primed once at construction.
-        let command_set = default_command_set();
+        // (`View::update_menu_commands`, contract: the DISABLED set) — no need to
+        // defer (the deferred queue is not drained on the first idle pump anyway).
+        // C++ gets this for free because `commandEnabled` is read live in
+        // `drawSelect`; our snapshot cache must be primed once at construction.
+        let disabled_commands = initial_disabled_commands();
         for id in [menu_bar, status_line].into_iter().flatten() {
             if let Some(v) = group.find_mut(id) {
-                v.update_menu_commands(&command_set);
+                v.update_menu_commands(&disabled_commands);
             }
         }
 
@@ -449,7 +423,7 @@ impl Program {
             theme,
             out_events,
             deferred,
-            command_set,
+            disabled_commands,
             desktop,
             menu_bar,
             status_line,
@@ -497,29 +471,34 @@ impl Program {
 
     // -- command-enable policy (curCommandSet) ------------------------------
 
-    /// Enable `cmd` (`TProgram`-side `enableCommand`). Sets the
-    /// command-set-changed flag on a real change so the next idle broadcasts
-    /// `cmCommandSetChanged`.
+    /// Enable `cmd` (`TView::enableCommand`, program-side). Sets the
+    /// command-set-changed flag on a real change (the command was previously
+    /// disabled) so the next idle broadcasts `cmCommandSetChanged` — faithful to
+    /// `commandSetChanged |= !curCommandSet.has(command)`.
     pub fn enable_command(&mut self, cmd: Command) {
-        if !self.command_set.has(cmd) {
-            self.command_set.enable_cmd(cmd);
+        if self.disabled_commands.has(cmd) {
+            self.disabled_commands.remove(cmd);
             self.command_set_changed = true;
         }
     }
 
-    /// Disable `cmd` (`TProgram`-side `disableCommand`). Sets the
-    /// command-set-changed flag on a real change.
+    /// Disable `cmd` (`TView::disableCommand`, program-side). Sets the
+    /// command-set-changed flag on a real change (the command was previously
+    /// enabled) — faithful to `commandSetChanged |= curCommandSet.has(command)`.
     pub fn disable_command(&mut self, cmd: Command) {
-        if self.command_set.has(cmd) {
-            self.command_set.disable_cmd(cmd);
+        if !self.disabled_commands.has(cmd) {
+            self.disabled_commands.insert(cmd);
             self.command_set_changed = true;
         }
     }
 
-    /// Whether `cmd` is currently enabled (`TProgram::commandEnabled`). The
-    /// C++ ">255 always enabled" rule is **dropped** (D1).
+    /// Whether `cmd` is currently enabled (`TView::commandEnabled`): enabled iff
+    /// not in the disabled set. The C++ "`command > 255` always enabled" rule is
+    /// **subsumed** (D1): the command space is open strings, all enabled by
+    /// default and all maskable — strictly more capable, identical observable
+    /// behavior for the C++ vocabulary.
     pub fn command_enabled(&self, cmd: Command) -> bool {
-        self.command_set.has(cmd)
+        !self.disabled_commands.has(cmd)
     }
 
     /// `TApplication::getTileRect` — the rectangle tile/cascade lay windows into:
@@ -1005,7 +984,7 @@ impl Program {
     ) -> (Command, Option<crate::data::FieldValue>) {
         // 1. getCommands / save the outgoing current.
         let save_current = self.group.current();
-        let save_commands = self.command_set.clone();
+        let save_commands = self.disabled_commands.clone();
         // end_state save/restore (REQUIRED for re-entrancy — see the doc above).
         // Take it at ENTRY, before the retval loop's `self.end_state = None`.
         let saved_end_state = self.end_state.take();
@@ -1215,7 +1194,7 @@ impl Program {
         //    cmNext/cmPrev/cmClose/cmZoom), so C++ fires a post-modal
         //    cmCommandSetChanged broadcast we omit. Deliberate, and moot at row 34
         //    (no observer of the command set exists yet); align when one does.
-        self.command_set = save_commands;
+        self.disabled_commands = save_commands;
 
         // Restore the enclosing loop's end_state (re-entrancy — see the doc above).
         // The modal's own end command lives in `retval` (the source of truth); the
@@ -1323,7 +1302,7 @@ impl Program {
             theme,
             out_events,
             deferred,
-            command_set,
+            disabled_commands,
             desktop,
             // The menu bar is not read by the pump (its events route through the
             // normal group dispatch / preProcess phase); bind it `_` so the
@@ -1426,13 +1405,16 @@ impl Program {
                             m.position -= origin;
                         }
                         let mut ctx = Context::new(out_events, timers, now, deferred);
+                        ctx.set_disabled_commands(disabled_commands.clone());
                         v.handle_event(&mut ev, &mut ctx);
                     }
                 }
 
-                // Command filtering at the program boundary (D1): drop a disabled
-                // command before routing. Broadcasts/keys/mouse flow regardless.
-                let drop_disabled = matches!(ev, Event::Command(c) if !command_set.has(c));
+                // Command filtering at the program boundary (D1): drop a command
+                // only when it is explicitly disabled (denylist — everything else,
+                // including unregistered custom commands, flows). Broadcasts/keys/
+                // mouse flow regardless.
+                let drop_disabled = matches!(ev, Event::Command(c) if disabled_commands.has(c));
                 if drop_disabled {
                     ev.clear();
                 }
@@ -1448,6 +1430,11 @@ impl Program {
                     // drain the deferred queue back into loop/tree state.
                     {
                         let mut ctx = Context::new(out_events, timers, now, deferred);
+                        // Per-pump refresh of the Context's disabled-command
+                        // SNAPSHOT (D1 denylist), backing ctx.command_enabled —
+                        // an owned clone, so no aliasing with the deferred-apply
+                        // arms that mutate the live set below.
+                        ctx.set_disabled_commands(disabled_commands.clone());
                         // Outside-modal redirect: while a ModalFrame is the top capture,
                         // deliver outside-bounds positional events directly to the modal
                         // view (localized to its bounds) so the view decides — HistoryWindow
@@ -1522,22 +1509,28 @@ impl Program {
                     let effects: Vec<Deferred> = std::mem::take(deferred);
                     if !effects.is_empty() {
                         let mut ctx = Context::new(out_events, timers, now, deferred);
+                        // Snapshot taken BEFORE the Enable/DisableCommand arms
+                        // mutate the live set: an apply-phase callee reading
+                        // ctx.command_enabled sees this pass's pre-apply state
+                        // (snapshot semantics; next pump sees the change).
+                        ctx.set_disabled_commands(disabled_commands.clone());
                         for effect in effects {
                             match effect {
                                 Deferred::PushCapture(h) => captures.push(h),
                                 // Inline the enable/disable bodies — the destructure
-                                // gives the fields, not `self`. Flip
-                                // `command_set_changed` on a real change so the next
-                                // idle broadcasts cmCommandSetChanged.
+                                // gives the fields, not `self`. The set holds DISABLED
+                                // commands (denylist), so enable removes / disable
+                                // inserts. Flip `command_set_changed` on a real change
+                                // so the next idle broadcasts cmCommandSetChanged.
                                 Deferred::EnableCommand(cmd) => {
-                                    if !command_set.has(cmd) {
-                                        command_set.enable_cmd(cmd);
+                                    if disabled_commands.has(cmd) {
+                                        disabled_commands.remove(cmd);
                                         *command_set_changed = true;
                                     }
                                 }
                                 Deferred::DisableCommand(cmd) => {
-                                    if command_set.has(cmd) {
-                                        command_set.disable_cmd(cmd);
+                                    if !disabled_commands.has(cmd) {
+                                        disabled_commands.insert(cmd);
                                         *command_set_changed = true;
                                     }
                                 }
@@ -1697,13 +1690,14 @@ impl Program {
                                 // command set inline — the pump owns it. Resolve
                                 // the menu view and call back through the defaulted
                                 // View::update_menu_commands trait method with the
-                                // live `command_set` in hand (it regrays the menu
-                                // tree). `group` and `command_set` are disjoint
+                                // live DISABLED set in hand (it regrays the menu
+                                // tree: an item grays iff its command is in the
+                                // set). `group` and `disabled_commands` are disjoint
                                 // destructured fields, so no `ctx` is needed (like
                                 // ChangeBounds).
                                 Deferred::UpdateMenu(id) => {
                                     if let Some(v) = group.find_mut(id) {
-                                        v.update_menu_commands(command_set);
+                                        v.update_menu_commands(disabled_commands);
                                     }
                                 }
                                 // -- rows 50-52: the TMenuView modal layer ------
@@ -2571,8 +2565,9 @@ mod tests {
         // true by default and the Alt-N walk selects window 1. The pump then drains
         // `deferred`, so the
         // `EnableCommand(cmNext/cmPrev)` that `set_state(Selected)` queued is really
-        // applied to `command_set` — exactly the enable-filter path the cmNext/cmPrev
-        // round-trip tests exercise. No test-only command-enable shortcut.
+        // applied to `disabled_commands` — exactly the enable-filter path the
+        // cmNext/cmPrev round-trip tests exercise. No test-only command-enable
+        // shortcut.
         program.out_events.push_back(alt_digit('1'));
         program.pump_once();
         program.out_events.clear();
@@ -4152,7 +4147,7 @@ mod tests {
         let (mut program, _screen, _clock) = program_with_desktop(12, 4);
         let log = Rc::new(RefCell::new(Vec::new()));
 
-        // cmZoom starts DISABLED (default_command_set omits it).
+        // cmZoom starts DISABLED (in the initial_disabled_commands seed).
         assert!(!program.command_enabled(Command::ZOOM));
 
         // A probe that enables cmZoom via the downward Context on its first event.
@@ -4189,6 +4184,164 @@ mod tests {
         assert!(
             log.borrow().contains(&Event::Command(Command::ZOOM)),
             "now-enabled command reaches routing instead of being filtered"
+        );
+    }
+
+    // -- 9b. denylist command enablement (A1: the allowlist → denylist flip) --
+
+    /// (a) An arbitrary app-minted command is enabled by default — the heart of
+    /// the denylist: no registration, no allowlist to extend.
+    #[test]
+    fn custom_command_enabled_by_default() {
+        let (program, _screen, _clock) = program_with_desktop(12, 4);
+        assert!(
+            program.command_enabled(Command::custom("x.y")),
+            "an unregistered custom command is enabled by default (denylist)"
+        );
+        // And the framework vocabulary that the old allowlist enumerated is
+        // enabled the same way — by NOT being in the disabled seed.
+        assert!(program.command_enabled(Command::OK));
+        assert!(program.command_enabled(Command::QUIT));
+    }
+
+    /// (b) Exactly the five window-management commands C++'s `initCommands`
+    /// disables start disabled.
+    #[test]
+    fn window_commands_start_disabled() {
+        let (program, _screen, _clock) = program_with_desktop(12, 4);
+        for cmd in [
+            Command::ZOOM,
+            Command::CLOSE,
+            Command::RESIZE,
+            Command::NEXT,
+            Command::PREV,
+        ] {
+            assert!(
+                !program.command_enabled(cmd),
+                "{cmd:?} starts disabled (initCommands seed)"
+            );
+        }
+    }
+
+    /// (c) disable→enable round-trips toggle `command_enabled`, and the changed
+    /// flag fires on REAL transitions only (faithful to the C++ `has`-guarded
+    /// `commandSetChanged` updates).
+    #[test]
+    fn enable_disable_round_trip_sets_changed_flag_on_real_transitions_only() {
+        let (mut program, _screen, _clock) = program_with_desktop(12, 4);
+        let cmd = Command::custom("test.round_trip");
+
+        // Enabled by default; enabling again is NOT a transition.
+        assert!(program.command_enabled(cmd));
+        program.command_set_changed = false;
+        program.enable_command(cmd);
+        assert!(
+            !program.command_set_changed,
+            "enabling an already-enabled command is not a change"
+        );
+
+        // disable: a real transition.
+        program.disable_command(cmd);
+        assert!(!program.command_enabled(cmd));
+        assert!(program.command_set_changed, "real disable flips the flag");
+
+        // disable again: NOT a transition.
+        program.command_set_changed = false;
+        program.disable_command(cmd);
+        assert!(
+            !program.command_set_changed,
+            "disabling an already-disabled command is not a change"
+        );
+
+        // enable: a real transition back.
+        program.enable_command(cmd);
+        assert!(program.command_enabled(cmd));
+        assert!(program.command_set_changed, "real enable flips the flag");
+    }
+
+    /// (d) An `Event::Command` carrying an unregistered custom command passes the
+    /// pump's boundary filter and reaches routing — the symptom-level proof the
+    /// allowlist's silent drop (the "OK does nothing" class of bug) is gone.
+    #[test]
+    fn custom_command_passes_pump_filter_without_registration() {
+        let (mut program, _screen, _clock) = program_with_desktop(12, 4);
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let cmd = Command::custom("test.unregistered");
+
+        let probe = Probe::new(Rect::new(0, 0, 4, 2), 'P', log.clone());
+        let id = program.group_mut().insert(Box::new(probe));
+        program.with_ctx(|g, ctx| g.set_current(Some(id), SelectMode::Normal, ctx));
+
+        program.out_events.clear();
+        program.out_events.push_back(Event::Command(cmd));
+        program.pump_once();
+        assert!(
+            log.borrow().contains(&Event::Command(cmd)),
+            "an unregistered custom command flows through the filter to routing"
+        );
+
+        // And the inverse: once explicitly disabled, the SAME command is dropped
+        // at the boundary (the filter still bites — denylist, not no-list).
+        program.disable_command(cmd);
+        log.borrow_mut().clear();
+        program.out_events.clear();
+        program.out_events.push_back(Event::Command(cmd));
+        program.pump_once();
+        assert!(
+            !log.borrow().contains(&Event::Command(cmd)),
+            "an explicitly disabled command is dropped at the boundary"
+        );
+    }
+
+    /// (e) `Context::command_enabled` (the B1-unblocking snapshot query) reflects
+    /// the program's set: a `ctx.disable_command` deferred in pump N is visible
+    /// to the Context snapshot in pump N+1 (snapshot semantics).
+    #[test]
+    fn ctx_command_enabled_reflects_set_after_deferred_apply() {
+        let (mut program, _screen, _clock) = program_with_desktop(12, 4);
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let cmd = Command::custom("test.ctx_snapshot");
+
+        // The probe records what its Context's snapshot says about `cmd` on
+        // every event, and requests the disable on the first.
+        let seen: Rc<RefCell<Vec<bool>>> = Rc::new(RefCell::new(Vec::new()));
+        {
+            let seen = seen.clone();
+            let mut disabled_requested = false;
+            let mut probe = Probe::new(Rect::new(0, 0, 4, 2), 'P', log.clone());
+            probe.action = Some(Box::new(move |ctx: &mut Context| {
+                seen.borrow_mut().push(ctx.command_enabled(cmd));
+                if !disabled_requested {
+                    ctx.disable_command(cmd);
+                    disabled_requested = true;
+                }
+            }));
+            let id = program.group_mut().insert(Box::new(probe));
+            program.with_ctx(|g, ctx| g.set_current(Some(id), SelectMode::Normal, ctx));
+        }
+
+        // Pump 1: the snapshot still says enabled (taken before the deferred
+        // apply); the disable is applied after dispatch.
+        program.out_events.clear();
+        program.out_events.push_back(key(Key::Char('a')));
+        program.pump_once();
+        assert_eq!(
+            seen.borrow().as_slice(),
+            &[true],
+            "pump 1 snapshot: still enabled (disable is deferred)"
+        );
+        assert!(
+            !program.command_enabled(cmd),
+            "after the deferred apply the program set has it disabled"
+        );
+
+        // Pump 2: the refreshed snapshot reflects the applied disable.
+        program.out_events.push_back(key(Key::Char('b')));
+        program.pump_once();
+        assert_eq!(
+            seen.borrow().as_slice(),
+            &[true, false],
+            "pump 2 snapshot: the Context sees the disabled command"
         );
     }
 
@@ -5395,11 +5548,13 @@ mod tests {
     /// broadcasts `cmCommandSetChanged`, which reaches the menu view, which
     /// requests `UpdateMenu`, which the pump applies → the menu item regrays.
     ///
-    /// **Discriminating** (per the brief): we first ENABLE the command and prove
-    /// the item reads *enabled*, then DISABLE it and prove it reads *disabled* —
-    /// so a pass cannot come from the command merely never being in the default
-    /// set. It passes ONLY via the broadcast → request → regray path; remove the
-    /// broker arm (or the request) and the item never flips.
+    /// **Discriminating** (per the brief): under the denylist a custom command
+    /// starts ENABLED, so we first DISABLE it (a real transition) and prove the
+    /// item regrays to *disabled*, then ENABLE it back (another real transition)
+    /// and prove it regrays to *enabled* — the second leg cannot pass from the
+    /// item merely starting enabled. Both legs pass ONLY via the broadcast →
+    /// request → regray path; remove the broker arm (or the request) and the
+    /// item never flips.
     #[test]
     fn command_set_change_regrays_menu_through_pump() {
         let cmd = Command::custom("test.menu_probe_cmd");
@@ -5432,25 +5587,28 @@ mod tests {
                 .expect("probe reachable")
         }
 
-        // 1. ENABLE the command → idle pump broadcasts cmCommandSetChanged →
+        // A custom command is enabled by default (denylist).
+        assert!(program.command_enabled(cmd));
+
+        // 1. DISABLE the command → idle pump broadcasts cmCommandSetChanged →
         //    next pump delivers it → probe requests UpdateMenu → apply regrays.
-        program.enable_command(cmd);
+        program.disable_command(cmd);
         program.pump_once(); // idle: emits the broadcast, clears the flag
         program.pump_once(); // delivers the broadcast → probe requests UpdateMenu
         program.pump_once(); // applies UpdateMenu (any residual)
         assert!(
-            !probe_disabled(&mut program, probe_id),
-            "after ENABLE + regray the item must be ENABLED (disabled == false)"
+            probe_disabled(&mut program, probe_id),
+            "after DISABLE + regray the item must be DISABLED (disabled == true)"
         );
 
-        // 2. DISABLE the command → same path → the item regrays to disabled.
-        program.disable_command(cmd);
+        // 2. ENABLE the command back → same path → the item regrays to enabled.
+        program.enable_command(cmd);
         program.pump_once(); // idle: emits the broadcast
         program.pump_once(); // delivers it → probe requests UpdateMenu
         program.pump_once(); // applies UpdateMenu
         assert!(
-            probe_disabled(&mut program, probe_id),
-            "after DISABLE + regray the item must be DISABLED (disabled == true)"
+            !probe_disabled(&mut program, probe_id),
+            "after ENABLE + regray the item must be ENABLED (disabled == false)"
         );
     }
 
@@ -7022,27 +7180,29 @@ mod tests {
 
         #[test]
         fn initial_regray_greys_startup_disabled_commands() {
-            // cmZoom is NOT in default_command_set (a startup-disabled window
-            // command). After Program::new, the status line's cached command set
+            // cmZoom is in initial_disabled_commands (a startup-disabled window
+            // command). After Program::new, the status line's cached disabled set
             // must already reflect that (seeded directly in the ctor — no pump),
             // and the menu has no cmZoom item but the bar's Window>Next (cmNext,
             // also startup-disabled) must be greyed.
             let (mut program, _handle, sl, mb) = program_full(40, 10);
 
-            // Status line: cmd_set cached immediately, cmZoom disabled, cmQuit enabled.
+            // Status line: disabled_cmds cached immediately — cmZoom in it
+            // (disabled), cmQuit not (enabled).
             let cs = program
                 .group_mut()
                 .find_mut(sl)
                 .and_then(|v| v.as_any_mut())
                 .and_then(|a| a.downcast_ref::<StatusLine>())
                 .expect("status line resolves")
-                .cmd_set()
+                .disabled_cmds()
                 .cloned();
-            let cs = cs.expect("initial regray seeded the status-line command-set cache (no pump)");
-            assert!(cs.has(Command::QUIT), "cmQuit enabled at startup");
+            let cs =
+                cs.expect("initial regray seeded the status-line disabled-set cache (no pump)");
+            assert!(!cs.has(Command::QUIT), "cmQuit enabled at startup");
             assert!(
-                !cs.has(Command::ZOOM),
-                "cmZoom is a startup-disabled command -> greyed in the cache"
+                cs.has(Command::ZOOM),
+                "cmZoom is a startup-disabled command -> in the disabled cache"
             );
 
             // Menu bar: Window > Next (cmNext, startup-disabled) must be greyed.
@@ -7070,13 +7230,13 @@ mod tests {
         /// BITE for the initial regray: without the ctor seeding, the status-line
         /// cache would stay None (all-enabled). We can't easily disable the ctor
         /// seed, so this asserts the DISCRIMINATING fact the seed provides: a fresh
-        /// `StatusLine` (never seeded) reports `cmd_set() == None` and treats
+        /// `StatusLine` (never seeded) reports `disabled_cmds() == None` and treats
         /// everything as enabled — the gap the ctor closes.
         #[test]
         fn bite_unseeded_status_line_is_all_enabled() {
             let line = StatusLine::new(Rect::new(0, 0, 40, 1), demo_status());
             assert!(
-                line.cmd_set().is_none(),
+                line.disabled_cmds().is_none(),
                 "an unseeded line has no cache (the startup gap Program::new closes by seeding)"
             );
         }
@@ -7741,9 +7901,10 @@ mod tests {
 
         /// REGRESSION: `cmFileOpen` (C++ stddlg.h 1001 — a `> 255` always-enabled
         /// command) must survive the pump's command filter, or the FileDialog
-        /// OK/Open button does nothing (the modal never ends). The D1 allowlist
-        /// dropped C++'s ">255 always enabled" rule, so the file-dialog result
-        /// commands must be in `default_command_set()`. Drives the REAL pump.
+        /// OK/Open button does nothing (the modal never ends). Under the D1
+        /// denylist it is enabled by default like every command not explicitly
+        /// disabled (the historic allowlist dropped it — the "OK does nothing"
+        /// bug). Drives the REAL pump.
         #[test]
         fn file_dialog_open_command_survives_pump_filter() {
             use crate::data::FieldValue;
@@ -7767,10 +7928,11 @@ mod tests {
         }
 
         /// The file-dialog result commands C++ treats as always-enabled (`> 255`)
-        /// are in the default set (the bandaid for the allowlist→denylist gap).
+        /// are enabled by default under the denylist — no registration, no
+        /// bandaid list (the allowlist-era fix this replaces).
         #[test]
-        fn default_command_set_enables_file_dialog_results() {
-            let cs = default_command_set();
+        fn file_dialog_result_commands_enabled_by_default() {
+            let (program, _handle, _clock) = program_with_desktop(12, 4);
             for cmd in [
                 Command::FILE_OPEN,
                 Command::FILE_REPLACE,
@@ -7779,7 +7941,10 @@ mod tests {
                 Command::CHANGE_DIR,
                 Command::REVERT,
             ] {
-                assert!(cs.has(cmd), "{cmd:?} must be enabled by default");
+                assert!(
+                    program.command_enabled(cmd),
+                    "{cmd:?} must be enabled by default"
+                );
             }
         }
 

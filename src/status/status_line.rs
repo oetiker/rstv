@@ -158,12 +158,15 @@ pub struct StatusLine {
     /// The hint provider (C++ virtual `hint()`); default returns `None` (C++
     /// `hint()` returns `""`). Overridable via [`set_hint`](Self::set_hint).
     hint: Box<dyn Fn(HelpCtx) -> Option<String>>,
-    /// Cached enabled-command snapshot for graying (refreshed by the
-    /// [`update_menu_commands`](View::update_menu_commands) broker hook). `None`
-    /// before the first refresh means **treat all as enabled** (the same startup
-    /// gap menus have). **Not** a per-item `disabled` field — `TStatusItem` has
-    /// none; C++ `drawSelect` calls `commandEnabled` live, which we snapshot here.
-    cmd_set: Option<CommandSet>,
+    /// Cached **disabled**-command snapshot for graying (denylist, D1; refreshed
+    /// by the [`update_menu_commands`](View::update_menu_commands) broker hook,
+    /// whose contract passes the program's disabled set). `None` before the
+    /// first refresh means **treat all as enabled** (the same startup gap menus
+    /// have — and consistent with the denylist default, where an empty set also
+    /// means all-enabled). **Not** a per-item `disabled` field — `TStatusItem`
+    /// has none; C++ `drawSelect` calls `commandEnabled` live, which we snapshot
+    /// here.
+    disabled_cmds: Option<CommandSet>,
 }
 
 impl StatusLine {
@@ -188,7 +191,7 @@ impl StatusLine {
             items_def: None,
             help_ctx: HelpCtx::NO_CONTEXT, // C++ helpCtx default
             hint: Box::new(|_| None),      // C++ default hint() -> ""
-            cmd_set: None,
+            disabled_cmds: None,
         };
         sl.find_items();
         sl
@@ -235,11 +238,15 @@ impl StatusLine {
         }
     }
 
-    /// Whether `command` is enabled, per the cached command-set snapshot. `None`
-    /// (before the first broker refresh) means **treat all as enabled** (the
-    /// startup gap). Ports the C++ `commandEnabled(T->command)` call, snapshotted.
+    /// Whether `command` is enabled, per the cached disabled-set snapshot
+    /// (denylist: enabled iff NOT in the set). `None` (before the first broker
+    /// refresh) means **treat all as enabled** (the startup gap). Ports the C++
+    /// `commandEnabled(T->command)` call, snapshotted.
     fn command_enabled(&self, command: crate::command::Command) -> bool {
-        self.cmd_set.as_ref().is_none_or(|cs| cs.has(command))
+        !self
+            .disabled_cmds
+            .as_ref()
+            .is_some_and(|cs| cs.has(command))
     }
 
     /// `TStatusLine::itemMouseIsIn` (`tstatusl.cpp:133`) — the index of the item
@@ -402,12 +409,13 @@ impl View for StatusLine {
     }
 
     /// The §2 command-graying broker hook (row 49 mechanism, reused). The pump
-    /// calls this at apply time with the live [`CommandSet`] in hand; we snapshot
-    /// it into [`cmd_set`](StatusLine::cmd_set) so `draw` can gray disabled items
-    /// (C++ `drawSelect` calls `commandEnabled` live; we cache it because
+    /// calls this at apply time with the live **disabled-command set** (denylist,
+    /// D1) in hand; we snapshot it into
+    /// [`disabled_cmds`](StatusLine::disabled_cmds) so `draw` can gray disabled
+    /// items (C++ `drawSelect` calls `commandEnabled` live; we cache it because
     /// `TStatusItem` has no `disabled` field to mutate).
-    fn update_menu_commands(&mut self, cs: &CommandSet) {
-        self.cmd_set = Some(cs.clone());
+    fn update_menu_commands(&mut self, disabled_cmds: &CommandSet) {
+        self.disabled_cmds = Some(disabled_cmds.clone());
     }
 
     /// Expose the concrete line so the pump / tests can introspect it (the cached
@@ -418,10 +426,10 @@ impl View for StatusLine {
 }
 
 impl StatusLine {
-    /// Read the cached command-set snapshot (test/inspection hook for the
-    /// broker-driven graying cache).
-    pub fn cmd_set(&self) -> Option<&CommandSet> {
-        self.cmd_set.as_ref()
+    /// Read the cached **disabled**-command snapshot (test/inspection hook for
+    /// the broker-driven graying cache; denylist, D1).
+    pub fn disabled_cmds(&self) -> Option<&CommandSet> {
+        self.disabled_cmds.as_ref()
     }
 
     /// Read the currently-selected def index (test hook for `find_items`).
@@ -480,7 +488,7 @@ mod tests {
         // find_items ran in the ctor: the All def is selected.
         assert_eq!(line.selected_def(), Some(0));
         assert_eq!(line.help_ctx, HelpCtx::NO_CONTEXT);
-        assert!(line.cmd_set.is_none(), "no command set snapshot yet");
+        assert!(line.disabled_cmds.is_none(), "no command set snapshot yet");
     }
 
     // -- find_items ---------------------------------------------------------
@@ -613,26 +621,28 @@ mod tests {
 
     #[test]
     fn update_menu_commands_snapshots_set() {
-        // The broker hook caches the live command set; command_enabled reads it.
+        // The broker hook caches the live DISABLED set; command_enabled reads it.
         let mut line = StatusLine::new(Rect::new(0, 0, 40, 1), sample_defs());
-        // Before any refresh, cmd_set is None -> everything is enabled.
-        assert!(line.cmd_set().is_none());
+        // Before any refresh, disabled_cmds is None -> everything is enabled.
+        assert!(line.disabled_cmds().is_none());
         assert!(
             line.command_enabled(Command::QUIT),
             "None set -> all enabled"
         );
 
-        // Snapshot a set that has HELP but not QUIT.
-        let mut cs = CommandSet::new();
-        cs.enable_cmd(Command::HELP);
-        cs.disable_cmd(Command::QUIT);
-        line.update_menu_commands(&cs);
+        // Snapshot a disabled set holding QUIT (HELP stays enabled).
+        let mut disabled = CommandSet::new();
+        disabled.insert(Command::QUIT);
+        line.update_menu_commands(&disabled);
 
-        assert!(line.cmd_set().is_some(), "broker hook cached the set");
-        assert!(line.command_enabled(Command::HELP), "HELP enabled in set");
+        assert!(line.disabled_cmds().is_some(), "broker hook cached the set");
+        assert!(
+            line.command_enabled(Command::HELP),
+            "HELP not in the disabled set -> enabled"
+        );
         assert!(
             !line.command_enabled(Command::QUIT),
-            "QUIT disabled in set -> grayed"
+            "QUIT in the disabled set -> grayed"
         );
     }
 
@@ -641,7 +651,7 @@ mod tests {
         // BITE for the broker: without update_menu_commands the snapshot stays
         // None and every command reads enabled (the startup gap menus share).
         let line = StatusLine::new(Rect::new(0, 0, 40, 1), sample_defs());
-        assert!(line.cmd_set().is_none());
+        assert!(line.disabled_cmds().is_none());
         assert!(line.command_enabled(Command::QUIT));
         assert!(line.command_enabled(Command::HELP));
     }
@@ -722,11 +732,10 @@ mod tests {
         use std::collections::VecDeque;
 
         let mut line = StatusLine::new(Rect::new(0, 0, 40, 1), sample_defs());
-        // Disable QUIT via the broker snapshot.
-        let mut cs = CommandSet::new();
-        cs.enable_cmd(Command::HELP);
-        cs.disable_cmd(Command::QUIT);
-        line.update_menu_commands(&cs);
+        // Disable QUIT via the broker snapshot (the DISABLED set).
+        let mut disabled = CommandSet::new();
+        disabled.insert(Command::QUIT);
+        line.update_menu_commands(&disabled);
 
         let mut out = VecDeque::new();
         let mut timers = crate::timer::TimerQueue::new();
@@ -771,10 +780,9 @@ mod tests {
         // broker snapshot. Proves the color matrix and the `i += l + 2` layout
         // (the hidden item adds nothing).
         let mut line = StatusLine::new(Rect::new(0, 0, 40, 1), sample_defs());
-        let mut cs = CommandSet::new();
-        cs.enable_cmd(Command::HELP);
-        cs.disable_cmd(Command::QUIT);
-        line.update_menu_commands(&cs);
+        let mut disabled = CommandSet::new();
+        disabled.insert(Command::QUIT);
+        line.update_menu_commands(&disabled);
         insta::assert_snapshot!(render(&mut line, 40, 1));
     }
 

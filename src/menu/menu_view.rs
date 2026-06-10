@@ -41,7 +41,7 @@
 //!   at *construction*, so a menu is born with its `disabled` flags correct. Our
 //!   row-46 builder has no command set, so menus are born **all-enabled**, and the
 //!   broker here only corrects them on a `cmCommandSetChanged` broadcast — which
-//!   does NOT fire at startup (`default_command_set` seeds directly, leaving
+//!   does NOT fire at startup (`initial_disabled_commands` seeds directly, leaving
 //!   `command_set_changed == false`). Invisible at row 49 (nothing draws; the
 //!   accelerator path is backstopped by the pump's `drop_disabled` filter), but a
 //!   menu holding a startup-disabled command (`cmZoom`/`cmClose`/`cmResize`/
@@ -220,12 +220,15 @@ pub fn hot_key(menu: &Menu, key: KeyEvent) -> Option<Command> {
     None
 }
 
-/// Regray the menu tree against the program's live command set. Ports
-/// `TMenuView::updateMenu`.
+/// Regray the menu tree against the program's live **disabled-command set**
+/// (denylist, D1). Ports `TMenuView::updateMenu`.
 ///
-/// For each **command item** sets `disabled = !cs.has(command)`; **recurses into
-/// submenus** (a submenu's own `disabled` is never touched — C++ updates only
-/// command items, recursing the submenu's items); **skips separators**.
+/// `disabled_cmds` is the set of commands currently *disabled* (the complement
+/// of C++'s `curCommandSet`). For each **command item** sets
+/// `disabled = disabled_cmds.has(command)` (C++ `!commandEnabled(command)`);
+/// **recurses into submenus** (a submenu's own `disabled` is never touched —
+/// C++ updates only command items, recursing the submenu's items); **skips
+/// separators**.
 ///
 /// The C++ `Boolean updateMenu` returns whether anything changed (so
 /// `handleEvent` can `drawView`). That return is **intentionally dropped**: under
@@ -236,17 +239,17 @@ pub fn hot_key(menu: &Menu, key: KeyEvent) -> Option<Command> {
 ///
 /// The C++ `if(menu != 0)` null-guard is moot in Rust: the [`Menu`] is owned, not
 /// a nullable pointer.
-pub fn update_menu_commands(menu: &mut Menu, cs: &CommandSet) {
+pub fn update_menu_commands(menu: &mut Menu, disabled_cmds: &CommandSet) {
     for item in &mut menu.items {
         match item {
             MenuItem::Separator => {}
             MenuItem::SubMenu { menu: sub, .. } => {
-                update_menu_commands(sub, cs);
+                update_menu_commands(sub, disabled_cmds);
             }
             MenuItem::Command {
                 command, disabled, ..
             } => {
-                *disabled = !cs.has(*command);
+                *disabled = disabled_cmds.has(*command);
             }
         }
     }
@@ -320,7 +323,7 @@ pub fn handle_event(mv: &MenuViewState, ev: &mut Event, ctx: &mut Context) {
                 // disabled items, and that cached flag is kept current by the §2
                 // regray broker; (b) even a stale-enabled post is dropped by the
                 // pump's command boundary filter (program.rs: an Event::Command
-                // whose cmd is not in command_set is cleared before routing). The
+                // whose cmd is in the disabled set is cleared before routing). The
                 // only gap is a one-idle-cycle staleness window between a
                 // command-set change and the next cmCommandSetChanged regray —
                 // accepted.
@@ -518,15 +521,15 @@ mod tests {
     #[test]
     fn update_menu_commands_regrays_recursively_against_set() {
         let mut menu = sample_menu();
-        // Enable Open + Next, leave New disabled (not in the set).
-        let mut cs = CommandSet::new();
-        cs.enable_cmd(Command::OPEN);
-        cs.enable_cmd(Command::NEXT);
+        // The DISABLED set (denylist): New + Next disabled, Open left enabled.
+        let mut disabled_cmds = CommandSet::new();
+        disabled_cmds.insert(Command::NEW);
+        disabled_cmds.insert(Command::NEXT);
 
-        update_menu_commands(&mut menu, &cs);
+        update_menu_commands(&mut menu, &disabled_cmds);
 
-        // File > Open: enabled in set → disabled == false.
-        // File > New: NOT in set → disabled == true.
+        // File > Open: NOT in the disabled set → disabled == false.
+        // File > New: in the disabled set → disabled == true.
         let file = match &menu.items[0] {
             MenuItem::SubMenu { menu, .. } => menu,
             _ => panic!("items[0] is File"),
@@ -536,7 +539,7 @@ mod tests {
                 command, disabled, ..
             } => {
                 assert_eq!(*command, Command::OPEN);
-                assert!(!*disabled, "Open is in the set → enabled");
+                assert!(!*disabled, "Open is not in the disabled set → enabled");
             }
             _ => panic!("File[0] is Open"),
         }
@@ -545,12 +548,12 @@ mod tests {
                 command, disabled, ..
             } => {
                 assert_eq!(*command, Command::NEW);
-                assert!(*disabled, "New is NOT in the set → disabled");
+                assert!(*disabled, "New is in the disabled set → disabled");
             }
             _ => panic!("File[1] is New"),
         }
-        // Window > Next (a SECOND-level submenu): enabled → disabled == false.
-        // Proves the recursion reaches a later sibling submenu.
+        // Window > Next (a SECOND-level submenu): in the disabled set →
+        // disabled == true. Proves the recursion reaches a later sibling submenu.
         let window = match &menu.items[1] {
             MenuItem::SubMenu { menu, .. } => menu,
             _ => panic!("items[1] is Window"),
@@ -560,29 +563,45 @@ mod tests {
                 command, disabled, ..
             } => {
                 assert_eq!(*command, Command::NEXT);
-                assert!(!*disabled, "Next is in the set → enabled");
+                assert!(*disabled, "Next is in the disabled set → disabled");
             }
             _ => panic!("Window[0] is Next"),
         }
     }
 
     #[test]
-    fn update_menu_commands_predicate_is_negated_membership() {
-        // Bite-check against the WRONG predicate `disabled = cs.has(command)`:
-        // an item NOT in the set must come out `disabled == true`. With the wrong
-        // (un-negated) predicate it would be false, failing this assertion.
+    fn update_menu_commands_predicate_is_plain_membership() {
+        // Bite-check against the WRONG (allowlist-era) predicate
+        // `disabled = !cs.has(command)`: with an EMPTY disabled set every item
+        // must come out enabled. Under the negated predicate an item absent from
+        // the set would gray, failing this assertion.
         let mut menu = Menu::builder()
-            .command("~S~ave", Command::SAVE) // ctor default: disabled == false
+            .item(MenuItem::SubMenu {
+                name: "~F~ile".to_string(),
+                key_code: None,
+                help_ctx: HelpCtx::NO_CONTEXT,
+                disabled: false,
+                menu: Menu::builder().command("~S~ave", Command::SAVE).build(),
+            })
             .build();
-        let empty = CommandSet::new(); // SAVE not present
+        // Pre-gray the inner item so the regray has to actively UN-gray it.
+        if let MenuItem::SubMenu { menu: sub, .. } = &mut menu.items[0]
+            && let MenuItem::Command { disabled, .. } = &mut sub.items[0]
+        {
+            *disabled = true;
+        }
+        let empty = CommandSet::new(); // nothing disabled
 
         update_menu_commands(&mut menu, &empty);
 
         match &menu.items[0] {
-            MenuItem::Command { disabled, .. } => assert!(
-                *disabled,
-                "command absent from set → disabled (negated membership)"
-            ),
+            MenuItem::SubMenu { menu: sub, .. } => match &sub.items[0] {
+                MenuItem::Command { disabled, .. } => assert!(
+                    !*disabled,
+                    "command absent from the DISABLED set → enabled (plain membership)"
+                ),
+                _ => unreachable!(),
+            },
             _ => unreachable!(),
         }
     }
@@ -591,7 +610,8 @@ mod tests {
     fn update_menu_commands_does_not_touch_submenu_disabled() {
         // A submenu's own `disabled` is never written (C++ updates only command
         // items). Start with a submenu marked disabled and assert it stays so
-        // even though its inner command gets regrayed.
+        // even though its inner command gets regrayed (to disabled, via the
+        // denylist).
         let mut menu = Menu::builder()
             .item(MenuItem::SubMenu {
                 name: "~F~ile".to_string(),
@@ -601,17 +621,17 @@ mod tests {
                 menu: Menu::builder().command("~O~pen", Command::OPEN).build(),
             })
             .build();
-        let mut cs = CommandSet::new();
-        cs.enable_cmd(Command::OPEN);
+        let mut disabled_cmds = CommandSet::new();
+        disabled_cmds.insert(Command::OPEN); // OPEN is disabled
 
-        update_menu_commands(&mut menu, &cs);
+        update_menu_commands(&mut menu, &disabled_cmds);
 
         match &menu.items[0] {
             MenuItem::SubMenu { disabled, menu, .. } => {
                 assert!(*disabled, "the submenu's own disabled flag is left alone");
                 match &menu.items[0] {
                     MenuItem::Command { disabled, .. } => {
-                        assert!(!*disabled, "the inner command WAS regrayed (enabled)")
+                        assert!(*disabled, "the inner command WAS regrayed (disabled)")
                     }
                     _ => unreachable!(),
                 }

@@ -71,7 +71,10 @@ namespacing — 1991 C++ had no real namespaces.
   (see the refinement below): the set of physical keys is fixed, so it is a
   closed `enum Key` (D4), not a newtype. (`sf*`/`of*` are handled by D5.)
   Because a `Command`'s value is open identity rather than a 0–255 space, the
-  enabled-command set is a `HashSet<Command>`, not a fixed bit array.
+  command set is a `HashSet<Command>`, not a fixed bit array — and the
+  program's enable policy stores `curCommandSet` as its complement, a
+  **disabled set** (denylist; see below and
+  `docs/design/command-enablement.md`).
 
 > **Newtype vs. enum, by extensibility.** D1's rationale for open newtypes is
 > *extensibility*; apply it precisely. **Open, app/view-extensible spaces → open
@@ -94,12 +97,19 @@ namespacing — 1991 C++ had no real namespaces.
 > and is kept; only the token's representation modernizes. Zero porting cost at
 > call sites (`match cmd { Command::OK => … }`, menu tables, events all read the
 > same). *Consequence:* TV's "commands ≥ 256 are always enabled / the 256-entry
-> trackable range" rule is **dropped** (a bit-array artifact). `TCommandSet`
-> becomes a plain set over `HashSet<Command>`
+> trackable range" rule is **subsumed** (it was a bit-array capacity artifact).
+> `TCommandSet` becomes a plain, polarity-neutral set over `HashSet<Command>`
 > (`enable`/`disable`/`has`/union/intersection/difference) with no range guard
-> and no `all()`; the *enabled-by-default* policy lives later in the
-> `TView`/`TProgram` row (likely a tracked disabled set), not in the set
-> primitive.
+> and no `all()`; the *enabled-by-default* policy lives in `Program`, which
+> stores `curCommandSet` as its complement — a **disabled set** (denylist):
+> `command_enabled(cmd) == !disabled.has(cmd)`, seeded with exactly the five
+> startup-disabled window commands from `initCommands()`
+> (`cmZoom`/`cmClose`/`cmResize`/`cmNext`/`cmPrev`). Every command — including
+> any app-minted `Command::custom` — is enabled by default *and* maskable,
+> which reproduces observable C++ behavior while being strictly more capable
+> than the ">255 never maskable" half. Views read it via the per-pump
+> `Context::command_enabled` snapshot. Full rationale (including the
+> allowlist mistake this replaced): `docs/design/command-enablement.md`.
 
 > **Constants live with their owner.** The `command` module hosts only the
 > framework's **shared vocabulary** — the core/dialog/edit/window/app/broadcast
@@ -839,7 +849,7 @@ and [`docs/superpowers/plans/2026-06-09-color-picker.md`](file:///home/oetiker/c
 | `owner` / `current` / `selected` | `ViewId` handles | D3 |
 | `drawHide`/`drawShow`/`drawUnder*`, buffered group | — (dropped; redraw + diff) | D8 |
 | `TStreamable`, `TResourceFile` | — (dropped; serde if revived) | D12 |
-| `TCommandSet` (256-bit) | `CommandSet` over `HashSet<Command>` (no range guard) | D1 |
+| `TCommandSet` (256-bit) | `CommandSet` over `HashSet<Command>` (no range guard; `Program` stores `curCommandSet` as a **disabled set**, denylist) | D1 |
 | `forEach` / `firstThat` / `TSortedCollection` | iterators / `Vec<T: Ord>` | (idiom) |
 
 ---
