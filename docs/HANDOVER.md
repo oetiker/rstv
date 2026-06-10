@@ -145,9 +145,10 @@
 ## Next — all 92 rows complete; backlog seams being cleared
 
 **All 92 PORT-ORDER rows are COMPLETE.** Post-completion work now clears the
-deferred backlog seams. **HEAD = `c8e3d93`; 964 lib tests green; clippy + fmt
-clean.** Cleared this session: the **ModalFrame outside-click seam** (row 56/57)
-and **`FileEditor::saveAs`** (rows 68/69 breadcrumb) — see below + IMPLEMENTATION-LOG.
+deferred backlog seams. **HEAD = `a947004`; 964 lib tests green; clippy + fmt
+clean.** Cleared this session: the **ModalFrame outside-click seam** (row 56/57),
+**`FileEditor::saveAs`** (rows 68/69 breadcrumb), and the **`hello.rs` demo
+app** now wires `EditWindow + FileDialog` end-to-end — see IMPLEMENTATION-LOG.
 
 **Rows 91–92 (terminal family) are COMPLETE and on `main`.** `TextDevice` (trait)
 and `Terminal` (ring-buffer terminal view) live in `src/widgets/terminal.rs`.

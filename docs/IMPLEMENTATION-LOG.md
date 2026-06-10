@@ -5,6 +5,36 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — hello.rs: EditWindow + FileDialog wired into the demo app
+
+Enhanced `examples/hello.rs` to be a real editor application: File → Open (F3),
+File → New (F4), File → Save (F2), File → Save As… all work. New windows fill the
+desktop extent and get keyboard focus immediately. This validates the `FileEditor`
+brokers (`SyncEditorDelta`, `OpenSaveAsDialog`, `SaveAsPick`, `ModalFrame` outside-
+click, modified-prompt) end-to-end in a running app, not just unit tests.
+
+### New `Program` API (`a947004`)
+
+- **`desktop_rect()`** — desktop local extent (mirrors C++ `deskTop→getExtent()`).
+- **`desktop_insert(view)`** — insert a window into the desktop and focus it at
+  runtime. Uses `Desktop::insert_and_focus(view, ctx)` reached via a new
+  `as_any_mut → downcast_mut::<Desktop>()` hatch (same `as_any_mut` pattern as
+  `FileEditor`, `Button`; `as_any_mut` removed from `Desktop`'s `#[delegate]` skip
+  list and overridden to `Some(self)`).
+- **`open_file_dialog(title, wild)`** — runs a `FileDialog` via `exec_view`, reads
+  the `resolved_name` via the new `gather_self = true` branch (see below).
+- **`exec_view_with_completion` `gather_self: bool` parameter** — when `true`,
+  pre-mints the modal's ViewId with `ViewId::next()`, inserts via `insert_with_id`,
+  and automatically passes that id as the gather target so `FileDialog::value()`
+  (the resolved path) is readable after the modal closes. All 6 existing callers
+  unchanged (pass `false`).
+
+### `lib.rs`
+
+Re-exports: `EditWindow`, `FileEditor`, `FileDialog`, `FD_OPEN_BUTTON`.
+
+---
+
 ## Session — FileEditor::saveAs (view-triggered FileDialog seam)
 
 Wired **`TFileEditor::saveAs`** (`tfiledtr.cpp`) — the last unported editor
