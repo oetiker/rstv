@@ -34,7 +34,7 @@
 | row | item | needs | sites |
 |---|---|---|---|
 | B1 | command-graying adoptions | A1 | `button.rs:196,463` (cmCommandSetChanged graying), `input_line.rs:280,688` (cut/copy/paste enable) |
-| B2 ◑ | press-and-hold adoptions | A3 | **Wave 1 ✅ (`90fc0ce`,`de1c0f0`):** scrollbar arrow/thumb, inputline edge+drag-select, cluster release-confirm, frame close-icon release-confirm. **Remaining:** `list_viewer.rs` drag/auto-scroll (skip-4), `outline.rs` (skip-3, dragged<2 graph-toggle gate), `status_line.rs` drag-highlight (needs drawSelect hover state), `editor.rs:1590` (drag-select/edge-scroll/wheel + middle-pan — the largest; LAST) |
+| B2 ◑ | press-and-hold adoptions | A3 | **Waves 1+2 ✅ (`90fc0ce`,`de1c0f0`,`62bbd15`,`eb7648d`):** scrollbar, inputline, cluster, frame, listviewer, outline, statusline (the last also made pre-route deferreds first-class in the pump). **Remaining: `editor.rs:1590` only** (drag-select/edge-scroll/wheel + middle-pan, teditor1.cpp:540-583 — the High row) |
 | B3 | InputLine clipboard | A6 | `input_line.rs:662`: wire cmCut/cmCopy/cmPaste to the existing `SetClipboard`/paste brokers (editor precedent). The brokers reach the backend clipboard, which A6 makes the OS clipboard. |
 | B4 ✅ | accelerator adoptions + ctrlToArrow | A5 | **landed WITH A5** (`43c9d30`): button/label plain-letter postProcess accelerators, cluster accelerator scan, ctrl_to_arrow for cluster + scrollbar |
 | B5 | resize republish family | — | `scroller.rs:51` + `list_viewer.rs:58,314` (re-emit scrollbar params on `change_bounds`), `window.rs:371` (re-push `set_zoomed`), keyboard resize sub-mode `window.rs:672,818` (33d-2) |

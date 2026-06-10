@@ -5,6 +5,35 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session addendum — B2 wave 2: listviewer, outline, statusline holds
+
+**`62bbd15`** — **listviewer + outline** (trait-shared adoption): move+auto
+tracks with the faithful skip counters (`mouseAutosToSkip=4` /
+`mouseAutoToSkip=3`), in-view item recompute, out-of-view stepping (±1 /
+±size.y page), the outline `dragged<2` gate (a drag must NOT toggle graph
+expansion — and `dragged` increments on autos too, verified against
+toutline.cpp:436-438), and the double-click lifecycle documented truthfully
+(the up POPS the capture, so a double-click's second down re-enters the down
+arm fresh; the C++ up-path meDoubleClick check is semantically unreachable).
+The free draw fns take `&mut L` to cache `abs_origin` (do-not-revert NOTEs).
+All ListViewer implementors inherit with zero per-type changes. +22 tests.
+
+**`eb7648d`** — **statusline drag-highlight** + a FOUNDATION side-fix. The
+drawSelect matrix renders the held item (green cSelect / dark-on-green
+cSelDisabled, snapshot-pinned); the command posts on release over an enabled
+item (release-time check via the A1 cache). The side-fix: the status-line
+pre-route could not start a track — deferreds queued by a pre-route whose
+event was consumed were SILENTLY DROPPED (the documented LATENT COUPLING in
+pump_once). An implementer PushCapture-only partition hack was rejected in
+review; the landed fix is general: **the deferred drain is hoisted out of
+the `!ev.is_nothing()` dispatch gate** (pre-route deferreds of every kind
+are now first-class, uniform timing), and **`sync_gate_bounds` runs at the
+TOP of the dispatch gate** (covers same-pump resize relayout + all previous
+drains — no stale-bounds window). A focused pump re-review enumerated all
+five pump paths. +10 tests.
+
+**B2 is now 7/8 — only the editor adoption remains.**
+
 ## Session addendum — B2 wave 1: scrollbar, inputline, cluster, frame holds
 
 **`90fc0ce` + `de1c0f0`** — the first four mouse-track adoptions (parallel
