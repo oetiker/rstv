@@ -1871,6 +1871,34 @@ impl Program {
                                         b.make_default(enable, &mut ctx);
                                     }
                                 }
+                                // -- row 31: Button mouse press-and-hold broker (D3/D9) --
+                                //
+                                // `ButtonTrackCapture` posts these on `MouseMove`
+                                // (containment flip) and `MouseUp`. Resolve `button`,
+                                // downcast to `Button`, and apply the tracked state.
+                                Deferred::ButtonTrackDown { button, down } => {
+                                    use crate::widgets::Button;
+                                    if let Some(b) = group
+                                        .find_mut(button)
+                                        .and_then(|v| v.as_any_mut())
+                                        .and_then(|a| a.downcast_mut::<Button>())
+                                    {
+                                        b.down = down;
+                                    }
+                                }
+                                Deferred::ButtonTrackRelease { button, pressed } => {
+                                    use crate::widgets::Button;
+                                    if let Some(b) = group
+                                        .find_mut(button)
+                                        .and_then(|v| v.as_any_mut())
+                                        .and_then(|a| a.downcast_mut::<Button>())
+                                    {
+                                        b.down = false;
+                                        if pressed {
+                                            b.press(&mut ctx);
+                                        }
+                                    }
+                                }
                                 // -- colorpick: the color-picker drag broker (D3) --
                                 //
                                 // `ColorDragCapture` posts `ColorPickerDrag` on each
@@ -3280,6 +3308,150 @@ mod tests {
             program.capture_len(),
             0,
             "ColorDragCapture popped on MouseUp"
+        );
+    }
+
+    // -- row 31: ButtonTrackCapture end-to-end through the pump ----------------
+
+    /// **End-to-end test of the button mouse press-and-hold tracking (D9 capture
+    /// + `ButtonTrackDown`/`ButtonTrackRelease` pump arms).**
+    ///
+    /// A button is inserted into the desktop at `(5, 5, 15, 7)` so its absolute
+    /// origin is `(5, 5)`. An initial pump-draw caches `abs_origin`. Then:
+    ///
+    /// 1. `MouseDown` at absolute `(8, 5)` = button-local `(3, 0)` (inside
+    ///    `clickRect`) → `button.down == true`, one capture pushed.
+    /// 2. `MouseMove` at absolute `(4, 5)` = button-local `(-1, 0)` (outside
+    ///    `trackRect`) → pump applies `ButtonTrackDown { down: false }` →
+    ///    `button.down == false`.
+    /// 3. `MouseMove` at absolute `(8, 5)` = button-local `(3, 0)` (inside) →
+    ///    `button.down == true`.
+    /// 4. `MouseUp` → `ButtonTrackRelease { pressed: true }` → command fired,
+    ///    `button.down == false`, capture popped.
+    ///
+    /// Button bounds: `(5, 5, 15, 7)` — size 10×2.
+    ///   clickRect  = (1, 0, 9, 1) (button-local)
+    ///   trackRect  = (1, 0, 10, 1) (clickRect widened b.x by 1)
+    ///   abs_origin = (5, 5) (desktop is at (0,0) in root)
+    #[test]
+    fn button_track_capture_end_to_end_through_pump() {
+        use crate::widgets::{Button, ButtonFlags};
+
+        // Helper to read b.down from the tree.
+        fn btn_down(program: &mut Program, id: ViewId) -> bool {
+            program
+                .group_mut()
+                .find_mut(id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<Button>())
+                .map(|b| b.down)
+                .expect("button resolves")
+        }
+
+        let ids: Rc<RefCell<Option<ViewId>>> = Rc::new(RefCell::new(None));
+        let ids_cap = ids.clone();
+        let (backend, _handle) = HeadlessBackend::new(80, 25);
+        let theme = Theme::classic_blue();
+        let clock = Rc::new(ManualClock::new(0));
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            theme,
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                // Button at (5, 5, 15, 7) — 10×2 in the desktop.
+                let btn = Button::new(
+                    Rect::new(5, 5, 15, 7),
+                    "~O~K",
+                    Command::OK,
+                    ButtonFlags::new(),
+                );
+                let btn_id = desktop.insert_view(Box::new(btn));
+                *ids_cap.borrow_mut() = Some(btn_id);
+                Some(Box::new(desktop))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        let btn_id = ids.borrow().expect("button id set");
+        program.out_events.clear();
+
+        // Pump a noop broadcast so the tree draws and button.abs_origin is cached.
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.pump_once();
+        // abs_origin is now (5, 5): the button is at (5, 5) in the desktop
+        // which is at (0, 0) in the root group.
+
+        // --- Step 1: MouseDown at abs (8, 5) = button-local (3, 0) — inside
+        // clickRect (1, 0, 9, 1). Expect: down == true, capture pushed.
+        program.out_events.push_back(mouse_down_at(8, 5));
+        program.pump_once();
+        assert!(
+            btn_down(&mut program, btn_id),
+            "button.down = true after MouseDown inside clickRect"
+        );
+        assert_eq!(program.capture_len(), 1, "capture pushed after MouseDown");
+        // No command posted yet (press fires on MouseUp, not MouseDown).
+        assert!(
+            !program
+                .out_events
+                .iter()
+                .any(|e| *e == Event::Command(Command::OK)),
+            "no command immediately after MouseDown"
+        );
+
+        // --- Step 2: MouseMove at abs (4, 5) = button-local (-1, 0) — outside
+        // trackRect (1, 0, 10, 1). Capture posts ButtonTrackDown{down: false};
+        // pump applies it: button.down = false.
+        program.out_events.push_back(mouse_move_at(4, 5));
+        program.pump_once();
+        assert!(
+            !btn_down(&mut program, btn_id),
+            "button.down = false after MouseMove outside trackRect"
+        );
+        assert_eq!(
+            program.capture_len(),
+            1,
+            "capture still live after MouseMove outside"
+        );
+
+        // --- Step 3: MouseMove at abs (8, 5) = button-local (3, 0) — inside.
+        program.out_events.push_back(mouse_move_at(8, 5));
+        program.pump_once();
+        assert!(
+            btn_down(&mut program, btn_id),
+            "button.down = true after MouseMove back inside trackRect"
+        );
+        assert_eq!(
+            program.capture_len(),
+            1,
+            "capture still live after re-enter"
+        );
+
+        // --- Step 4: MouseUp — ButtonTrackRelease { pressed: true } → press()
+        // fires, down = false, capture popped.
+        program.out_events.push_back(mouse_up_at(8, 5));
+        program.pump_once();
+        assert!(
+            !btn_down(&mut program, btn_id),
+            "button.down = false after MouseUp"
+        );
+        assert_eq!(program.capture_len(), 0, "capture popped on MouseUp");
+        // press() posts RECORD_HISTORY + Command::OK.
+        let drained: Vec<Event> = program.out_events.drain(..).collect();
+        assert!(
+            drained.contains(&Event::Broadcast {
+                command: Command::RECORD_HISTORY,
+                source: None
+            }),
+            "RECORD_HISTORY broadcast fired"
+        );
+        assert!(
+            drained.contains(&Event::Command(Command::OK)),
+            "Command::OK fired after MouseUp inside"
         );
     }
 

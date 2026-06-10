@@ -430,6 +430,39 @@ pub enum Deferred {
         /// The [`FileEditor`](crate::widgets::FileEditor) to save the picked name to.
         editor_id: ViewId,
     },
+
+    // -- row 31 (button): the mouse press-and-hold tracking broker (D3/D9) ----
+    //
+    // The `ButtonTrackCapture` (D9) posts these on each `MouseMove`/`MouseUp`
+    // while the mouse button is held. The pump resolves `button`, downcasts to
+    // `Button` via `as_any_mut`, and applies the tracked state. Both touch the
+    // **view-tree** family (same as the scroller/list broker ops), so the
+    // insertion-order drain stays order-equivalent.
+    /// **Set the button's pressed look** while the mouse is held. The
+    /// `ButtonTrackCapture` posts this on each `MouseMove` when containment
+    /// flips. The pump resolves `button`, downcasts to
+    /// [`Button`](crate::widgets::Button), and sets `b.down = down`. The whole-tree
+    /// redraw in the next pump pass renders the updated look.
+    ButtonTrackDown {
+        /// The button whose pressed look to update.
+        button: ViewId,
+        /// `true` = pressed look; `false` = normal look.
+        down: bool,
+    },
+    /// **Release the button's press tracking** on mouse-up. The pump resolves
+    /// `button`, downcasts to [`Button`](crate::widgets::Button), sets `b.down =
+    /// false`, and — if `pressed` — calls `b.press(&mut ctx)` (the button
+    /// fires). `pressed` is the LAST MOVE's tracked containment state, not the
+    /// mouse-up position (the C++ `do{}while(mouseEvent(…,evMouseMove))` loop
+    /// body never re-evaluates the up-event's position; see the D9 note on
+    /// `ButtonTrackCapture`).
+    ButtonTrackRelease {
+        /// The button to release.
+        button: ViewId,
+        /// Whether the last tracked move was inside the tracking rect — i.e.
+        /// whether to call `press()`.
+        pressed: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1091,6 +1124,28 @@ impl<'a> Context<'a> {
             answer_to,
             then_command,
         });
+    }
+
+    /// Request the button's pressed look be updated while the mouse is held —
+    /// **deferred** ([`Deferred::ButtonTrackDown`]). Posted by
+    /// `ButtonTrackCapture` on each `MouseMove` when containment flips. The pump
+    /// resolves `button`, downcasts to [`Button`](crate::widgets::Button), and
+    /// sets `b.down = down` (whole-tree redraw shows the updated look next pump).
+    pub fn request_button_track_down(&mut self, button: ViewId, down: bool) {
+        self.deferred
+            .push(Deferred::ButtonTrackDown { button, down });
+    }
+
+    /// Request the button's press tracking be released on mouse-up — **deferred**
+    /// ([`Deferred::ButtonTrackRelease`]). Posted by `ButtonTrackCapture` on
+    /// `MouseUp`. The pump resolves `button`, downcasts to
+    /// [`Button`](crate::widgets::Button), sets `b.down = false`, and — if
+    /// `pressed` — calls `b.press(&mut ctx)` (the button fires). `pressed` is
+    /// the LAST MOVE's tracked containment state, not the mouse-up position (the
+    /// C++ loop body never re-evaluates the up-event's position).
+    pub fn request_button_track_release(&mut self, button: ViewId, pressed: bool) {
+        self.deferred
+            .push(Deferred::ButtonTrackRelease { button, pressed });
     }
 
     /// Request the pump to open a [`FileDialog`](crate::dialog::FileDialog) for
