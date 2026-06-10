@@ -5,6 +5,29 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session addendum — OS clipboard by default: the TClipboard chain (A6)
+
+**`dfba123`** — **row A6, the user-directive row** (subagent-built from a
+read-only design investigation, two-stage reviewed): the internal clipboard
+string is no longer the default — `src/backend/clipboard.rs` lands the
+C++-faithful `TClipboard` chain (`tclipbrd.cpp` stores locally ONLY on
+platform failure). Copy: arboard native (no OSC emission on success) →
+OSC 52 fire-and-forget emit (crossterm `osc52` feature, shared output
+handle) → internal mirror → `false`. Paste: native → internal → `None`; no
+OSC 52 read (crossterm owns the input parser; terminals gate reads).
+arboard 3.6 behind a **default-on `os-clipboard` feature**
+(default-features off — no `image` crate; `wayland-data-control` on); init
+failure swallowed (clipboard absence must not fail B7's constructor);
+long-lived instance keeps the X11 selection alive (exit-loss caveat
+documented). **Zero changes above the backend** — trait/brokers/pump
+untouched; `HeadlessBackend` keeps its internal string (it's the fake) but
+`HeadlessHandle` gained `clipboard()`/`set_clipboard()` for B3/C9 tests.
+Bracketed paste deliberately deferred to C9 (enabling it while
+`Event::Paste` is dropped would silently kill terminal-paste). Design
+note: `docs/design/os-clipboard.md`. 1009 lib tests (+7); clippy clean on
+default AND `--no-default-features`; arboard round-trip smoke-verified
+live. **A4+A6 together close the run's user directives.**
+
 ## Session addendum — the resetCurrent cascade: currency is a tree property (A2)
 
 **`6a58919`** — **row A2, the second 🔴** (design by a read-only Plan

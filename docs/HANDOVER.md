@@ -162,8 +162,18 @@ chain-verification pass — every `theme.rs` value chain-documented, cyan
 window scheme live, `ListRoles`/`list_roles()` seam), and **B7** (RAII
 terminal lifecycle in `CrosstermBackend` — fallible `new()`,
 Drop/panic-hook/signal-thread restore, `hello.rs` main is 3 lines).
-**Next: A3 (D9 hold/auto-repeat capture seam), A5 (phased key dispatch),
-A6 (OS clipboard) — then the B1/B2/B3/B4 mechanical fan-out.** Cleared recently: the **currency foundation fix** (`focus_child`
+**Also landed: A6** (OS clipboard by default — the faithful `TClipboard`
+chain in `src/backend/clipboard.rs`: arboard native → OSC 52 → internal
+mirror; `os-clipboard` default-on feature; bracketed paste deferred to C9;
+`docs/design/os-clipboard.md`; HEAD `dfba123`, 1009 lib tests).
+**In flight: A5** (phased key dispatch + B4 hotkey adoptions — the `Phase`
+signal on Context, design approved; worktree `rstv-a5-phase`).
+**Approved design, queued behind A5: A3** (D9 hold/auto-repeat capture —
+pump-synthesized `Event::MouseAuto` at 440 ms/110 ms (tevent.cpp:52 +
+hardwrvr.cpp:470), `MouseTrackCapture` router + `Deferred::MouseTrack`,
+loop bodies stay in widgets; the A3 design proposal lives in this
+session's transcript and should be re-captured in docs/design/ when A3
+lands). **Then the B1/B2/B3 mechanical fan-out.** Cleared recently: the **currency foundation fix** (`focus_child`
 self-heal + `Program::new` startup `reset_current`; the `insert_and_focus`
 DEVIATION workaround retired — pre-inserted desktop windows now start focused
 and the topmost is clickable), **button mouse hold-tracking** (the button deferral-3
