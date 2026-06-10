@@ -167,14 +167,17 @@ chain in `src/backend/clipboard.rs`: arboard native → OSC 52 → internal
 mirror; `os-clipboard` default-on feature; bracketed paste deferred to C9;
 `docs/design/os-clipboard.md`; HEAD `dfba123`, 1009 lib tests).
 **Also landed: A5+B4** (`43c9d30` — the `Phase` signal on Context +
-button/label/cluster plain-hotkey accelerators + ctrl_to_arrow; HEAD
-`43c9d30`, 1022 lib tests). **Approved design, now unblocked: A3** (D9
-hold/auto-repeat capture —
-pump-synthesized `Event::MouseAuto` at 440 ms/110 ms (tevent.cpp:52 +
-hardwrvr.cpp:470), `MouseTrackCapture` router + `Deferred::MouseTrack`,
-loop bodies stay in widgets; the A3 design proposal lives in this
-session's transcript and should be re-captured in docs/design/ when A3
-lands). **Then the B1/B2/B3 mechanical fan-out.** Cleared recently: the **currency foundation fix** (`focus_child`
+button/label/cluster plain-hotkey accelerators + ctrl_to_arrow) and **A3**
+(`f07d4e0` — the MouseAuto synthesizer (440/110 ms) + `MouseTrackCapture`
+router seam + button migrated as the template; recipe in
+`docs/design/mouse-track.md`). **PHASE A IS COMPLETE** — HEAD `f07d4e0`,
+1034 lib tests. **Remaining: the mechanical fan-out** — B2 (seven
+press-and-hold adoptions per the mouse-track.md recipe + the A3 design's
+consumer table: scrollbar, inputline, cluster, listviewer, outline,
+statusline, frame close-icon, editor-last), B1 (button/inputline graying
+via `ctx.command_enabled`), B3 (InputLine clipboard via the existing
+brokers), B5 (resize republish), B6 (FileDialog finishers), B8 (small
+singletons). Cleared recently: the **currency foundation fix** (`focus_child`
 self-heal + `Program::new` startup `reset_current`; the `insert_and_focus`
 DEVIATION workaround retired — pre-inserted desktop windows now start focused
 and the topmost is clickable), **button mouse hold-tracking** (the button deferral-3

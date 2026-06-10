@@ -5,6 +5,32 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session addendum — MouseAuto + MouseTrackCapture: Phase A complete (A3)
+
+**`f07d4e0`** — **row A3, the last FOUNDATION seam** (subagent-built from a
+read-only design investigation, two-stage reviewed): the D9 successor of the
+C++ `do{...}while(mouseEvent(event, mask))` press-and-hold loops. (1) The
+pump synthesizes **`Event::MouseAuto`** globally while a real button is held
+— 440 ms initial / 110 ms cadence, derived from tevent.cpp:52 (8 BIOS ticks)
+× hardwrvr.cpp (55 ms); moves update the held position WITHOUT resetting the
+cadence; real events always win. Notably *more* faithful than upstream's
+modern platform layer, which only repeats while the terminal keeps sending
+reports. (2) **`MouseTrackCapture`** — a pure router (TrackMask
+move/auto/wheel): localizes + forwards masked events to the tracked view via
+the new `Deferred::MouseTrack` (pump find_mut→handle_event), swallows all
+else (the faithful mouseEvent discard), pops on MouseUp forwarding the
+localized up. **Loop bodies stay in the widgets** — the only design that
+works for the trait-object adopters (ListViewer/Outline). (3) Button
+migrated as the template; its bespoke capture + two Deferred variants
+deleted. Adoption recipe: `docs/design/mouse-track.md`. 1034 lib tests
+(+12 net); clippy + fmt clean.
+
+**With A3, Phase A of the backlog run is COMPLETE** — all six FOUNDATION
+seams (A1 🔴, A2 🔴, A3, A4, A5, A6) plus both user directives (A6 clipboard,
+B7 lifecycle) landed in one session. What remains is mechanical fan-out:
+B2 (seven press-and-hold adoptions), B1 (graying), B3 (InputLine
+clipboard), B5/B6/B8.
+
 ## Session addendum — phased key dispatch + plain-hotkey accelerators (A5+B4)
 
 **`43c9d30`** — **rows A5 + B4 in one** (subagent-built from a read-only
