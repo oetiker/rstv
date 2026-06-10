@@ -31,14 +31,6 @@
 
 use std::io;
 
-use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture},
-    execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
-};
-use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
-use signal_hook::iterator::Signals;
-
 use tvision::{
     Backend, Color, Command, CrosstermBackend, Desktop, EditWindow, Key, KeyEvent, Menu, MenuBar,
     Program, Rect, StatusDef, StatusLine, SystemClock, Theme, View, Window, alt,
@@ -196,61 +188,14 @@ fn alt_f3() -> KeyEvent {
 }
 
 // ---------------------------------------------------------------------------
-// Terminal setup (deferred out of CrosstermBackend until a later row)
-// ---------------------------------------------------------------------------
-
-/// Undo the terminal setup. Idempotent and safe to call more than once (Drop +
-/// the signal thread may both run).
-fn restore_terminal() {
-    let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
-    let _ = disable_raw_mode();
-}
-
-/// RAII terminal guard: raw mode + alternate screen + mouse capture on entry,
-/// restored on `Drop` — so a panic unwinding through `run` still restores the
-/// terminal. It also installs a signal thread so a `kill` (SIGTERM), a hangup
-/// (SIGHUP), or SIGINT restores the terminal before exiting — without it the
-/// shell is left in raw mode on the alternate screen. (SIGKILL is uncatchable; a
-/// `kill -9` will still leave the terminal dirty — run `reset` to recover.)
-struct TerminalGuard;
-
-impl TerminalGuard {
-    fn enter() -> io::Result<Self> {
-        enable_raw_mode()?;
-        execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
-
-        // Restore on fatal signals. We handle them on a dedicated thread (not in
-        // an async-signal context), so calling into crossterm is sound. On the
-        // first such signal we restore and exit (130 = 128 + SIGINT, the usual
-        // shell convention); Drop does not run on `process::exit`, but we have
-        // already restored.
-        let mut signals = Signals::new([SIGINT, SIGTERM, SIGHUP])?;
-        std::thread::spawn(move || {
-            if signals.forever().next().is_some() {
-                restore_terminal();
-                std::process::exit(130);
-            }
-        });
-
-        Ok(TerminalGuard)
-    }
-}
-
-impl Drop for TerminalGuard {
-    fn drop(&mut self) {
-        restore_terminal();
-    }
-}
-
-// ---------------------------------------------------------------------------
 // int main()
 // ---------------------------------------------------------------------------
 
 fn main() -> io::Result<()> {
-    let _guard = TerminalGuard::enter()?;
-
-    let mut app = HelloApp::new(Box::new(CrosstermBackend::new()));
+    // CrosstermBackend::new() owns the whole terminal lifecycle (raw mode,
+    // alternate screen, mouse capture; restored on drop / panic / signal) —
+    // just like the C++ TApplication constructor chain.
+    let mut app = HelloApp::new(Box::new(CrosstermBackend::new()?));
     let _result: Command = app.run();
-
     Ok(())
 }

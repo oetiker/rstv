@@ -5,11 +5,29 @@
 //! This backend is the production path.  It does not run in CI (no TTY), but it
 //! must compile and be correct/reasonable.
 //!
-//! ## Setup (TODO)
-//! Raw-mode, alternate-screen, and mouse-capture setup are not yet wired into
-//! `CrosstermBackend::new()`.  The event loop (`Program`, row 31) is live, but
-//! the terminal-lifecycle calls (`enable_raw_mode`, `EnterAlternateScreen`,
-//! `EnableMouseCapture`) have not been added here yet.
+//! ## Terminal lifecycle (RAII)
+//! `CrosstermBackend::new()` performs the full terminal setup — raw mode,
+//! alternate screen, mouse capture — mirroring the C++ `TApplication`
+//! constructor chain (`TScreen` does the init there). `Drop` restores the
+//! terminal (best-effort, errors ignored), so a TV program never hand-rolls
+//! terminal setup.
+//!
+//! Two process-global hooks (installed once, on the first construction) keep
+//! the user's terminal usable when the program does not exit normally:
+//!
+//! * a **panic hook** that restores the terminal before delegating to the
+//!   previous hook — so the panic message prints on the normal screen, and a
+//!   crashed TUI app leaves the shell sane;
+//! * (unix) a **signal thread** that restores the terminal on `SIGINT`,
+//!   `SIGTERM`, or `SIGHUP` and exits with status `128 + signal_number` (the
+//!   shell convention: 130 for SIGINT, 143 for SIGTERM, 129 for SIGHUP).
+//!   Signals are handled on a dedicated thread — not in an async-signal
+//!   context — so calling into crossterm is sound. (`SIGKILL` is uncatchable;
+//!   a `kill -9` still leaves the terminal dirty — run `reset` to recover.)
+//!
+//! The restore sequence is idempotent, so Drop, the panic hook, and the signal
+//! thread may each run it without harm. Both hooks persist for the process
+//! lifetime (a later restore on an already-restored terminal is a no-op).
 //!
 //! ## Clipboard
 //! The clipboard is implemented as an internal string buffer.  OSC 52 terminal
@@ -28,9 +46,13 @@ use std::time::Duration;
 
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
-    event::{self, KeyCode, KeyEventKind, KeyModifiers as CKeyModifiers, MouseEventKind},
-    queue,
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEventKind,
+        KeyModifiers as CKeyModifiers, MouseEventKind,
+    },
+    execute, queue,
     style::{Attribute, Color as CColor, Colors, Print, ResetColor, SetAttribute, SetColors},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 
 use crate::backend::{Backend, bios_to_xterm16, rgb_to_xterm256, xterm256_to_xterm16};
@@ -68,41 +90,153 @@ pub enum ColorDepth {
 
 /// Production backend backed by crossterm.
 ///
-/// Construct with [`CrosstermBackend::new`].  Raw mode and alternate-screen
-/// setup are intentionally deferred to the event-loop row (row 31).
+/// Construct with [`CrosstermBackend::new`].  Construction performs the full
+/// terminal setup (raw mode, alternate screen, mouse capture) and `Drop`
+/// restores the terminal — see the module-level `## Terminal lifecycle (RAII)`
+/// note.
 pub struct CrosstermBackend {
     out: Stdout,
     color_depth: ColorDepth,
     clipboard: String,
 }
 
-impl CrosstermBackend {
-    /// Construct a `CrosstermBackend` writing to stdout.
-    ///
-    /// NOTE: raw mode, alternate-screen, and mouse capture are not yet set up
-    /// here (see the module-level `## Setup (TODO)` note).
-    pub fn new() -> Self {
-        CrosstermBackend {
-            out: io::stdout(),
-            color_depth: ColorDepth::TrueColor,
-            clipboard: String::new(),
+/// Undo the terminal setup: disable mouse capture, leave the alternate screen,
+/// disable raw mode.  Best-effort and idempotent — safe to call more than once
+/// (`Drop`, the panic hook, and the signal thread may each run it).
+fn restore_terminal() {
+    let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
+    let _ = disable_raw_mode();
+}
+
+/// Install the process-global restore hooks: the panic hook (always) and the
+/// unix signal thread, no matter how many backends are constructed.
+///
+/// **What `Ok(())` guarantees:** the panic hook is installed **and** (on
+/// unix) the signal-restore thread is running.  The two are latched
+/// separately:
+///
+/// * the panic-hook install is infallible, so it uses a plain
+///   [`Once`](std::sync::Once);
+/// * the signal-thread setup can fail (`Signals::new`), so it latches
+///   **success-only** (see [`start_signal_thread`]): a transient first
+///   failure is retried on the next construction, and a consistent failure
+///   keeps returning the real `Err` instead of silently reporting `Ok`
+///   without a signal thread.
+///
+/// The panic hook restores the terminal *before* delegating to the previous
+/// hook, so the panic message prints on the normal screen.
+fn install_restore_hooks() -> io::Result<()> {
+    use std::sync::Once;
+    static PANIC_HOOK: Once = Once::new();
+
+    PANIC_HOOK.call_once(|| {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            restore_terminal();
+            prev(info);
+        }));
+    });
+
+    #[cfg(unix)]
+    start_signal_thread()?;
+
+    Ok(())
+}
+
+/// Start the unix signal-restore thread, at most once per process
+/// (success-only latching — see [`install_restore_hooks`]).
+///
+/// The thread waits for `SIGINT`/`SIGTERM`/`SIGHUP`, restores the terminal,
+/// and exits with status `128 + signal_number` — the shell convention (130
+/// for SIGINT, 143 for SIGTERM, 129 for SIGHUP).  `Drop` does not run on
+/// `process::exit`, but the terminal has already been restored.
+///
+/// The latch is a `Mutex<bool>` rather than an atomic: the lock is held
+/// across `Signals::new` + spawn, so two backends constructed concurrently
+/// cannot both spawn a thread (an `AtomicBool` checked before the fallible
+/// registration would permit a benign but pointless double-spawn).  This is
+/// cold-path construction code — the lock cost is irrelevant.
+#[cfg(unix)]
+fn start_signal_thread() -> io::Result<()> {
+    use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
+    use signal_hook::iterator::Signals;
+    use std::sync::Mutex;
+
+    static STARTED: Mutex<bool> = Mutex::new(false);
+    let mut started = STARTED.lock().unwrap_or_else(|e| e.into_inner());
+    if *started {
+        return Ok(());
+    }
+
+    let mut signals = Signals::new([SIGINT, SIGTERM, SIGHUP])?;
+    std::thread::spawn(move || {
+        if let Some(signum) = signals.forever().next() {
+            restore_terminal();
+            // `128 + signum` is the shell convention for death-by-signal
+            // (130 SIGINT, 143 SIGTERM, 129 SIGHUP).  Deliberate improvement
+            // over the pre-B7 example code, which hard-coded 130 for all
+            // three signals.
+            std::process::exit(128 + signum);
         }
+    });
+    *started = true;
+    Ok(())
+}
+
+impl CrosstermBackend {
+    /// Construct a `CrosstermBackend` writing to stdout, performing the full
+    /// terminal setup: enable raw mode, enter the alternate screen, enable
+    /// mouse capture (the C++ `TApplication`/`TScreen` constructor-chain
+    /// equivalent).  Also installs the process-global restore hooks (panic
+    /// hook + unix signal thread) on first use.
+    ///
+    /// On error the partial setup is rolled back before returning.  The
+    /// terminal is restored when the backend is dropped.
+    ///
+    /// # Note
+    /// See the single-instance contract on [`CrosstermBackend::with_color_depth`].
+    pub fn new() -> io::Result<Self> {
+        Self::with_color_depth(ColorDepth::TrueColor)
     }
 
     /// Construct with an explicit color depth (useful when the caller has
-    /// already detected terminal capabilities).
-    pub fn with_color_depth(depth: ColorDepth) -> Self {
-        CrosstermBackend {
+    /// already detected terminal capabilities).  Performs the same terminal
+    /// setup as [`CrosstermBackend::new`].
+    ///
+    /// # Note
+    /// At most one `CrosstermBackend` should be live per process.  A second
+    /// instance re-enters the alternate screen (terminal-dependent visual
+    /// corruption); the `Drop` teardown is idempotent and harmless on its
+    /// own, but two instances with different lifetimes can leave the
+    /// terminal stuck in the alternate screen (the first drop restores the
+    /// terminal out from under the still-live instance).
+    pub fn with_color_depth(depth: ColorDepth) -> io::Result<Self> {
+        enable_raw_mode()?;
+        if let Err(e) = execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture) {
+            // Full restore, not just disable_raw_mode(): on the Windows-<10
+            // WinAPI fallback crossterm executes the two commands one by one,
+            // so EnterAlternateScreen may have succeeded before
+            // EnableMouseCapture failed.  restore_terminal() is idempotent
+            // and undoes everything in reverse order.
+            restore_terminal();
+            return Err(e);
+        }
+        if let Err(e) = install_restore_hooks() {
+            restore_terminal();
+            return Err(e);
+        }
+        Ok(CrosstermBackend {
             out: io::stdout(),
             color_depth: depth,
             clipboard: String::new(),
-        }
+        })
     }
 }
 
-impl Default for CrosstermBackend {
-    fn default() -> Self {
-        Self::new()
+impl Drop for CrosstermBackend {
+    /// Restore the terminal (best-effort; errors during drop are ignored).
+    fn drop(&mut self) {
+        restore_terminal();
     }
 }
 

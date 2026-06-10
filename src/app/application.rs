@@ -15,8 +15,8 @@
 //! * `tile`/`cascade`: `TDeskTop::tile`/`cascade` geometry (`mostEqualDivisors`/
 //!   `calcTileRect`/`doCascade`, `tdesktop.cpp`) is not ported. Lands when
 //!   `Desktop::tile`/`cascade` exist + a menu emits `Command::TILE`/`Command::CASCADE`.
-//! * `dosShell`: needs a backend terminal suspend/resume seam
-//!   (`CrosstermBackend` owns no terminal setup today) + `SIGTSTP`.
+//! * `dosShell`: needs a backend terminal suspend/resume seam + `SIGTSTP`
+//!   (`CrosstermBackend` owns setup/teardown since B7, but no suspend/resume).
 //! * `TAppInit` subsystem init: subsumed by the [`Backend`](crate::backend::Backend)
 //!   + [`Renderer`](crate::backend::Renderer) construction path in our model.
 //! * `initHistory`/`doneHistory`: the history list subsystem is not ported yet.
