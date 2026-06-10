@@ -15,7 +15,7 @@
 //!   borrows; the fields are deliberately not hidden behind one getter.
 
 use crate::capture::CaptureHandler;
-use crate::color::Style;
+use crate::color::{Color, Style};
 use crate::command::Command;
 use crate::event::Event;
 use crate::screen::Buffer;
@@ -436,6 +436,26 @@ pub enum Deferred {
 // DrawCtx — the downward draw context (D3 / D8)
 // ---------------------------------------------------------------------------
 
+/// `shadowSize` (tview.cpp:35) — the drop-shadow offset: 2 columns right,
+/// 1 row down.
+pub const SHADOW_SIZE: Point = Point::new(2, 1);
+
+/// True iff `bg` counts as black for the shadow transform — the C++ test
+/// `getBack(attr).toBIOS(false) != 0` in `applyShadow` (tvwrite.cpp), where
+/// `TColorDesired::toBIOS(false)` (colors.h:416) maps BIOS → `b & 0xF` and
+/// **Default → 0 (black)**. The xterm-256/RGB quantization ladder lives in the
+/// backend per D6, so this is a documented simplification: only the exact
+/// black values (`Indexed(0)`/`Indexed(16)`, `Rgb(0,0,0)`) count as black;
+/// near-black values the ladder would quantize to BIOS 0 do not.
+fn bg_is_black(bg: Color) -> bool {
+    match bg {
+        Color::Default => true, // toBIOS(false) maps Default → 0 (see fn-level doc)
+        Color::Bios(b) => b & 0xF == 0,
+        Color::Indexed(i) => i == 0 || i == 16,
+        Color::Rgb(r, g, b) => (r, g, b) == (0, 0, 0),
+    }
+}
+
 /// The clipped, themed writer every view paints through (D3).
 ///
 /// All public write methods take **view-local** coordinates: `(0, 0)` is the
@@ -639,6 +659,75 @@ impl<'a> DrawCtx<'a> {
                 let cell = &mut row[ax as usize];
                 cell.set_char(ch);
                 cell.set_style(style);
+            }
+        }
+    }
+
+    /// Cast a drop shadow for the view at view-local rect `area_local` — the D8
+    /// realization of the C++ shadow pass (`applyShadow`, tvwrite.cpp).
+    ///
+    /// The shadow region is `(area_local translated by SHADOW_SIZE) minus
+    /// area_local` — the classic TV offset-L: a 2-column strip down the right
+    /// edge (starting 1 row below the top, extending 1 row past the bottom) plus
+    /// a 1-row strip along the bottom (starting 2 columns right of the left
+    /// edge). Each cell in the region (clipped to `self.clip`) keeps its glyph
+    /// and gets the shadow attribute: the theme's [`Role::Shadow`] style, or its
+    /// [`reversed`](Style::reversed) form when the cell's background is black
+    /// (`reverseAttribute(shadowAttr)` — so the shadow stays visible on black).
+    /// Cells already marked `no_shadow` are left untouched (no double-shadow
+    /// where two shadows overlap); transformed cells get `no_shadow = true`.
+    /// The cell's own style modifiers survive (C++ `setStyle(attr, style |
+    /// slNoShadow)` re-applies the original style word onto the shadow attr).
+    ///
+    /// Under D8 whole-tree redraw the buffer is reset each frame, so `no_shadow`
+    /// markers never go stale; later (higher) siblings simply paint over the
+    /// shadow cells they occlude.
+    pub fn cast_shadow(&mut self, area_local: Rect) {
+        if self.clip.is_empty() {
+            return;
+        }
+        let mut abs = area_local;
+        abs.r#move(self.origin.x, self.origin.y);
+        let shadow = self.theme.style(Role::Shadow);
+        // Right strip: 2 columns right of the view, shifted 1 row down (covers
+        // the shadow corner past the bottom edge); bottom strip: 1 row below,
+        // starting 2 columns in. Disjoint by construction.
+        let right = Rect::new(
+            abs.b.x,
+            abs.a.y + SHADOW_SIZE.y,
+            abs.b.x + SHADOW_SIZE.x,
+            abs.b.y + SHADOW_SIZE.y,
+        );
+        let bottom = Rect::new(
+            abs.a.x + SHADOW_SIZE.x,
+            abs.b.y,
+            abs.b.x,
+            abs.b.y + SHADOW_SIZE.y,
+        );
+        for strip in [right, bottom] {
+            let mut s = strip;
+            s.intersect(&self.clip);
+            if s.is_empty() {
+                continue;
+            }
+            for ay in s.a.y..s.b.y {
+                for ax in s.a.x..s.b.x {
+                    // Per-cell like C++ TVWrite: a strip boundary may split a
+                    // wide-char pair, recoloring only one of its two cells.
+                    let cell = self.buffer.get_mut(ax as u16, ay as u16);
+                    let old = cell.style();
+                    if old.modifiers.no_shadow {
+                        continue;
+                    }
+                    let mut out = if bg_is_black(old.bg) {
+                        shadow.reversed()
+                    } else {
+                        shadow
+                    };
+                    out.modifiers = old.modifiers;
+                    out.modifiers.no_shadow = true;
+                    cell.set_style(out); // glyph untouched
+                }
             }
         }
     }
@@ -1339,6 +1428,179 @@ mod tests {
         for cell in buf.cells() {
             assert_eq!(cell.symbol(), " ");
         }
+    }
+
+    // -- cast_shadow (D8 shadow pass) -----------------------------------------
+
+    /// The classic_blue Shadow style with `no_shadow` set — what a transformed
+    /// non-black cell ends up with.
+    fn shadow_style(theme: &Theme) -> Style {
+        let mut s = theme.style(Role::Shadow);
+        s.modifiers.no_shadow = true;
+        s
+    }
+
+    #[test]
+    fn cast_shadow_preserves_glyph_and_applies_shadow_style() {
+        let mut buf = Buffer::new(10, 6);
+        let theme = Theme::classic_blue();
+        // Fill the whole buffer with a non-black-bg pattern.
+        let base = style(0x7, 0x1); // lightgray on blue (non-black bg)
+        {
+            let mut ctx = DrawCtx::new(&mut buf, &theme, Rect::new(0, 0, 10, 6), Point::new(0, 0));
+            ctx.fill(Rect::new(0, 0, 10, 6), '#', base);
+            // View at (1,1)-(5,4); shadow = right strip x 5..7 y 2..5,
+            // bottom strip x 3..5 y 4..5.
+            ctx.cast_shadow(Rect::new(1, 1, 5, 4));
+        }
+        let cell = buf.get(5, 2); // inside the right strip
+        assert_eq!(cell.symbol(), "#", "glyph must be preserved");
+        assert_eq!(cell.style(), shadow_style(&theme));
+        let cell = buf.get(4, 4); // inside the bottom strip
+        assert_eq!(cell.symbol(), "#");
+        assert_eq!(cell.style(), shadow_style(&theme));
+    }
+
+    #[test]
+    fn cast_shadow_reverses_on_black_background() {
+        let mut buf = Buffer::new(10, 6);
+        let theme = Theme::classic_blue();
+        let black_bg = style(0x7, 0x0); // bg BIOS 0 -> black
+        {
+            let mut ctx = DrawCtx::new(&mut buf, &theme, Rect::new(0, 0, 10, 6), Point::new(0, 0));
+            ctx.fill(Rect::new(0, 0, 10, 6), '#', black_bg);
+            ctx.cast_shadow(Rect::new(1, 1, 5, 4));
+        }
+        let mut expected = theme.style(Role::Shadow).reversed();
+        expected.modifiers.no_shadow = true;
+        assert_eq!(buf.get(5, 2).style(), expected);
+        // The default-color background also counts as black (toBIOS(false) -> 0).
+        let mut buf = Buffer::new(10, 6);
+        {
+            let mut ctx = DrawCtx::new(&mut buf, &theme, Rect::new(0, 0, 10, 6), Point::new(0, 0));
+            ctx.cast_shadow(Rect::new(1, 1, 5, 4)); // over default cells
+        }
+        assert_eq!(buf.get(5, 2).style(), expected);
+    }
+
+    #[test]
+    fn cast_shadow_skips_cells_already_marked_no_shadow() {
+        let mut buf = Buffer::new(10, 6);
+        let theme = Theme::classic_blue();
+        let mut marked = style(0x7, 0x1);
+        marked.modifiers.no_shadow = true;
+        {
+            let mut ctx = DrawCtx::new(&mut buf, &theme, Rect::new(0, 0, 10, 6), Point::new(0, 0));
+            ctx.fill(Rect::new(0, 0, 10, 6), '#', marked);
+            ctx.cast_shadow(Rect::new(1, 1, 5, 4));
+        }
+        // Every shadow-region cell was pre-marked, so nothing changes.
+        assert_eq!(buf.get(5, 2).style(), marked, "no double-shadowing");
+        assert_eq!(buf.get(4, 4).style(), marked);
+    }
+
+    #[test]
+    fn cast_shadow_preserves_cell_modifiers() {
+        // C++ setStyle(attr, style | slNoShadow): the cell's own style bits
+        // survive the colour transform.
+        let mut buf = Buffer::new(10, 6);
+        let theme = Theme::classic_blue();
+        let mut bold = style(0x7, 0x1);
+        bold.modifiers.bold = true;
+        {
+            let mut ctx = DrawCtx::new(&mut buf, &theme, Rect::new(0, 0, 10, 6), Point::new(0, 0));
+            ctx.fill(Rect::new(0, 0, 10, 6), '#', bold);
+            ctx.cast_shadow(Rect::new(1, 1, 5, 4));
+        }
+        let got = buf.get(5, 2).style();
+        let mut expected = shadow_style(&theme);
+        expected.modifiers.bold = true;
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn cast_shadow_is_clipped() {
+        let mut buf = Buffer::new(10, 6);
+        let theme = Theme::classic_blue();
+        let base = style(0x7, 0x1);
+        {
+            // Clip covers only the view itself — both strips fall outside.
+            let mut ctx = DrawCtx::new(&mut buf, &theme, Rect::new(1, 1, 5, 4), Point::new(0, 0));
+            ctx.fill(Rect::new(0, 0, 10, 6), '#', base);
+            ctx.cast_shadow(Rect::new(1, 1, 5, 4));
+        }
+        for y in 0..6u16 {
+            for x in 0..10u16 {
+                assert!(
+                    !buf.get(x, y).style().modifiers.no_shadow,
+                    "({x},{y}) must not be shadowed outside the clip"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cast_shadow_geometry_is_the_offset_l() {
+        // View at local (1,1)-(5,4), origin (0,0): the shadow is exactly
+        //   right strip:  x in [5,7), y in [2,5)
+        //   bottom strip: x in [3,5), y in [4,5)
+        let mut buf = Buffer::new(10, 6);
+        let theme = Theme::classic_blue();
+        {
+            let mut ctx = DrawCtx::new(&mut buf, &theme, Rect::new(0, 0, 10, 6), Point::new(0, 0));
+            ctx.fill(Rect::new(0, 0, 10, 6), '#', style(0x7, 0x1));
+            ctx.cast_shadow(Rect::new(1, 1, 5, 4));
+        }
+        let in_l = |x: i32, y: i32| {
+            ((5..7).contains(&x) && (2..5).contains(&y))
+                || ((3..5).contains(&x) && (4..5).contains(&y))
+        };
+        for y in 0..6 {
+            for x in 0..10 {
+                let shadowed = buf.get(x as u16, y as u16).style().modifiers.no_shadow;
+                assert_eq!(
+                    shadowed,
+                    in_l(x, y),
+                    "cell ({x},{y}): expected in_shadow={}",
+                    in_l(x, y)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cast_shadow_of_zero_size_view_is_noop() {
+        let mut buf = Buffer::new(6, 4);
+        let theme = Theme::classic_blue();
+        let base = style(0x7, 0x1);
+        {
+            let mut ctx = DrawCtx::new(&mut buf, &theme, Rect::new(0, 0, 6, 4), Point::new(0, 0));
+            ctx.fill(Rect::new(0, 0, 6, 4), '#', base);
+            ctx.cast_shadow(Rect::new(2, 2, 2, 2)); // zero-size view
+        }
+        for cell in buf.cells() {
+            assert!(
+                !cell.style().modifiers.no_shadow,
+                "no shadow from a zero-size view"
+            );
+        }
+    }
+
+    #[test]
+    fn cast_shadow_translates_by_origin() {
+        // Same L, but expressed via a ctx origin of (2,1): local (0,0)-(4,3)
+        // -> absolute (2,1)-(6,4); right strip x 6..8 y 2..5, bottom x 4..6 y 4..5.
+        let mut buf = Buffer::new(10, 6);
+        let theme = Theme::classic_blue();
+        {
+            let mut ctx = DrawCtx::new(&mut buf, &theme, Rect::new(0, 0, 10, 6), Point::new(2, 1));
+            ctx.cast_shadow(Rect::new(0, 0, 4, 3));
+        }
+        assert!(buf.get(6, 2).style().modifiers.no_shadow);
+        assert!(buf.get(7, 4).style().modifiers.no_shadow); // shadow corner
+        assert!(buf.get(4, 4).style().modifiers.no_shadow);
+        assert!(!buf.get(6, 1).style().modifiers.no_shadow); // above the strip
+        assert!(!buf.get(3, 4).style().modifiers.no_shadow); // left of bottom strip
     }
 
     // -- Context ------------------------------------------------------------

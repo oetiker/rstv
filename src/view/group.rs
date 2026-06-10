@@ -661,13 +661,19 @@ impl View for Group {
     /// (`children[0]`→`children.last()`), each through a sub-context clipped to
     /// its bounds. Painter's algorithm — deliberately reversed from C++ (which
     /// paints top-first and relies on occlusion, dropped under D8). No own-area
-    /// fill: children cover it. `// TODO(row 33)`: shadow casting (no infra yet).
+    /// fill: children cover it. After each `sfShadow` child the group casts its
+    /// drop shadow ([`DrawCtx::cast_shadow`]): back-to-front order means later
+    /// (higher) siblings overwrite the shadow cells they occlude — the
+    /// painter's-algorithm equivalent of the C++ TVWrite occlusion walk.
     fn draw(&mut self, ctx: &mut DrawCtx) {
         for child in self.children.iter_mut() {
             if child.view.state().state.visible {
                 let bounds = child.view.state().get_bounds();
                 let mut sub = ctx.sub(bounds);
                 child.view.draw(&mut sub);
+                if child.view.state().state.shadow {
+                    ctx.cast_shadow(bounds);
+                }
             }
         }
     }

@@ -192,10 +192,16 @@ pub enum Role {
     /// `TOutlineViewer` not-expanded item — `cpOutlineViewer` idx 4 (the dimmer
     /// text shown for a collapsed node, the `color >> 8` of the normal pair).
     OutlineNotExpanded,
+
+    /// Window/menu drop shadows — the global C++ `shadowAttr = 0x08`
+    /// (tview.cpp:36), dark gray on black. Not a palette entry in the C++
+    /// (it is a file-scope constant); themed here per D7. Applied by the D8
+    /// shadow pass ([`DrawCtx::cast_shadow`](crate::view::DrawCtx::cast_shadow)).
+    Shadow,
 }
 
 /// Number of [`Role`] variants — the fixed length of [`Theme`]'s style array.
-const ROLE_COUNT: usize = 62;
+const ROLE_COUNT: usize = 63;
 
 impl Role {
     /// Total mapping of each variant to its index into the style array.
@@ -266,6 +272,7 @@ impl Role {
             Role::OutlineFocused => 59,
             Role::OutlineSelected => 60,
             Role::OutlineNotExpanded => 61,
+            Role::Shadow => 62,
         }
     }
 }
@@ -634,6 +641,9 @@ impl Theme {
         set(&mut styles, Role::OutlineSelected, 0x0, 0x3); // black on cyan
         set(&mut styles, Role::OutlineNotExpanded, 0x8, 0x1); // darkgray on blue
 
+        // Window/menu drop shadow — exactly C++ `shadowAttr = 0x08` (tview.cpp:36).
+        set(&mut styles, Role::Shadow, 0x8, 0x0); // darkgray on black
+
         Theme {
             styles,
             glyphs: Glyphs::default(),
@@ -725,6 +735,7 @@ mod tests {
         Role::OutlineFocused,
         Role::OutlineSelected,
         Role::OutlineNotExpanded,
+        Role::Shadow,
     ];
 
     #[test]

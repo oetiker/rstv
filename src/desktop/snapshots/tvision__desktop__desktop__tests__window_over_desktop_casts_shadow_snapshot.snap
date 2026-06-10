@@ -1,0 +1,26 @@
+---
+source: src/desktop/desktop.rs
+expression: screen.snapshot()
+---
+size: 16x7
+cursor: hidden
+text:
+|░░░░░░░░░░░░░░░░|
+|░┌─1  ───┐░░░░░░|
+|░│       │░░░░░░|
+|░└───────┘░░░░░░|
+|░░░░░░░░░░░░░░░░|
+|░░░░░░░░░░░░░░░░|
+|░░░░░░░░░░░░░░░░|
+attr:
+|aaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaa|
+|aaaaaaaaaabbaaaa|
+|aaaaaaaaaabbaaaa|
+|aaabbbbbbbbbaaaa|
+|aaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(7) bg=BIOS(1)
+  b fg=BIOS(8) bg=BIOS(0) +no_shadow

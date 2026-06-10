@@ -493,6 +493,33 @@ mod tests {
         insta::assert_snapshot!(screen.snapshot());
     }
 
+    /// D8 shadow pass: a `Window` (which sets `sfShadow`) inserted over the ░
+    /// desktop background casts the offset-L drop shadow — 2 columns right
+    /// (rows 2..5: one below the top edge to one past the bottom) + 1 row below
+    /// (columns 3..10: starting 2 right of the left edge). The shadow cells keep
+    /// their ░ glyph and take the theme's `Role::Shadow` attribute (+no_shadow).
+    #[test]
+    fn window_over_desktop_casts_shadow_snapshot() {
+        let theme = Theme::classic_blue();
+        let mut desktop = Desktop::new(Rect::new(0, 0, 16, 7), |r| {
+            Some(Desktop::init_background(r))
+        });
+        desktop.insert_view(Box::new(Window::new(
+            Rect::new(1, 1, 10, 4),
+            Some("W".into()),
+            1,
+        )));
+        let mut desktop: Box<dyn View> = Box::new(desktop);
+        let (backend, screen) = HeadlessBackend::new(16, 7);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = desktop.state().get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            desktop.draw(&mut dc);
+        });
+        insta::assert_snapshot!(screen.snapshot());
+    }
+
     // -- 6. resize delegates to the group ------------------------------------
 
     #[test]
