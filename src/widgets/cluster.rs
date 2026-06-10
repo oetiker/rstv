@@ -60,9 +60,9 @@
 //!
 //! # Deferrals (documented TODOs, not built)
 //!
-//! 1. **Mouse drag-cursor tracking loop** (`do { … } while(mouseEvent(…))`): the
-//!    synchronous inner pump the scrollbar also deferred. `// TODO(row 31, D9)`.
-//!    Single-shot fallback only (see [`Cluster::handle_event`]).
+//! 1. **Mouse drag-cursor tracking loop** — **landed** (B2 batch, A3 seam):
+//!    `MouseDown` arms `MouseTrackCapture`; `MouseUp` is the release-confirm
+//!    (`tcluster.cpp:181-184`). See module doc section above.
 //! 2. **`getData`/`setData`/`dataSize`** (D10) → row 39.
 //! 3. **`showMarkers` specialChars block** in `drawMultiBox`: **dropped**
 //!    (`showMarkers` removed at row 23).
@@ -73,7 +73,26 @@
 //! (`ctrlToArrow` aliasing and the Alt-hotkey / plain-letter accelerator scan —
 //! formerly deferred here — landed with the A5 phase signal: see
 //! [`Cluster::handle_event`].)
+//!
+//! # Mouse hold-tracking (D9 — the A3 MouseTrackCapture seam)
+//!
+//! Mouse-down adopts the C++ `do { … } while(mouseEvent(event, evMouseMove))`
+//! hold loop (`tcluster.cpp:173-187`):
+//! * **MouseDown:** select the item under the cursor (if enabled), set
+//!   `tracking = true`, and call [`Context::start_mouse_track`] with
+//!   `TrackMask { mouse_move: true, .. }`. Do NOT press yet.
+//! * **MouseMove arm** (loop body, `tcluster.cpp:175-178`): rstv has no
+//!   `showCursor`/`hideCursor` equivalent for TUI cursors that toggles per-move;
+//!   the arm is a faithful no-op (the cue only affected the cursor visibility,
+//!   not state or rendering). Guarded by `tracking`.
+//! * **MouseUp arm** (post-loop, `tcluster.cpp:181-184`): press only if
+//!   `find_sel(up_pos) == self.sel` — the C++ same-item release-confirm.
+//!   Clear `tracking`. Guarded by `tracking`.
+//!
+//! The `abs_origin` field caches the view-local `(0,0)` in absolute screen
+//! coords from the last `draw`, used by the capture to localize events.
 
+use crate::capture::TrackMask;
 use crate::event::{Event, Key, ctrl_to_arrow, hot_key, is_alt_hotkey, is_plain_hotkey};
 use crate::theme::Role;
 use crate::view::{Context, DrawCtx, Options, Phase, Point, Rect, View, ViewState};
@@ -145,6 +164,13 @@ pub struct Cluster {
     pub strings: Vec<String>,
     /// The per-subclass behavior selector (D1/D2).
     pub kind: ClusterKind,
+    /// Absolute screen position of view-local `(0, 0)`, cached each `draw` for
+    /// the mouse-tracking capture (D3/D9 — same pattern as `Button::abs_origin`).
+    abs_origin: Point,
+    /// Whether a mouse hold-track is in flight (between the arming `MouseDown`
+    /// and the terminating `MouseUp`). Guards the `MouseMove`/`MouseUp` tracking
+    /// arms against stray (untracked) events.
+    tracking: bool,
 }
 
 impl Cluster {
@@ -172,6 +198,8 @@ impl Cluster {
             enable_mask: 0xFFFF_FFFF,
             strings,
             kind,
+            abs_origin: Point::new(0, 0),
+            tracking: false,
         }
     }
 
@@ -411,6 +439,11 @@ impl View for Cluster {
     /// Ends with `setCursor(column(sel)+2, row(sel))` so the hardware cursor
     /// tracks the selection (surfaced via the base `cursor_request`).
     fn draw(&mut self, ctx: &mut DrawCtx) {
+        // Cache the absolute origin for the mouse-tracking capture (D3/D9 —
+        // the MouseTrackCapture converts abs mouse coords to view-local via
+        // this value, matching the Button::abs_origin pattern).
+        self.abs_origin = ctx.origin();
+
         // A zero-height cluster draws nothing. This early-return is also the
         // safety guard for the layout math below: `column`/`row`/the end-of-draw
         // `set_cursor` all do `% size_y`, which would divide-by-zero (panic in
@@ -481,15 +514,15 @@ impl View for Cluster {
             .set_cursor(self.column(self.sel) + 2, self.row(self.sel));
     }
 
-    /// `TCluster::handleEvent` — keyboard + mouse (with the documented deferrals).
+    /// `TCluster::handleEvent` — keyboard + mouse.
     ///
     /// The C++ `TView::handleEvent` first line (mouse-down auto-select) is
     /// relocated to `Group` (D4), so this body starts at the `ofSelectable`
-    /// guard. On `evMouseDown`: single-shot select+press (the drag-cursor
-    /// `do/while` loop is **deferred** — `// TODO(row 31, D9)`). On `evKeyDown`:
-    /// `ctrlToArrow` aliasing, the four arrow navigators (focused-only), the
-    /// Alt-hotkey / plain-letter accelerator scan (`tcluster.cpp:280-291`), then
-    /// focused-Space → press.
+    /// guard. On `evMouseDown`: select the item, arm the mouse-track capture (A3
+    /// seam); press fires on `MouseUp` at release-inside (C++ release-confirm,
+    /// `tcluster.cpp:181-184`). On `evKeyDown`: `ctrlToArrow` aliasing, the four
+    /// arrow navigators (focused-only), the Alt-hotkey / plain-letter accelerator
+    /// scan (`tcluster.cpp:280-291`), then focused-Space → press.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         if !self.state.options.selectable {
             return;
@@ -497,14 +530,15 @@ impl View for Cluster {
 
         match *ev {
             // ---------------------------------------------------------------
-            // evMouseDown — single-shot select + press.
+            // evMouseDown — select the item under the cursor, arm the tracking
+            // capture; do NOT press yet.
             //
-            // TODO(row 31, D9): the C++ runs a `do { … } while(mouseEvent(event,
-            // evMouseMove))` loop that shows/hides the cursor as the held mouse
-            // tracks across items, then presses iff the cursor is still on `sel`
-            // at release. That synchronous inner pump needs the live event loop
-            // (a capture handler on Event::MouseMove / MouseUp). Until then we
-            // do exactly one select + one press per mouse-down.
+            // C++ `tcluster.cpp:168-179`: select item, `drawView`, enter loop
+            // `do { showCursor/hideCursor } while(mouseEvent(event, evMouseMove))`.
+            // The press decision is the UP position (tcluster.cpp:181-184).
+            //
+            // A3 seam: MouseDown = first loop iteration (select + arm). Press
+            // is deferred to the MouseUp arm (release-confirm, same-item).
             // ---------------------------------------------------------------
             Event::MouseDown(me) => {
                 let mouse = me.position; // already view-local (D3)
@@ -512,12 +546,54 @@ impl View for Cluster {
                 if i != -1 && self.button_state(i) {
                     self.sel = i;
                 }
-                // Single-shot: the cursor is necessarily still on `sel`, so the
-                // C++ `if(findSel(mouse) == sel) press(sel)` reduces to: press if
-                // the click resolved to the (now-)selected item. `find_sel` is
-                // a pure function of `mouse`, so reuse the value computed above
-                // rather than calling it a second time.
-                if i != -1 && i == self.sel {
+                // Arm the mouse-track capture if we have a ViewId. Without a
+                // ViewId (test-only / uninserted cluster — ids are stamped at
+                // Group::insert) we fall through to the single-shot press ON
+                // DOWN, diverging from the C++ release-confirm semantics.
+                if let Some(id) = self.state.id() {
+                    self.tracking = true;
+                    ctx.start_mouse_track(
+                        id,
+                        self.abs_origin,
+                        TrackMask {
+                            mouse_move: true,
+                            ..Default::default()
+                        },
+                    );
+                } else {
+                    // Degenerate fallback (no ViewId): single-shot press.
+                    if i != -1 && i == self.sel {
+                        self.press(self.sel);
+                    }
+                }
+                ev.clear();
+            }
+
+            // ---------------------------------------------------------------
+            // MouseMove arm — the C++ loop body (`tcluster.cpp:174-178`):
+            // `showCursor` / `hideCursor` toggled on item containment.
+            // rstv has no TUI cursor-visibility equivalent (the hardware cursor
+            // position is tracked via `set_cursor` / `cursor_request`, not a
+            // per-item toggle), so this is a faithful no-op. Guarded by
+            // `tracking` against stray moves.
+            // ---------------------------------------------------------------
+            Event::MouseMove(_) if self.tracking => {
+                // C++ tcluster.cpp:175-178: showCursor/hideCursor only — no
+                // state or value change. rstv drops the cue (no equivalent).
+                ev.clear();
+            }
+
+            // ---------------------------------------------------------------
+            // MouseUp arm — post-loop press confirm (`tcluster.cpp:181-184`):
+            // press iff `findSel(up_pos) == sel`. Guarded by `tracking`.
+            // ---------------------------------------------------------------
+            Event::MouseUp(me) if self.tracking => {
+                self.tracking = false;
+                // C++ tcluster.cpp:181-184:
+                //   mouse = makeLocal(event.mouse.where);
+                //   if (findSel(mouse) == sel) { press(sel); drawView(); }
+                let up = me.position; // already view-local (localized by capture)
+                if self.find_sel(up) == self.sel {
                     self.press(self.sel);
                 }
                 ev.clear();
@@ -835,6 +911,36 @@ mod tests {
         })
     }
 
+    fn mouse_move_at(x: i32, y: i32) -> Event {
+        Event::MouseMove(MouseEvent {
+            position: Point::new(x, y),
+            buttons: MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            flags: MouseEventFlags::default(),
+            wheel: MouseWheel::None,
+            modifiers: crate::event::KeyModifiers::default(),
+        })
+    }
+
+    fn mouse_up_at(x: i32, y: i32) -> Event {
+        Event::MouseUp(MouseEvent {
+            position: Point::new(x, y),
+            buttons: MouseButtons::default(),
+            flags: MouseEventFlags::default(),
+            wheel: MouseWheel::None,
+            modifiers: crate::event::KeyModifiers::default(),
+        })
+    }
+
+    /// Stamp a `ViewId` onto a `CheckBoxes`' inner `Cluster` (as `Group::insert` would).
+    fn stamp_id(c: &mut CheckBoxes) -> crate::view::ViewId {
+        let id = crate::view::ViewId::next();
+        c.cluster.state.id = Some(id);
+        id
+    }
+
     // -- Layout math: column / row / find_sel round-trip --------------------
 
     /// Discriminating layout test: **unequal-width labels across 3 columns with
@@ -1141,10 +1247,12 @@ mod tests {
         assert_eq!(c.cluster.sel, 0, "moved up");
     }
 
-    // -- Mouse single-shot select + press -----------------------------------
+    // -- Mouse hold-track: release-confirm (A3 seam, tcluster.cpp:181-184) ----
 
+    /// Degenerate fallback (no ViewId — uninserted cluster): single-shot press
+    /// fires on mouse-down, preserving backwards compat for tests and inline use.
     #[test]
-    fn mouse_down_selects_and_presses_item() {
+    fn mouse_down_selects_and_presses_item_no_id() {
         let mut c = CheckBoxes::new(Rect::new(0, 0, 20, 3), strs(&["a", "b", "c"]));
         c.cluster.state.state.focused = true;
         c.cluster.sel = 0;
@@ -1157,8 +1265,141 @@ mod tests {
         assert_eq!(c.cluster.sel, 2, "mouse-down selected item 2");
         assert_eq!(
             c.cluster.value, 0b100,
-            "mouse-down pressed item 2 (bit set)"
+            "fallback: mouse-down pressed item 2 immediately (no ViewId)"
         );
+    }
+
+    /// With a ViewId (inserted cluster): mouse-down selects + arms tracking;
+    /// press fires only on release over the same item (`tcluster.cpp:181-184`).
+    #[test]
+    fn mouse_track_release_inside_presses() {
+        let mut c = CheckBoxes::new(Rect::new(0, 0, 20, 3), strs(&["a", "b", "c"]));
+        c.cluster.state.state.focused = true;
+        c.cluster.sel = 0;
+        let _id = stamp_id(&mut c);
+
+        // MouseDown at item 2 (col 0 row 2): select, arm tracking, do NOT press.
+        let (deferred, ()) = with_ctx_d(|ctx| {
+            let mut ev = mouse_down_at(0, 2);
+            c.handle_event(&mut ev, ctx);
+            assert!(ev.is_nothing(), "mouse-down consumed");
+        });
+        assert_eq!(c.cluster.sel, 2, "mouse-down selected item 2");
+        assert_eq!(c.cluster.value, 0, "no press on mouse-down");
+        assert!(c.cluster.tracking, "tracking armed");
+        assert_eq!(deferred.len(), 1, "one PushCapture deferred");
+        assert!(
+            matches!(deferred[0], crate::view::Deferred::PushCapture(_)),
+            "deferred[0] is PushCapture"
+        );
+        if let crate::view::Deferred::PushCapture(ref h) = deferred[0] {
+            assert_eq!(h.view(), Some(_id), "capture routes to this cluster's id");
+        }
+
+        // MouseUp at the same item (item 2, col 0 row 2): press fires.
+        // (Position is view-local — the capture localizes it.)
+        with_ctx(|ctx| {
+            let mut ev = mouse_up_at(0, 2);
+            c.handle_event(&mut ev, ctx);
+            assert!(ev.is_nothing(), "mouse-up consumed");
+        });
+        assert!(!c.cluster.tracking, "tracking cleared on MouseUp");
+        assert_eq!(
+            c.cluster.value, 0b100,
+            "press fired on release-inside (tcluster.cpp:181-184)"
+        );
+    }
+
+    /// Down on item A + release over item B = no press (tcluster.cpp:181-184:
+    /// `if(findSel(mouse) == sel)` — the release must be on the SAME item).
+    #[test]
+    fn mouse_track_release_on_different_item_no_press() {
+        let mut c = CheckBoxes::new(Rect::new(0, 0, 20, 3), strs(&["a", "b", "c"]));
+        c.cluster.state.state.focused = true;
+        c.cluster.sel = 0;
+        let _id = stamp_id(&mut c);
+
+        // MouseDown at item 0 (col 0 row 0).
+        with_ctx_d(|ctx| {
+            let mut ev = mouse_down_at(0, 0);
+            c.handle_event(&mut ev, ctx);
+        });
+        assert_eq!(c.cluster.sel, 0, "item 0 selected");
+        assert!(c.cluster.tracking);
+
+        // MouseUp at item 1 (col 0 row 1) — different item → no press.
+        with_ctx(|ctx| {
+            let mut ev = mouse_up_at(0, 1);
+            c.handle_event(&mut ev, ctx);
+        });
+        assert!(!c.cluster.tracking);
+        assert_eq!(
+            c.cluster.value, 0,
+            "no press: released on item 1, not item 0"
+        );
+    }
+
+    /// Down on item + release outside all items = no press (tcluster.cpp:181-184:
+    /// `findSel` returns -1 for an out-of-bounds position, which != sel).
+    #[test]
+    fn mouse_track_release_outside_all_items_no_press() {
+        let mut c = CheckBoxes::new(Rect::new(0, 0, 20, 3), strs(&["a", "b", "c"]));
+        c.cluster.state.state.focused = true;
+        let _id = stamp_id(&mut c);
+
+        with_ctx_d(|ctx| {
+            let mut ev = mouse_down_at(0, 0);
+            c.handle_event(&mut ev, ctx);
+        });
+        assert!(c.cluster.tracking);
+
+        // Release outside the view extent (y = 5 is out of bounds for a 3-row cluster).
+        with_ctx(|ctx| {
+            let mut ev = mouse_up_at(0, 5);
+            c.handle_event(&mut ev, ctx);
+        });
+        assert!(!c.cluster.tracking);
+        assert_eq!(c.cluster.value, 0, "no press: released outside all items");
+    }
+
+    /// MouseMove during tracking is consumed but changes no state (faithful
+    /// no-op: the C++ only toggled cursor show/hide which rstv has no equivalent for).
+    #[test]
+    fn mouse_track_move_is_consumed_noop() {
+        let mut c = CheckBoxes::new(Rect::new(0, 0, 20, 3), strs(&["a", "b", "c"]));
+        let _id = stamp_id(&mut c);
+
+        with_ctx_d(|ctx| {
+            let mut ev = mouse_down_at(0, 0);
+            c.handle_event(&mut ev, ctx);
+        });
+        assert!(c.cluster.tracking);
+        let value_before = c.cluster.value;
+        let sel_before = c.cluster.sel;
+
+        with_ctx(|ctx| {
+            let mut ev = mouse_move_at(0, 2);
+            c.handle_event(&mut ev, ctx);
+            assert!(ev.is_nothing(), "tracked move is consumed");
+        });
+        assert!(c.cluster.tracking, "still tracking after move");
+        assert_eq!(c.cluster.value, value_before, "value unchanged");
+        assert_eq!(c.cluster.sel, sel_before, "sel unchanged");
+    }
+
+    /// A stray MouseUp with no tracking in flight falls through untouched (the
+    /// `tracking` guard — MouseUp is not mask-gated in `Group::wants`).
+    #[test]
+    fn stray_mouse_up_without_tracking_falls_through() {
+        let mut c = CheckBoxes::new(Rect::new(0, 0, 20, 3), strs(&["a", "b", "c"]));
+        let _id = stamp_id(&mut c);
+
+        with_ctx(|ctx| {
+            let mut ev = mouse_up_at(0, 0);
+            c.handle_event(&mut ev, ctx);
+            assert!(!ev.is_nothing(), "stray up is NOT consumed");
+        });
+        assert_eq!(c.cluster.value, 0, "stray up fires nothing");
     }
 
     // -- Cursor tracks the selection (drawMultiBox's end-of-draw setCursor) --

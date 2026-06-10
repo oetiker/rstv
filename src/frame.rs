@@ -61,15 +61,18 @@
 //!   grows, middle-button move) are handled by the owning `Window` via
 //!   `start_drag`/`DragCapture` (D9). The frame deliberately leaves those
 //!   `MouseDown` events unconsumed so they fall through to `Window::handle_event`.
-//! * **The close icon's press-and-hold release-confirm loop** — we post `cmClose`
-//!   on mouse-**down**; C++ confirms only on release over the icon
-//!   (`while(mouseEvent(...))`). See `TODO(D9 close-icon release-confirm)` in
-//!   [`Frame::handle_event`].
+//! * **The close icon's press-and-hold release-confirm loop** — adopted in this
+//!   batch (A3 seam). `MouseDown` in the close zone arms a
+//!   [`MouseTrackCapture`](crate::capture::MouseTrackCapture) with an up-only
+//!   mask; `MouseUp` posts `cmClose` only if the button is released over the
+//!   close zone (`tframe.cpp:156-167` release-confirm). The zoom and drag
+//!   behaviors are unchanged.
 
+use crate::capture::TrackMask;
 use crate::command::Command;
 use crate::event::Event;
 use crate::theme::Role;
-use crate::view::{Context, DrawCtx, GrowMode, Rect, View, ViewState};
+use crate::view::{Context, DrawCtx, GrowMode, Point, Rect, View, ViewState};
 use crate::window::{WindowFlags, WindowPalette};
 
 // ---------------------------------------------------------------------------
@@ -99,6 +102,12 @@ pub struct Frame {
     /// gray theming). Selects the `Role::Frame*` vs `Role::FrameGray*` family
     /// in [`draw`](View::draw).
     palette: WindowPalette,
+    /// Absolute screen position of view-local `(0, 0)`, cached each `draw` for
+    /// the mouse-tracking capture (D3/D9 — the `Button::abs_origin` pattern).
+    abs_origin: Point,
+    /// Whether the close-icon press-and-hold track is in flight. Guarded by
+    /// `tracking` against stray `MouseUp` events.
+    close_pressed: bool,
 }
 
 impl Frame {
@@ -127,6 +136,8 @@ impl Frame {
             number: None,
             zoomed: false,
             palette: WindowPalette::Blue,
+            abs_origin: Point::new(0, 0),
+            close_pressed: false,
         }
     }
 
@@ -214,6 +225,11 @@ impl View for Frame {
     /// The `framelin.cpp` sibling tee-walk is deferred (D3) — we draw plain
     /// corners/edges; see the module docs.
     fn draw(&mut self, ctx: &mut DrawCtx) {
+        // Cache the absolute origin for the close-icon mouse-tracking capture
+        // (D3/D9 — the MouseTrackCapture converts abs mouse coords to view-local
+        // via this value, matching the Button::abs_origin pattern).
+        self.abs_origin = ctx.origin();
+
         let glyphs = *ctx.glyphs();
         let w = self.st.size.x;
         let h = self.st.size.y;
@@ -371,23 +387,23 @@ impl View for Frame {
         }
     }
 
-    /// `TFrame::handleEvent` — minimal scope; the drag loops are deferred (D9).
+    /// `TFrame::handleEvent` — minimal scope; most drag loops are deferred (D9).
     ///
     /// The mouse position delivered by `Group` (row 26) is already **view-local**
     /// (the group subtracts the child origin), so `makeLocal` is gone — `m`'s
     /// position is used directly.
     ///
     /// Handled now (row-0 clicks while active):
-    /// * **close** — `x` in `2..=4` with `wfClose`: `post(cmClose)`, consume.
+    /// * **close** — `x` in `2..=4` with `wfClose` and active: arm the
+    ///   mouse-track capture (up-only mask, faithful to the empty `evMouse`-masked
+    ///   loop in `tframe.cpp:157-158`); post `cmClose` only on `MouseUp` over the
+    ///   close zone (`tframe.cpp:159-162` release-confirm).
     /// * **zoom** — `x` in `(w-5)..=(w-3)` (or a double-click) with `wfZoom`:
     ///   `post(cmZoom)`, consume. Checked *after* close, so a double-click inside
     ///   the close hot-zone resolves to close (faithful: the close branch runs
-    ///   first).
+    ///   first in C++ too).
     ///
-    /// **TODO(D9 close-icon release-confirm)** — the close icon's press-and-hold
-    /// loop: we `post(cmClose)` on mouse-**down**; C++ confirms only on release
-    /// over the icon (`while(mouseEvent(...))`). All other drag cases are handled
-    /// by the owning `Window` via `start_drag`/`DragCapture` (D9):
+    /// Drag cases are handled by the owning `Window` via `start_drag`/`DragCapture`:
     /// * `wfMove` title-bar drag: the row-0 click not on an icon is left
     ///   unconsumed on purpose — `Window::handle_event` starts the move drag.
     /// * bottom-row grow drags (`wfGrow`): left unconsumed so `Window` starts
@@ -398,27 +414,65 @@ impl View for Frame {
     /// through to (the C++ `TView::handleEvent(event)` did the auto-select, which
     /// relocated to `Group`; a frame is not selectable anyway).
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
-        if let Event::MouseDown(m) = *ev {
-            let w = self.st.size.x;
-            if m.position.y == 0 && self.st.state.active {
-                if self.flags.close && (2..=4).contains(&m.position.x) {
-                    // TODO(D9 close-icon release-confirm): the C++ runs a
-                    // press-and-hold `while(mouseEvent(event, evMouseMove))`
-                    // release-confirm loop and only posts cmClose if the button
-                    // is released over the icon. We post on mouse-down for now.
-                    ctx.post(Command::CLOSE);
-                    ev.clear();
-                } else if self.flags.zoom
-                    && ((w - 5..=w - 3).contains(&m.position.x) || m.flags.double_click)
-                {
-                    ctx.post(Command::ZOOM);
-                    ev.clear();
+        match *ev {
+            Event::MouseDown(m) => {
+                let w = self.st.size.x;
+                if m.position.y == 0 && self.st.state.active {
+                    if self.flags.close && (2..=4).contains(&m.position.x) {
+                        // C++ tframe.cpp:156-167: enter `while(mouseEvent(event, evMouse))`
+                        // with an empty body (every mouse event discarded until up),
+                        // then check the up position. A3 seam: arm an up-only capture
+                        // (mouse_move / mouse_auto / wheel all false — faithfully
+                        // swallows everything until MouseUp), then check in the MouseUp arm.
+                        if let Some(id) = self.st.id() {
+                            self.close_pressed = true;
+                            ctx.start_mouse_track(
+                                id,
+                                self.abs_origin,
+                                TrackMask {
+                                    mouse_move: false,
+                                    mouse_auto: false,
+                                    wheel: false,
+                                },
+                            );
+                            ev.clear();
+                        } else {
+                            // Degenerate fallback (no ViewId — ids are stamped
+                            // at Group::insert, so this is test-only): post ON
+                            // DOWN, diverging from the C++ release-confirm.
+                            ctx.post(Command::CLOSE);
+                            ev.clear();
+                        }
+                    } else if self.flags.zoom
+                        && ((w - 5..=w - 3).contains(&m.position.x) || m.flags.double_click)
+                    {
+                        ctx.post(Command::ZOOM);
+                        ev.clear();
+                    }
+                    // else: wfMove title-bar drag — left unconsumed ON PURPOSE so
+                    // Window::handle_event picks it up and starts the move drag.
                 }
-                // else: wfMove title-bar drag — left unconsumed ON PURPOSE so
-                // Window::handle_event picks it up and starts the move drag.
+                // else: bottom-row grow drags + middle-button move — left unconsumed
+                // ON PURPOSE so Window::handle_event starts the grow/move drag.
             }
-            // else: bottom-row grow drags + middle-button move — left unconsumed
-            // ON PURPOSE so Window::handle_event starts the grow/move drag.
+
+            // ---------------------------------------------------------------
+            // MouseUp arm — post-loop release-confirm (`tframe.cpp:159-162`):
+            // post cmClose only if the button is released over the close zone.
+            // Guarded by `close_pressed` against stray MouseUp events.
+            // ---------------------------------------------------------------
+            Event::MouseUp(m) if self.close_pressed => {
+                self.close_pressed = false;
+                // C++ tframe.cpp:159-160:
+                //   mouse = makeLocal(event.mouse.where);
+                //   if (mouse.y == 0 && mouse.x >= 2 && mouse.x <= 4) { post cmClose; }
+                if m.position.y == 0 && (2..=4).contains(&m.position.x) {
+                    ctx.post(Command::CLOSE);
+                }
+                ev.clear();
+            }
+
+            _ => {}
         }
     }
 
@@ -467,6 +521,16 @@ mod tests {
         })
     }
 
+    fn mouse_up_at(x: i32, y: i32) -> Event {
+        Event::MouseUp(MouseEvent {
+            position: Point::new(x, y),
+            buttons: MouseButtons::default(),
+            flags: MouseEventFlags::default(),
+            wheel: MouseWheel::None,
+            modifiers: Default::default(),
+        })
+    }
+
     fn double_click_at(x: i32, y: i32) -> Event {
         Event::MouseDown(MouseEvent {
             position: Point::new(x, y),
@@ -481,6 +545,13 @@ mod tests {
             wheel: MouseWheel::None,
             modifiers: Default::default(),
         })
+    }
+
+    /// Stamp a `ViewId` onto a frame (as `Group::insert` would).
+    fn stamp_id(f: &mut Frame) -> crate::view::ViewId {
+        let id = crate::view::ViewId::next();
+        f.st.id = Some(id);
+        id
     }
 
     /// Collect the rendered glyphs of one row as a String.
@@ -735,10 +806,12 @@ mod tests {
         );
     }
 
-    // -- handle_event: close --------------------------------------------------
+    // -- handle_event: close (release-confirm, tframe.cpp:156-167) ------------
 
+    /// Degenerate fallback (no ViewId — uninserted frame): `cmClose` fires on
+    /// mouse-**down**, preserving backwards compat for pure-unit tests.
     #[test]
-    fn click_close_icon_posts_close_and_consumes() {
+    fn click_close_icon_posts_close_on_down_no_id() {
         let mut f = Frame::new(Rect::new(0, 0, 20, 6));
         f.st.state.active = true;
         f.set_flags(WindowFlags {
@@ -754,8 +827,102 @@ mod tests {
             f.handle_event(&mut ev, &mut ctx);
         }
         assert!(ev.is_nothing(), "close click consumed");
-        assert_eq!(out.len(), 1);
+        assert_eq!(
+            out.len(),
+            1,
+            "immediate cmClose on down (no ViewId fallback)"
+        );
         assert_eq!(out[0], Event::Command(Command::CLOSE));
+    }
+
+    /// With a ViewId (inserted frame): mouse-down in close zone arms tracking;
+    /// `cmClose` fires only on `MouseUp` over the close zone
+    /// (`tframe.cpp:159-160` release-confirm).
+    #[test]
+    fn click_close_icon_release_confirm_with_id() {
+        let mut f = Frame::new(Rect::new(0, 0, 20, 6));
+        f.st.state.active = true;
+        f.set_flags(WindowFlags {
+            close: true,
+            ..Default::default()
+        });
+        let _id = stamp_id(&mut f);
+
+        // MouseDown in the close zone: arms tracking, no cmClose yet.
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<crate::view::Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            let mut ev = mouse_down_at(3, 0);
+            f.handle_event(&mut ev, &mut ctx);
+            assert!(ev.is_nothing(), "mouse-down consumed");
+        }
+        assert!(
+            out.is_empty(),
+            "no cmClose on down — deferred release-confirm"
+        );
+        assert!(f.close_pressed, "tracking armed");
+        assert_eq!(deferred.len(), 1, "PushCapture deferred");
+        assert!(
+            matches!(deferred[0], crate::view::Deferred::PushCapture(_)),
+            "deferred[0] is PushCapture"
+        );
+        if let crate::view::Deferred::PushCapture(ref h) = deferred[0] {
+            assert_eq!(h.view(), Some(_id), "capture routes to this frame's id");
+        }
+
+        // MouseUp over the close zone: cmClose fires.
+        let mut out2 = VecDeque::new();
+        let mut deferred2: Vec<crate::view::Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out2, &mut timers, &mut deferred2);
+            let mut ev = mouse_up_at(3, 0);
+            f.handle_event(&mut ev, &mut ctx);
+            assert!(ev.is_nothing(), "mouse-up consumed");
+        }
+        assert!(!f.close_pressed, "tracking cleared");
+        assert_eq!(out2.len(), 1);
+        assert_eq!(out2[0], Event::Command(Command::CLOSE));
+    }
+
+    /// Press close icon, release OUTSIDE the close zone: no `cmClose`
+    /// (the `tframe.cpp:159-160` position check fails).
+    #[test]
+    fn close_icon_release_outside_no_close() {
+        let mut f = Frame::new(Rect::new(0, 0, 20, 6));
+        f.st.state.active = true;
+        f.set_flags(WindowFlags {
+            close: true,
+            ..Default::default()
+        });
+        let _id = stamp_id(&mut f);
+
+        // MouseDown in the close zone: arm tracking.
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<crate::view::Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            let mut ev = mouse_down_at(3, 0);
+            f.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(f.close_pressed);
+
+        // MouseUp outside the close zone (x = 10, row 0): no cmClose.
+        let mut out2 = VecDeque::new();
+        let mut deferred2: Vec<crate::view::Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out2, &mut timers, &mut deferred2);
+            let mut ev = mouse_up_at(10, 0);
+            f.handle_event(&mut ev, &mut ctx);
+            assert!(ev.is_nothing(), "tracked up consumed");
+        }
+        assert!(!f.close_pressed, "tracking cleared even without close");
+        assert!(
+            out2.is_empty(),
+            "no cmClose when released outside the close zone"
+        );
     }
 
     // -- handle_event: zoom (click inside w-5..=w-3) --------------------------
@@ -831,6 +998,9 @@ mod tests {
 
     #[test]
     fn close_wins_over_zoom_in_close_hot_zone() {
+        // No stamp_id → exercises the no-id fallback (post on down), which is
+        // sufficient here: close-vs-zoom priority is structural (`else if`
+        // branch order), identical on the tracked path.
         // A narrow frame where the close zone (2..=4) and zoom zone overlap is
         // contrived; instead verify the branch order: with both flags set, a
         // click at x=3 (close zone) must post CLOSE, not ZOOM.
