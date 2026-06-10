@@ -28,28 +28,33 @@
 //! **This widget adds no receiver logic** — `source` is purely emitted here; it
 //! is consumed by a future two-bar owner (Batch B), not by the scrollbar itself.
 //!
-//! ## Press-and-hold auto-repeat (D9 — **deferred to row 31**)
+//! ## Press-and-hold auto-repeat (D9 — the A3 MouseTrackCapture seam)
 //!
 //! The C++ `handleEvent` contains two nested `do { … } while(mouseEvent(…))`
-//! loops (one for arrows, one for thumb-drag) that keep reading `evMouseAuto`
-//! / `evMouseMove` events while the button is held, continuously scrolling or
-//! dragging the thumb. This pattern requires the live event loop (row 31, D9)
-//! to drive a capture handler.
+//! loops (one for arrows, one for thumb-drag). These are ported faithfully via
+//! the A3 seam:
 //!
-//! **This row implements only the single-step-per-click behavior:** the first
-//! `evMouseDown` is classified, the value is adjusted once, and the event is
-//! consumed. See the `// TODO(row 31, D9)` comment in [`ScrollBar::handle_event`]
-//! for the exact deferred code paths.
+//! * **Arrow press-and-hold** (`evMouseAuto`): `MouseDown` on an arrow does the
+//!   first step, then calls [`Context::start_mouse_track`] with
+//!   `TrackMask { mouse_auto: true, .. }`. The `MouseAuto` arm re-derives the
+//!   part code under the cursor; if it still matches the originally-clicked part,
+//!   it calls `set_value(value + scroll_step(part))`. `MouseUp` clears tracking.
+//!
+//! * **Thumb drag** (`evMouseMove`): `MouseDown` on the indicator (or outside the
+//!   extent) does the first recompute, then calls `start_mouse_track` with
+//!   `TrackMask { mouse_move: true, .. }`. The `MouseMove` arm continuously
+//!   recomputes the value from the thumb position. `MouseUp` clears tracking.
 //!
 //! (`ctrlToArrow` / WordStar Ctrl-letter navigation — formerly deferred here —
 //! landed with the A5 phase-signal row: [`ScrollBar::handle_event`] passes the
 //! key through `ctrl_to_arrow` before the nav switch, faithful to the C++.)
 
+use crate::capture::TrackMask;
 use crate::command::Command;
 use crate::data::FieldValue;
 use crate::event::{Event, Key, MouseWheel, ctrl_to_arrow};
 use crate::theme::Role;
-use crate::view::{Context, DrawCtx, GrowMode, Options, Rect, View, ViewState};
+use crate::view::{Context, DrawCtx, GrowMode, Options, Point, Rect, View, ViewState};
 
 // ---------------------------------------------------------------------------
 // Scrollbar part codes — ports the `sb*` enum in `views.h`
@@ -128,6 +133,17 @@ pub struct ScrollBar {
     pub arrow_step: i32,
     /// Whether this is a vertical bar (`size.x == 1`). Derived at construction.
     vertical: bool,
+    /// Absolute screen position of scrollbar-local `(0, 0)`, cached each `draw`
+    /// so the mouse-tracking capture can convert absolute mouse coords to
+    /// bar-local (D3/D9 — the `Button::abs_origin` pattern).
+    abs_origin: Point,
+    /// Whether a mouse hold-track is in flight. Guards the `MouseAuto` /
+    /// `MouseMove` / `MouseUp` tracking arms against stray (untracked) events.
+    tracking: bool,
+    /// The part that was clicked to start an arrow/page hold-track. `None` for
+    /// the thumb/default branch. The C++ captures `clickPart` before the loop
+    /// and checks `getPartCode() == clickPart` each auto tick.
+    tracked_part: Option<Part>,
 }
 
 impl ScrollBar {
@@ -176,6 +192,9 @@ impl ScrollBar {
             page_step: 1,
             arrow_step: 1,
             vertical,
+            abs_origin: Point::new(0, 0),
+            tracking: false,
+            tracked_part: None,
         }
     }
 
@@ -390,6 +409,10 @@ impl View for ScrollBar {
     /// C++ `drawPos` writes into a `TDrawBuffer` then calls `writeBuf`; under
     /// D8 we write directly through `DrawCtx`.
     fn draw(&mut self, ctx: &mut DrawCtx) {
+        // Cache absolute origin for the mouse-tracking capture (D3/D9 — the
+        // MouseTrackCapture converts abs mouse coords to bar-local via this value,
+        // mirroring the Button `abs_origin` pattern).
+        self.abs_origin = ctx.origin();
         let glyphs = *ctx.glyphs();
         let page_style = ctx.style(Role::ScrollBarPage);
         let ctrl_style = ctx.style(Role::ScrollBarControls);
@@ -438,34 +461,18 @@ impl View for ScrollBar {
     /// Handles:
     /// - `evMouseWheel`: adjust by `3 * arStep`, broadcast `SCROLL_BAR_CLICKED`
     ///   then `SCROLL_BAR_CHANGED` (via `set_value`).
-    /// - `evMouseDown`: classify the part hit. **Only the four arrow parts**
-    ///   perform a `value + scroll_step(part)` step. Page parts, the indicator,
-    ///   and out-of-extent clicks all perform a **thumb-jump** to the mouse
-    ///   position using the C++ formula
-    ///   `((p-1)*(maxVal-minVal) + ((s-2)>>1)) / (s-2) + minVal`.
-    ///   Broadcasts `SCROLL_BAR_CLICKED` first.
+    /// - `evMouseDown`: classify the part hit. Arrow parts do a first step and
+    ///   arm an auto-repeat track (`TrackMask { mouse_auto: true }`). The
+    ///   indicator/default branch does a first thumb-jump and arms a move track
+    ///   (`TrackMask { mouse_move: true }`). Broadcasts `SCROLL_BAR_CLICKED`.
+    /// - `evMouseAuto` (tracked): re-derive part; step iff it matches the
+    ///   originally-clicked part (arrow/page hold loop body,
+    ///   `tscrlbar.cpp:188-191`).
+    /// - `evMouseMove` (tracked): recompute thumb value from cursor position
+    ///   (drag loop body, `tscrlbar.cpp:195-205`).
+    /// - `evMouseUp` (tracked): clear tracking flag.
     /// - `evKeyDown` (when visible + focused): arrow/page/home/end keys.
     ///   Broadcasts `SCROLL_BAR_CLICKED` then adjusts value.
-    ///
-    /// **TODO(row 31, D9):** The C++ `handleEvent` contains two nested
-    /// `do { … } while (mouseEvent(event, evMouseAuto/evMouseMove))` loops
-    /// that continuously scroll / drag the thumb while the mouse button is
-    /// held. This is a classic "synchronous inner event pump" pattern that
-    /// requires the live event loop (row 31) to be driven as a capture handler
-    /// (D9). The two loops are:
-    ///
-    /// 1. **Arrow press-and-hold** (`evMouseAuto`): while the button is held,
-    ///    re-classify the part under the cursor each tick and call
-    ///    `set_value(value + scroll_step(part))` if still over the original
-    ///    arrow part. Should become a capture handler that fires on
-    ///    `Event::MouseAuto`.
-    ///
-    /// 2. **Thumb drag** (`evMouseMove`): while the button is held, read the
-    ///    cursor position, clamp to `[1, s-1]`, and recompute
-    ///    `value = (pos-1)*(max-min) / (s-2) + min`. Should become a capture
-    ///    handler that fires on `Event::MouseMove`.
-    ///
-    /// Until row 31 is done, each mouse-down produces exactly one step/jump.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         let visible = self.state.state.visible;
 
@@ -495,18 +502,19 @@ impl View for ScrollBar {
             }
 
             // ------------------------------------------------------------------
-            // Mouse down (evMouseDown)
+            // Mouse down (evMouseDown) — tscrlbar.cpp:173-210
             // ------------------------------------------------------------------
             Event::MouseDown(me) => {
                 ctx.broadcast(Command::SCROLL_BAR_CLICKED, self.state().id());
 
-                // Compute the local mark (axis position) and thumb position.
+                // C++:173-179 — capture mouse, extent, pos, size before the
+                // loop (these become `s` / `p` / `extent` globals in C++).
                 let local = me.position; // already in view-local coords per D3
                 let mark = if self.vertical { local.y } else { local.x };
-                let pos = self.get_pos();
-                let s = self.get_size() - 1;
+                let pos = self.get_pos(); // C++ `p = getPos()`
+                let s = self.get_size() - 1; // C++ `s = getSize() - 1`
 
-                // C++: `extent = getExtent(); extent.grow(1, 1);`
+                // C++:176-178: `extent = getExtent(); extent.grow(1, 1);`
                 // getPartCode returns -1 (None here) when outside this expanded extent.
                 let extent = self.state.get_extent();
                 let expanded = Rect::new(
@@ -515,9 +523,7 @@ impl View for ScrollBar {
                     extent.b.x + 1,
                     extent.b.y + 1,
                 );
-                // When outside the expanded extent, getPartCode() returns -1 which
-                // falls into the C++ `default:` branch (thumb-jump). We encode that
-                // by setting click_part = None here and routing None → jump below.
+                // C++:180 — `clickPart = getPartCode()`
                 let click_part = if expanded.contains(local) {
                     self.get_part_code(mark, pos, s)
                 } else {
@@ -525,28 +531,40 @@ impl View for ScrollBar {
                 };
 
                 match click_part {
-                    // The four arrow parts → single scroll-step (first click).
-                    // TODO(row 31, D9): Replace with a capture handler that fires on
-                    // Event::MouseAuto, re-classifying the part under the cursor each
-                    // tick and calling set_value(value + scroll_step(part)) if the
-                    // part still matches the original click_part. Loop runs until
-                    // Event::MouseUp.
+                    // C++:182-191 — arrow branch: do first step (loop body runs once
+                    // before the first wait), then arm auto-repeat via the A3 seam.
                     Some(
                         p @ (Part::LeftArrow | Part::RightArrow | Part::UpArrow | Part::DownArrow),
                     ) => {
+                        // C++:188-190: `mouse = makeLocal(…); if getPartCode()==clickPart
+                        // setValue(value + scrollStep(clickPart))`.
+                        // First iteration: the click position IS the arrow, so the check
+                        // always passes on the first iteration.
                         self.set_value(
                             self.value + p.scroll_step(self.arrow_step, self.page_step),
                             ctx,
                         );
+                        // Enter the loop: arm auto-repeat. The C++ loop re-classifies
+                        // the part under the cursor on each `evMouseAuto` tick.
+                        if let Some(id) = self.state.id() {
+                            self.tracking = true;
+                            self.tracked_part = Some(p);
+                            ctx.start_mouse_track(
+                                id,
+                                self.abs_origin,
+                                TrackMask {
+                                    mouse_auto: true,
+                                    ..Default::default()
+                                },
+                            );
+                        }
                     }
-                    // Page parts, Indicator, and out-of-extent → thumb-jump to the
-                    // mouse cursor position (C++ `default:` branch).
-                    // TODO(row 31, D9): Replace with a capture handler that fires on
-                    // Event::MouseMove, continuously recomputing:
-                    //   i = clamp(mouse.y or .x, 1, s-1);
-                    //   value = ((i-1)*(max-min) + ((s-2)>>1)) / (s-2) + min;
-                    // until the button is released (Event::MouseUp).
+                    // C++:193-207 — default branch (page, indicator, out-of-extent):
+                    // move the thumb to the cursor position. First iteration of the
+                    // `evMouseMove` drag loop.
                     _ => {
+                        // C++:195-205: `i = clamp(mouse.y or .x, 1, s-1);
+                        // if s>2: setValue(((p-1)*(max-min) + ((s-2)>>1)) / (s-2) + min)`
                         let i = mark.max(1).min(s - 1);
                         if s > 2 {
                             let new_val = (i64::from(i - 1)
@@ -556,10 +574,89 @@ impl View for ScrollBar {
                                 + i64::from(self.min_value);
                             self.set_value(new_val as i32, ctx);
                         }
+                        // Enter the drag loop: arm move-tracking via the A3 seam.
+                        if let Some(id) = self.state.id() {
+                            self.tracking = true;
+                            self.tracked_part = None; // thumb branch: no part to re-match
+                            ctx.start_mouse_track(
+                                id,
+                                self.abs_origin,
+                                TrackMask {
+                                    mouse_move: true,
+                                    ..Default::default()
+                                },
+                            );
+                        }
                     }
                 }
 
-                // clearEvent(event) — always runs after mouse-down (no early return).
+                // C++:209: clearEvent(event) — always runs after mouse-down.
+                ev.clear();
+            }
+
+            // ------------------------------------------------------------------
+            // Mouse auto (evMouseAuto) — the arrow hold-loop body,
+            // tscrlbar.cpp:187-191. Guarded by `tracking` (mandatory A3 rule)
+            // AND `tracked_part.is_some()`: the C++ has two SEPARATE masked
+            // loops (auto-only for arrows, move-only for the thumb), so an auto
+            // event during a thumb track must fall through, not hit this arm.
+            // ------------------------------------------------------------------
+            Event::MouseAuto(me) if self.tracking && self.tracked_part.is_some() => {
+                // C++:188: `mouse = makeLocal(event.mouse.where)` — position is
+                // already bar-local (the capture localized it via abs_origin).
+                let local = me.position;
+                let mark = if self.vertical { local.y } else { local.x };
+                let pos = self.get_pos(); // C++: re-derive `p = getPos()`
+                let s = self.get_size() - 1;
+                // C++:189: `if getPartCode() == clickPart` — re-classify under
+                // the current cursor and step only if the mouse is still over the
+                // originally-clicked arrow part.
+                let cur_part = self.get_part_code(mark, pos, s);
+                if cur_part == self.tracked_part
+                    && let Some(p) = self.tracked_part
+                {
+                    // C++:190: `setValue(value + scrollStep(clickPart))`
+                    self.set_value(
+                        self.value + p.scroll_step(self.arrow_step, self.page_step),
+                        ctx,
+                    );
+                }
+                ev.clear();
+            }
+
+            // ------------------------------------------------------------------
+            // Mouse move (evMouseMove) — the thumb drag-loop body,
+            // tscrlbar.cpp:195-205. Guarded by `tracking` AND
+            // `tracked_part.is_none()`: mirrors the C++'s two separate masked
+            // loops — a move event during an arrow track must fall through.
+            // ------------------------------------------------------------------
+            Event::MouseMove(me) if self.tracking && self.tracked_part.is_none() => {
+                // C++:195: `mouse = makeLocal(event.mouse.where)` — position is
+                // already bar-local (the capture localized it via abs_origin).
+                let local = me.position;
+                let mark = if self.vertical { local.y } else { local.x };
+                let s = self.get_size() - 1;
+                // C++:197-201: `i = mouse.y or .x; clamp to [1, s-1]`
+                let i = mark.max(1).min(s - 1);
+                // C++:203-204: `if s > 2: setValue(((p-1)*(max-min)+…)/… + min)`
+                if s > 2 {
+                    let new_val = (i64::from(i - 1) * i64::from(self.max_value - self.min_value)
+                        + i64::from((s - 2) >> 1))
+                        / i64::from(s - 2)
+                        + i64::from(self.min_value);
+                    self.set_value(new_val as i32, ctx);
+                }
+                ev.clear();
+            }
+
+            // ------------------------------------------------------------------
+            // Mouse up — post-loop code (both branches). Guarded by `tracking`
+            // (MouseUp is not mask-gated in Group::wants, so a stray up must
+            // fall through). tscrlbar.cpp:191 / :206 — loop exits on MouseUp.
+            // ------------------------------------------------------------------
+            Event::MouseUp(_) if self.tracking => {
+                self.tracking = false;
+                self.tracked_part = None;
                 ev.clear();
             }
 
@@ -682,6 +779,42 @@ mod tests {
             wheel: MouseWheel::None,
             modifiers: KeyModifiers::default(),
         })
+    }
+
+    fn mouse_auto_at(x: i32, y: i32) -> Event {
+        Event::MouseAuto(MouseEvent {
+            position: Point::new(x, y),
+            buttons: MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+
+    fn mouse_move_at(x: i32, y: i32) -> Event {
+        Event::MouseMove(MouseEvent {
+            position: Point::new(x, y),
+            buttons: MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+
+    fn mouse_up_at(x: i32, y: i32) -> Event {
+        Event::MouseUp(MouseEvent {
+            position: Point::new(x, y),
+            ..Default::default()
+        })
+    }
+
+    /// Stamp a fresh ViewId onto a scrollbar (simulating Group::insert).
+    fn stamp_id(sb: &mut ScrollBar) -> crate::view::ViewId {
+        let id = crate::view::ViewId::next();
+        sb.state.id = Some(id);
+        id
     }
 
     // -----------------------------------------------------------------------
@@ -1190,5 +1323,300 @@ mod tests {
             sb.draw(&mut dc);
         });
         insta::assert_snapshot!(screen.snapshot());
+    }
+
+    // -----------------------------------------------------------------------
+    // A3 mouse-track seam — arrow hold-repeat (evMouseAuto)
+    // -----------------------------------------------------------------------
+
+    /// Mouse-down on the up-arrow does the first step AND arms tracking
+    /// (`PushCapture` deferred, `tracking == true`, `tracked_part == UpArrow`).
+    /// The single-shot first-step behavior is unchanged.
+    #[test]
+    fn track_arrow_mouse_down_arms_capture() {
+        let mut sb = ScrollBar::new(Rect::new(0, 0, 1, 10));
+        let _id = stamp_id(&mut sb);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<crate::view::Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.set_params(10, 0, 100, 5, 1, &mut ctx);
+        }
+        out.clear();
+        deferred.clear();
+
+        // Click at (0, 0) = the up-arrow cell.
+        let mut ev = mouse_down_at(0, 0);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "mouse-down consumed");
+        assert_eq!(sb.value, 9, "first step applied (10 - arStep=1 = 9)");
+        assert!(sb.tracking, "tracking flag set");
+        // A PushCapture must have been deferred (the A3 seam).
+        assert!(
+            deferred
+                .iter()
+                .any(|d| matches!(d, crate::view::Deferred::PushCapture(_))),
+            "PushCapture deferred for the arrow hold-track"
+        );
+    }
+
+    /// `MouseAuto` while tracking on the up-arrow, cursor still over the arrow:
+    /// value decrements again (the loop body repeats).
+    #[test]
+    fn track_arrow_auto_repeats_while_on_same_part() {
+        let mut sb = ScrollBar::new(Rect::new(0, 0, 1, 10));
+        let _id = stamp_id(&mut sb);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<crate::view::Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.set_params(10, 0, 100, 5, 1, &mut ctx);
+        }
+        // Arm the track via a MouseDown on the up-arrow.
+        let mut ev = mouse_down_at(0, 0);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(sb.value, 9);
+        out.clear();
+        deferred.clear();
+
+        // MouseAuto at (0, 0) — still over the up-arrow → another step.
+        let mut ev = mouse_auto_at(0, 0);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "MouseAuto consumed");
+        assert_eq!(sb.value, 8, "second step: 9 - 1 = 8");
+        assert!(sb.tracking, "still tracking after auto");
+    }
+
+    /// `MouseAuto` while tracking on the up-arrow, cursor moved off to the page
+    /// area: value must NOT change (tscrlbar.cpp:189 `getPartCode() == clickPart`).
+    #[test]
+    fn track_arrow_auto_pauses_when_off_part() {
+        let mut sb = ScrollBar::new(Rect::new(0, 0, 1, 10));
+        let _id = stamp_id(&mut sb);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<crate::view::Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.set_params(50, 0, 100, 5, 1, &mut ctx);
+        }
+        // Arm the track via a MouseDown on the up-arrow.
+        let mut ev = mouse_down_at(0, 0);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.handle_event(&mut ev, &mut ctx);
+        }
+        let value_after_first = sb.value;
+        out.clear();
+        deferred.clear();
+
+        // MouseAuto at (0, 3) — moved into the page-up region, not the up-arrow.
+        let mut ev = mouse_auto_at(0, 3);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "MouseAuto still consumed (modal hold)");
+        assert_eq!(
+            sb.value, value_after_first,
+            "no step when cursor off the arrow"
+        );
+        assert!(sb.tracking, "still tracking");
+    }
+
+    /// `MouseUp` clears the tracking flag (post-loop code, tscrlbar.cpp:191).
+    #[test]
+    fn track_arrow_mouse_up_clears_tracking() {
+        let mut sb = ScrollBar::new(Rect::new(0, 0, 1, 10));
+        let _id = stamp_id(&mut sb);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<crate::view::Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.set_params(10, 0, 100, 5, 1, &mut ctx);
+        }
+        let mut ev = mouse_down_at(0, 0);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(sb.tracking);
+
+        let mut ev = mouse_up_at(0, 0);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "MouseUp consumed");
+        assert!(!sb.tracking, "tracking cleared on MouseUp");
+    }
+
+    /// A stray `MouseUp` (no tracking in flight) must fall through — the guard
+    /// protects against untracked ups (MouseUp not mask-gated in Group::wants).
+    #[test]
+    fn track_stray_mouse_up_falls_through() {
+        let mut sb = ScrollBar::new(Rect::new(0, 0, 1, 10));
+        let _id = stamp_id(&mut sb);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<crate::view::Deferred> = vec![];
+        // No tracking armed.
+        let mut ev = mouse_up_at(0, 0);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(
+            !ev.is_nothing(),
+            "stray MouseUp falls through (not consumed)"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // A3 mouse-track seam — thumb drag (evMouseMove)
+    // -----------------------------------------------------------------------
+
+    /// Mouse-down in the page/trough area arms a move-track (not auto-track).
+    #[test]
+    fn track_thumb_mouse_down_arms_move_capture() {
+        let mut sb = ScrollBar::new(Rect::new(0, 0, 1, 10));
+        let _id = stamp_id(&mut sb);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<crate::view::Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.set_params(50, 0, 100, 5, 1, &mut ctx);
+        }
+        deferred.clear();
+        out.clear();
+
+        // Click in the trough (y=3, which is in PageUp for value=50, s=9, pos=5).
+        let mut ev = mouse_down_at(0, 3);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing());
+        assert!(sb.tracking, "tracking armed for thumb drag");
+        assert!(
+            deferred
+                .iter()
+                .any(|d| matches!(d, crate::view::Deferred::PushCapture(_))),
+            "PushCapture deferred for the thumb drag-track"
+        );
+    }
+
+    /// `MouseMove` while tracking in the trough recomputes the value from cursor
+    /// position (thumb drag loop body, tscrlbar.cpp:195-205).
+    #[test]
+    fn track_thumb_move_updates_value() {
+        let mut sb = ScrollBar::new(Rect::new(0, 0, 1, 10));
+        let _id = stamp_id(&mut sb);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<crate::view::Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.set_params(50, 0, 100, 5, 1, &mut ctx);
+        }
+        // Arm the drag-track via a MouseDown in the trough.
+        let mut ev = mouse_down_at(0, 3);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.handle_event(&mut ev, &mut ctx);
+        }
+        let value_after_down = sb.value;
+        out.clear();
+        deferred.clear();
+
+        // MouseMove to y=7 (near the bottom): value should jump higher.
+        // Formula: i=7, ((7-1)*100 + ((9-2)>>1)) / (9-2) + 0 = (600+3)/7 = 86.
+        let mut ev = mouse_move_at(0, 7);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "tracked MouseMove consumed");
+        assert!(sb.tracking, "still tracking after move");
+        assert_ne!(sb.value, value_after_down, "value changed on move");
+        // The exact value is (6*100+3)/7 = 603/7 = 86.
+        assert_eq!(sb.value, 86);
+    }
+
+    /// The two track kinds are discriminated (the C++ has two SEPARATE masked
+    /// loops): a `MouseAuto` during a THUMB track and a `MouseMove` during an
+    /// ARROW track must both fall through unconsumed — they belong to the other
+    /// loop's mask, and only the capture's mask filtering makes them
+    /// unreachable in normal flow.
+    #[test]
+    fn track_wrong_event_kind_falls_through() {
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<crate::view::Deferred> = vec![];
+
+        // -- Thumb track (tracked_part == None): MouseAuto must fall through.
+        let mut sb = ScrollBar::new(Rect::new(0, 0, 1, 10));
+        let _id = stamp_id(&mut sb);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.set_params(50, 0, 100, 5, 1, &mut ctx);
+        }
+        let mut ev = mouse_down_at(0, 3); // trough → thumb-drag track
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(sb.tracking && sb.tracked_part.is_none());
+        let value_before = sb.value;
+
+        let mut ev = mouse_auto_at(0, 0);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(
+            !ev.is_nothing(),
+            "MouseAuto during a thumb track falls through unconsumed"
+        );
+        assert_eq!(sb.value, value_before, "…and changes nothing");
+
+        // -- Arrow track (tracked_part == Some): MouseMove must fall through.
+        let mut sb = ScrollBar::new(Rect::new(0, 0, 1, 10));
+        let _id = stamp_id(&mut sb);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.set_params(50, 0, 100, 5, 1, &mut ctx);
+        }
+        let mut ev = mouse_down_at(0, 0); // up-arrow → auto track
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(sb.tracking && sb.tracked_part.is_some());
+        let value_before = sb.value;
+
+        let mut ev = mouse_move_at(0, 7);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            sb.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(
+            !ev.is_nothing(),
+            "MouseMove during an arrow track falls through unconsumed"
+        );
+        assert_eq!(sb.value, value_before, "…and changes nothing");
     }
 }

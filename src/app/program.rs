@@ -3669,6 +3669,140 @@ mod tests {
         );
     }
 
+    /// B2 end-to-end: a held mouse button on a scrollbar's down-arrow steps the
+    /// value on the synthesizer's Borland cadence (440 ms then 110 ms), pauses
+    /// when the held position moves off the arrow, and stops on MouseUp — all
+    /// through real pumps (MouseDown via the backend queue arms the synthesizer;
+    /// idle pumps synthesize `MouseAuto`s; the `MouseTrackCapture` localizes and
+    /// forwards them to the bar's `MouseAuto` arm via `Deferred::MouseTrack`).
+    ///
+    /// Scrollbar bounds: `(10, 5, 11, 15)` — vertical 1×10 in the desktop.
+    ///   s = 9; value 50 of [0,100] → pos = 5.
+    ///   down-arrow cell = bar-local (0, 9) = abs (10, 14).
+    ///   trough (PageUp) cell = bar-local (0, 3) = abs (10, 8).
+    #[test]
+    fn scrollbar_arrow_hold_auto_repeats_through_pump() {
+        use crate::widgets::ScrollBar;
+
+        // Helper to read sb.value from the tree.
+        fn sb_value(program: &mut Program, id: ViewId) -> i32 {
+            program
+                .group_mut()
+                .find_mut(id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<ScrollBar>())
+                .map(|sb| sb.value)
+                .expect("scrollbar resolves")
+        }
+
+        let ids: Rc<RefCell<Option<ViewId>>> = Rc::new(RefCell::new(None));
+        let ids_cap = ids.clone();
+        let (backend, handle) = HeadlessBackend::new(80, 25);
+        let theme = Theme::classic_blue();
+        let clock = Rc::new(ManualClock::new(0));
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock.clone()),
+            theme,
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                let mut sb = ScrollBar::new(Rect::new(10, 5, 11, 15)); // vertical 1×10
+                // Range/value set directly (pub fields) — set_params needs a ctx.
+                sb.value = 50;
+                sb.min_value = 0;
+                sb.max_value = 100;
+                sb.page_step = 5;
+                sb.arrow_step = 1;
+                *ids_cap.borrow_mut() = Some(desktop.insert_view(Box::new(sb)));
+                Some(Box::new(desktop))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        let sb_id = ids.borrow().expect("scrollbar id set");
+
+        // Settle the startup queue, then draw once so abs_origin is cached (10,5).
+        for _ in 0..3 {
+            program.pump_once();
+        }
+        program.out_events.clear();
+
+        // --- MouseDown on the down-arrow (abs (10,14) = bar-local (0,9)) via the
+        // backend queue, so the pump's pick observes it and ARMS the synthesizer.
+        handle.push_event(mouse_down_at(10, 14));
+        program.pump_once();
+        assert_eq!(
+            sb_value(&mut program, sb_id),
+            51,
+            "first step on MouseDown (loop body runs once before the first wait)"
+        );
+        assert_eq!(program.capture_len(), 1, "auto track armed");
+        // Quiesce the CLICKED/CHANGED broadcasts so later picks are idle.
+        pump_until_quiet(&mut program);
+
+        // --- +439 ms: inside the 440 ms initial delay — no auto, no step.
+        clock.set(439);
+        program.pump_once();
+        pump_until_quiet(&mut program);
+        assert_eq!(
+            sb_value(&mut program, sb_id),
+            51,
+            "no step inside the delay"
+        );
+
+        // --- +440 ms: the first synthesized auto, still over the arrow → step 2.
+        clock.set(440);
+        program.pump_once();
+        assert_eq!(
+            sb_value(&mut program, sb_id),
+            52,
+            "second step on the first auto (+440 ms)"
+        );
+        pump_until_quiet(&mut program);
+
+        // --- +550 ms (440 + 110): the second auto → step 3.
+        clock.set(550);
+        program.pump_once();
+        assert_eq!(
+            sb_value(&mut program, sb_id),
+            53,
+            "third step on the second auto (+550 ms)"
+        );
+        pump_until_quiet(&mut program);
+
+        // --- Held position moves OFF the arrow into the trough (abs (10,8) =
+        // bar-local (0,3) = PageUp). The capture swallows the move (auto-only
+        // mask) but the synthesizer's position bookkeeping updates, so the next
+        // auto re-derives PageUp ≠ DownArrow → the stepping PAUSES.
+        handle.push_event(mouse_move_at(10, 8));
+        program.pump_once();
+        pump_until_quiet(&mut program);
+        clock.set(660);
+        program.pump_once();
+        pump_until_quiet(&mut program);
+        assert_eq!(
+            sb_value(&mut program, sb_id),
+            53,
+            "auto over the trough does not step (part mismatch pauses the repeat)"
+        );
+        assert_eq!(program.capture_len(), 1, "capture stays during the pause");
+
+        // --- MouseUp ends the hold: capture pops, synthesizer disarms; a far
+        // clock advance produces no further step.
+        handle.push_event(mouse_up_at(10, 8));
+        program.pump_once();
+        assert_eq!(program.capture_len(), 0, "capture popped on MouseUp");
+        pump_until_quiet(&mut program);
+        clock.set(5_000);
+        program.pump_once();
+        program.pump_once();
+        assert_eq!(
+            sb_value(&mut program, sb_id),
+            53,
+            "no step after MouseUp (synthesizer disarmed, track ended)"
+        );
+    }
+
     // -- A3: the global evMouseAuto synthesizer ------------------------------
 
     /// Build a program with a 10×4 recording probe at the screen origin whose

@@ -44,32 +44,30 @@
 //!
 //! # Deferrals (documented TODOs, not built)
 //!
-//! 1. **Mouse press-and-hold auto-scroll + drag-select.** The C++
-//!    `do{…}while(mouseEvent(…))` loops become a capture handler later; here a
-//!    mouse-down does a **single-shot** position/select. `TODO(row 31, D9)`.
-//! 2. **The `evCommand` clipboard block** (`cmCut`/`cmCopy`/`cmPaste`) — there is
+//! 1. **The `evCommand` clipboard block** (`cmCut`/`cmCopy`/`cmPaste`) — there is
 //!    no `Context`-level clipboard accessor yet. `TODO(clipboard)`.
-//! 3. **`updateCommands`/`canUpdateCommands`** (graying cmCut/Copy/Paste) — the
+//! 2. **`updateCommands`/`canUpdateCommands`** (graying cmCut/Copy/Paste) — the
 //!    blocking API gap is closed (`Context::command_enabled` exists, added with
 //!    the A1 denylist flip); the graying itself is backlog row B1
 //!    (`docs/BACKLOG.md`), same as TButton.
 //!    `TODO(B1 command graying): ctx.command_enabled is available; port the C++
 //!    graying logic here.`
-//! 4. **`valid()`'s `select()` side-effect** — focusing the bad field needs
+//! 3. **`valid()`'s `select()` side-effect** — focusing the bad field needs
 //!    `&mut Context`; `valid(&self)` returns the faithful boolean only.
 //!    `TODO(valid-select)`.
-//! 5. **Validator `transfer`** (the D10 typed-non-text hook) — live via
+//! 4. **Validator `transfer`** (the D10 typed-non-text hook) — live via
 //!    [`Validator::transfer_get`]/[`Validator::transfer_set`]; `RangeValidator`
 //!    (row 59) overrides them. `InputLine::value`/`set_value` consult the hook
 //!    before the text fallback (C++ `getData`/`setData` `voTransfer` path).
 
+use crate::capture::TrackMask;
 use crate::command::Command;
 use crate::data::FieldValue;
 use crate::event::{Event, Key, MouseEvent, ctrl_to_arrow};
 use crate::text;
 use crate::theme::Role;
 use crate::validate::Validator;
-use crate::view::{Context, DrawCtx, Options, Rect, StateFlag, View, ViewState};
+use crate::view::{Context, DrawCtx, Options, Point, Rect, StateFlag, View, ViewState};
 
 /// `Ctrl-Y` (`CONTROL_Y = 25`) — clears the whole field. In the decomposed key
 /// model this is `Key::Char('y')` + `ctrl`.
@@ -131,6 +129,18 @@ pub struct InputLine {
     old_first_pos: i32,
     old_sel_start: i32,
     old_sel_end: i32,
+    // -- mouse hold-tracking (A3 seam) ------------------------------------
+    /// Absolute screen position of input-local `(0, 0)`, cached each `draw`
+    /// so the mouse-tracking capture can convert absolute mouse coords to
+    /// field-local (D3/D9 — the `Button::abs_origin` pattern).
+    abs_origin: Point,
+    /// Whether a mouse hold-track is in flight. Guards the `MouseAuto` /
+    /// `MouseMove` / `MouseUp` tracking arms against stray events.
+    tracking: bool,
+    /// `true` for the drag-select branch (mask: move+auto); `false` for the
+    /// edge-auto-scroll branch (mask: auto only). Distinguishes which loop
+    /// body to execute in the `MouseAuto` arm.
+    tracking_drag: bool,
 }
 
 impl InputLine {
@@ -190,6 +200,9 @@ impl InputLine {
             old_first_pos: 0,
             old_sel_start: 0,
             old_sel_end: 0,
+            abs_origin: Point::new(0, 0),
+            tracking: false,
+            tracking_drag: false,
         };
         il.sync_cursor();
         il
@@ -349,7 +362,7 @@ impl InputLine {
         }
     }
 
-    // -- mouse (single-shot; press-and-hold deferred) ----------------------
+    // -- mouse helpers (used by the press-and-hold track arms) -------------
 
     /// `TInputLine::mousePos` — the byte offset under the mouse (view-local
     /// position already applied by the group).
@@ -361,8 +374,8 @@ impl InputLine {
     }
 
     /// `TInputLine::mouseDelta` — the auto-scroll direction for a mouse at the
-    /// edge (kept for the deferred press-and-hold loop; used by the single-shot
-    /// double-click guard only).
+    /// edge. Used by `MouseDown` (the first loop iteration) and the `MouseAuto`
+    /// arm (hold-repeat ticks) in both the edge-scroll and drag-select branches.
     fn mouse_delta(&self, m: &MouseEvent) -> i32 {
         if m.position.x <= 0 {
             -1
@@ -417,6 +430,10 @@ impl View for InputLine {
     /// the scroll arrows, and the selection highlight. The cursor is **not** set
     /// here (D9 — see [`sync_cursor`](InputLine::sync_cursor)).
     fn draw(&mut self, ctx: &mut DrawCtx) {
+        // Cache absolute origin for the mouse-tracking capture (D3/D9 — the
+        // MouseTrackCapture converts abs mouse coords to field-local via this
+        // value, mirroring the Button `abs_origin` pattern).
+        self.abs_origin = ctx.origin();
         let size = self.state.size;
         // getColor((sfFocused)?2:1) — both palette indices map to InputNormal.
         let color = ctx.style(Role::InputNormal);
@@ -471,9 +488,9 @@ impl View for InputLine {
     }
 
     /// `TInputLine::handleEvent` — the `sfSelected` keyboard/mouse block. See the
-    /// module deferrals for the clipboard / press-and-hold / command-graying
-    /// parts that are intentionally not ported.
-    fn handle_event(&mut self, ev: &mut Event, _ctx: &mut Context) {
+    /// module deferrals for the clipboard / command-graying parts that are
+    /// intentionally not ported.
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         // Base TView::handleEvent (mouse-down auto-select is the group's job now;
         // base is a no-op).
         if !self.state.state.selected {
@@ -481,35 +498,111 @@ impl View for InputLine {
         }
 
         match ev {
-            // -- Single-shot mouse positioning ----------------------------
+            // -- Mouse positioning + hold-tracking (A3 seam) ---------------
+            //
+            // The C++ `handleEvent` (tinputli.cpp:312-339) has two `do{}while`
+            // loops starting from the same `evMouseDown` — we port them as the
+            // first iteration in `MouseDown` then arm the capture for subsequent
+            // ticks.
             Event::MouseDown(m) => {
                 let m = *m;
                 let delta = self.mouse_delta(&m);
                 if self.can_scroll(delta) {
-                    // TODO(row 31, D9): press-and-hold edge auto-repeat loop
-                    // deferred; the single mouse-down scroll-by-one below is
-                    // faithful (C++ do/while runs once).
-                    // C++ tinputli.cpp:314-320 is a do{…}while(mouseEvent(…)); the
-                    // first iteration always runs, so even a single click on a
-                    // scrollable edge does firstPos += delta ONCE (guarded by
-                    // canScroll) before any auto-repeat.
+                    // C++ tinputli.cpp:313-320 — edge auto-scroll loop.
+                    // First iteration: `if canScroll(delta) firstPos += delta`.
                     self.first_pos += delta;
+                    // Arm auto-only repeat via the A3 seam.
+                    if let Some(id) = self.state.id() {
+                        self.tracking = true;
+                        self.tracking_drag = false;
+                        ctx.start_mouse_track(
+                            id,
+                            self.abs_origin,
+                            TrackMask {
+                                mouse_auto: true,
+                                ..Default::default()
+                            },
+                        );
+                    }
                 } else if m.flags.double_click {
                     // C++ tinputli.cpp:322 selectAll(True) — scroll arg defaults
                     // to True (dialogs.h:177), so double-click selects-all AND
-                    // scrolls the end into view.
+                    // scrolls the end into view. No tracking loop for this branch.
                     self.select_all(true, true);
                 } else {
-                    // C++ drag-select branch — the single-shot residue is its first
-                    // iteration: anchor + cursor at the click, ordered by the block.
-                    // TODO(row 31, D9): the do{…}while(mouseEvent(…)) drag-select
-                    // loop (subsequent moves) → a capture handler.
+                    // C++ tinputli.cpp:324-338 — drag-select loop.
+                    // First iteration: `anchor = mousePos(event); curPos = mousePos(event);
+                    // adjustSelectBlock()`.
                     let pos = self.mouse_pos(&m);
                     self.anchor = pos;
                     self.cur_pos = pos;
                     self.adjust_select_block();
+                    // Arm move+auto tracking via the A3 seam.
+                    if let Some(id) = self.state.id() {
+                        self.tracking = true;
+                        self.tracking_drag = true;
+                        ctx.start_mouse_track(
+                            id,
+                            self.abs_origin,
+                            TrackMask {
+                                mouse_move: true,
+                                mouse_auto: true,
+                                ..Default::default()
+                            },
+                        );
+                    }
                 }
                 self.sync_cursor();
+                ev.clear();
+            }
+
+            // -- Mouse auto (evMouseAuto) — loop body, guarded by tracking --
+            //
+            // For the edge-scroll branch (tinputli.cpp:315-318):
+            //   `if canScroll(delta) firstPos += delta`
+            //
+            // For the drag-select branch (tinputli.cpp:327-335):
+            //   `if event.what==evMouseAuto: delta=mouseDelta; if canScroll(delta) firstPos+=delta`
+            //   then `curPos=mousePos; adjustSelectBlock`
+            Event::MouseAuto(m) if self.tracking => {
+                let m = *m;
+                let delta = self.mouse_delta(&m);
+                if self.can_scroll(delta) {
+                    // C++ tinputli.cpp:328-330 (drag branch auto body) /
+                    // tinputli.cpp:315-318 (edge branch): edge-scroll
+                    self.first_pos += delta;
+                }
+                if self.tracking_drag {
+                    // C++ tinputli.cpp:332-334 (drag branch, both auto and move):
+                    // `curPos = mousePos(event); adjustSelectBlock()`
+                    self.cur_pos = self.mouse_pos(&m);
+                    self.adjust_select_block();
+                }
+                self.sync_cursor();
+                ev.clear();
+            }
+
+            // -- Mouse move (evMouseMove) — drag-select loop body (move ticks)
+            //
+            // C++ tinputli.cpp:332-334 (inside the move|auto loop, for non-auto
+            // events): `curPos=mousePos(event); adjustSelectBlock()`.
+            // The edge-scroll branch's C++ loop is auto-only-masked, so a move
+            // during an edge track must FALL THROUGH unconsumed (the two-
+            // separate-masked-loops structure, same as the scrollbar arms).
+            Event::MouseMove(m) if self.tracking && self.tracking_drag => {
+                let m = *m;
+                // C++ tinputli.cpp:333-334: `curPos = mousePos; adjustSelectBlock`
+                self.cur_pos = self.mouse_pos(&m);
+                self.adjust_select_block();
+                self.sync_cursor();
+                ev.clear();
+            }
+
+            // -- Mouse up — post-loop (tracking ends). Guarded by `tracking`
+            // (MouseUp is not mask-gated in Group::wants).
+            Event::MouseUp(_) if self.tracking => {
+                self.tracking = false;
+                self.tracking_drag = false;
                 ev.clear();
             }
 
@@ -766,7 +859,9 @@ impl View for InputLine {
 mod tests {
     use super::*;
     use crate::backend::{HeadlessBackend, Renderer};
-    use crate::event::{KeyEvent, KeyModifiers, MouseButtons};
+    use crate::event::{
+        KeyEvent, KeyModifiers, MouseButtons, MouseEvent, MouseEventFlags, MouseWheel,
+    };
     use crate::screen::Buffer;
     use crate::theme::Theme;
     use crate::timer::TimerQueue;
@@ -799,6 +894,18 @@ mod tests {
         (out.into_iter().collect(), r)
     }
 
+    /// Like `with_ctx` but also returns the deferred vec (for capture assertions).
+    fn with_ctx_d<R>(f: impl FnOnce(&mut Context) -> R) -> (Vec<Event>, Vec<Deferred>, R) {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut deferred: Vec<Deferred> = Vec::new();
+        let r = {
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
+            f(&mut ctx)
+        };
+        (out.into_iter().collect(), deferred, r)
+    }
+
     fn key(k: Key) -> Event {
         Event::KeyDown(KeyEvent::new(k, KeyModifiers::default()))
     }
@@ -828,6 +935,56 @@ mod tests {
 
     fn send_key(il: &mut InputLine, ev: &mut Event) {
         with_ctx(|ctx| il.handle_event(ev, ctx));
+    }
+
+    fn mouse_down_at(x: i32, y: i32) -> Event {
+        Event::MouseDown(MouseEvent {
+            position: Point::new(x, y),
+            buttons: MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            flags: MouseEventFlags::default(),
+            wheel: MouseWheel::None,
+            modifiers: KeyModifiers::default(),
+        })
+    }
+
+    fn mouse_auto_at(x: i32, y: i32) -> Event {
+        Event::MouseAuto(MouseEvent {
+            position: Point::new(x, y),
+            buttons: MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+
+    fn mouse_move_at(x: i32, y: i32) -> Event {
+        Event::MouseMove(MouseEvent {
+            position: Point::new(x, y),
+            buttons: MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+
+    fn mouse_up_at(x: i32, y: i32) -> Event {
+        Event::MouseUp(MouseEvent {
+            position: Point::new(x, y),
+            ..Default::default()
+        })
+    }
+
+    /// Build a selected field with an id (simulating Group::insert).
+    fn field_with_id(width: i32, data: &str) -> (InputLine, crate::view::ViewId) {
+        let mut il = field(width, data);
+        let id = crate::view::ViewId::next();
+        il.state.id = Some(id);
+        (il, id)
     }
 
     // -- snapshot -----------------------------------------------------------
@@ -1396,5 +1553,194 @@ mod tests {
         assert_eq!(il.sel_start, 0);
         assert_eq!(il.sel_end, 5, "selectAll on becoming selected");
         assert_eq!(il.cur_pos, 5);
+    }
+
+    // -- A3 seam: drag-select tracking (evMouseMove | evMouseAuto) -----------
+    //
+    // These tests drive the tracking arms directly (as the pump's Deferred::MouseTrack
+    // apply does) with field-local positions. The seam itself is unit-tested in
+    // capture::tests; here we verify the widget's loop body is correct.
+
+    /// Mouse-down in the text area (not on an edge) arms drag-select tracking:
+    /// anchor + cursor at the click, `tracking == true`, `tracking_drag == true`,
+    /// and a `PushCapture` is deferred.
+    #[test]
+    fn track_drag_mouse_down_arms_capture() {
+        let (mut il, _id) = field_with_id(20, "hello world");
+        // Mouse-down at col 4 (character 'd' area, well inside the field).
+        let mut ev = mouse_down_at(4, 0);
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        assert!(ev.is_nothing(), "mouse-down consumed");
+        assert!(il.tracking, "tracking armed");
+        assert!(il.tracking_drag, "drag branch selected");
+        assert!(
+            deferred
+                .iter()
+                .any(|d| matches!(d, Deferred::PushCapture(_))),
+            "PushCapture deferred for drag-select tracking"
+        );
+        // anchor and cur_pos are both at the clicked column (field-local: col 4 →
+        // first_pos=0, so byte offset for col 3 = 3).
+        assert_eq!(il.anchor, il.cur_pos, "anchor == cursor at click time");
+    }
+
+    /// `MouseMove` while tracking (drag-select): cursor moves to the new position
+    /// and the selection block is adjusted (tinputli.cpp:332-334).
+    #[test]
+    fn track_drag_move_extends_selection() {
+        let (mut il, _id) = field_with_id(20, "hello world");
+        // Down at col 2 (byte 1 = 'e').
+        let mut ev = mouse_down_at(2, 0);
+        with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        assert!(il.tracking_drag);
+
+        // Move to col 8 (byte 7 = 'o').
+        let mut ev = mouse_move_at(8, 0);
+        let (_, _, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        assert!(ev.is_nothing(), "tracked move consumed");
+        assert!(il.tracking, "still tracking after move");
+        // sel_start <= anchor, sel_end >= anchor.
+        assert!(il.sel_start <= il.anchor, "sel_start ≤ anchor");
+        assert!(il.sel_end >= il.anchor, "sel_end ≥ anchor");
+        // The selection must span more than a single point.
+        assert!(
+            il.sel_end > il.sel_start,
+            "selection extends: sel_start={} sel_end={}",
+            il.sel_start,
+            il.sel_end
+        );
+    }
+
+    /// `MouseAuto` while tracking (drag-select): if the cursor is at the left edge
+    /// (x <= 0), `first_pos` decrements (edge-scroll; tinputli.cpp:327-330).
+    /// Also updates `cur_pos` and `sel` (the drag body still runs after edge-scroll).
+    #[test]
+    fn track_drag_auto_edge_scrolls_and_updates_cursor() {
+        // Build a long string in a narrow field so we can trigger the edge scroll.
+        let (mut il, _id) = field_with_id(8, "abcdefghijklmnop");
+        il.first_pos = 5; // scrolled right a bit
+        il.cur_pos = 5; // cursor in the middle
+
+        // Mouse-down in the middle of the field to arm tracking.
+        let mut ev = mouse_down_at(4, 0);
+        with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        let first_pos_before = il.first_pos;
+
+        // MouseAuto at x = 0 (left edge): `mouse_delta` returns -1, `can_scroll(-1)`
+        // should return true (first_pos > 0), so first_pos should decrease.
+        let mut ev = mouse_auto_at(0, 0);
+        with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        assert!(ev.is_nothing(), "tracked auto consumed");
+        assert!(il.tracking, "still tracking");
+        assert!(
+            il.first_pos < first_pos_before,
+            "first_pos scrolled left: was {}, now {}",
+            first_pos_before,
+            il.first_pos
+        );
+    }
+
+    /// `MouseUp` clears the tracking flag (post-loop code).
+    #[test]
+    fn track_drag_mouse_up_clears_tracking() {
+        let (mut il, _id) = field_with_id(20, "hello world");
+        let mut ev = mouse_down_at(4, 0);
+        with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        assert!(il.tracking);
+
+        let mut ev = mouse_up_at(4, 0);
+        with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        assert!(ev.is_nothing(), "MouseUp consumed");
+        assert!(!il.tracking, "tracking cleared on MouseUp");
+    }
+
+    /// A stray `MouseUp` (not tracking) falls through — the guard.
+    #[test]
+    fn track_stray_mouse_up_falls_through() {
+        let (mut il, _id) = field_with_id(20, "hello world");
+        // No tracking armed.
+        let mut ev = mouse_up_at(4, 0);
+        let (_, _, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        assert!(
+            !ev.is_nothing(),
+            "stray MouseUp falls through (not consumed)"
+        );
+    }
+
+    /// A `MouseMove` during an EDGE-scroll track falls through unconsumed —
+    /// the C++ edge loop is auto-only-masked (two-separate-masked-loops, same
+    /// guard discipline as the scrollbar arms).
+    #[test]
+    fn track_move_during_edge_track_falls_through() {
+        let (mut il, _id) = field_with_id(8, "abcdefghijklmnop");
+        il.first_pos = 0;
+
+        // Arm the edge branch (auto-only) via a right-edge down.
+        let mut down = mouse_down_at(7, 0);
+        with_ctx_d(|ctx| il.handle_event(&mut down, ctx));
+        assert!(il.tracking && !il.tracking_drag, "edge track armed");
+        let cur_pos_before = il.cur_pos;
+
+        // A MouseMove must fall through: unconsumed, no cursor/selection change.
+        let mut mv = mouse_move_at(3, 0);
+        with_ctx_d(|ctx| il.handle_event(&mut mv, ctx));
+        assert!(
+            !mv.is_nothing(),
+            "MouseMove during edge track falls through unconsumed"
+        );
+        assert_eq!(il.cur_pos, cur_pos_before, "no cursor change");
+    }
+
+    // -- A3 seam: edge auto-scroll tracking (evMouseAuto only) ---------------
+
+    /// Mouse-down on the right scroll edge (x >= size.x-1) arms auto-only tracking
+    /// and does the first `first_pos += delta` step
+    /// (tinputli.cpp:313-320 first iteration).
+    #[test]
+    fn track_edge_scroll_arms_capture() {
+        // Field width 8, long string so can_scroll(1) is true.
+        let (mut il, _id) = field_with_id(8, "abcdefghijklmnop");
+        il.first_pos = 0;
+
+        // x = size.x - 1 = 7 → mouse_delta returns +1.
+        let mut ev = mouse_down_at(7, 0);
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        assert!(ev.is_nothing(), "consumed");
+        assert!(il.tracking, "tracking armed for edge scroll");
+        assert!(!il.tracking_drag, "edge branch, not drag branch");
+        assert!(
+            deferred
+                .iter()
+                .any(|d| matches!(d, Deferred::PushCapture(_))),
+            "PushCapture deferred for edge auto-scroll"
+        );
+        // First iteration ran: first_pos scrolled right by 1.
+        assert_eq!(il.first_pos, 1, "first_pos incremented on first iteration");
+    }
+
+    /// `MouseAuto` while edge-scroll tracking repeats the scroll
+    /// (tinputli.cpp:315-318).
+    #[test]
+    fn track_edge_scroll_auto_repeats() {
+        let (mut il, _id) = field_with_id(8, "abcdefghijklmnop");
+        il.first_pos = 0;
+
+        // Arm tracking via right-edge down.
+        let mut ev = mouse_down_at(7, 0);
+        with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        let first_pos_after_down = il.first_pos;
+
+        // MouseAuto at x = 7 again → delta = +1, can_scroll(1) = true.
+        let mut ev = mouse_auto_at(7, 0);
+        with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        assert!(ev.is_nothing(), "auto consumed");
+        assert!(
+            il.first_pos > first_pos_after_down,
+            "first_pos scrolled further: was {}, now {}",
+            first_pos_after_down,
+            il.first_pos
+        );
+        // Cursor should NOT have been moved (edge branch does not drag-select).
+        assert!(!il.tracking_drag, "edge branch stays edge branch");
     }
 }
