@@ -5,6 +5,24 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session addendum — B2 wave 1: scrollbar, inputline, cluster, frame holds
+
+**`90fc0ce` + `de1c0f0`** — the first four mouse-track adoptions (parallel
+Sonnet pairs, two-stage reviewed each): **cluster** press moves to
+release-over-the-same-item and the **frame close icon** to
+release-confirm (both deliberate corrections — the C++ reads the up
+position, tcluster.cpp:181-184 / tframe.cpp:159-160); **scrollbar**
+arrow/page holds auto-repeat with the faithful off-part pause and the thumb
+drags (tscrlbar.cpp:173-207); **inputline** gets edge auto-scroll + mouse
+drag-select (tinputli.cpp:312-338). Review-caught fixes worth remembering:
+the track-kind discrimination guards (the C++ has two SEPARATE masked
+loops — a wrong-kind event must fall through unconsumed, not be silently
+eaten; caught on scrollbar by spec review and on inputline's edge branch by
+quality review) and the capture view-id payload assertions (the
+mis-routed-hold guard). The seam now has an end-to-end pump test walking
+backend event → synthesizer (439/440/550 ms) → capture localization →
+Deferred::MouseTrack → widget arm. 1058 lib tests; clippy + fmt clean.
+
 ## Session addendum — MouseAuto + MouseTrackCapture: Phase A complete (A3)
 
 **`f07d4e0`** — **row A3, the last FOUNDATION seam** (subagent-built from a
