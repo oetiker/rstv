@@ -1,0 +1,15 @@
+---
+source: src/status/status_line.rs
+expression: "render(&mut line, 40, 1)"
+---
+size: 40x1
+cursor: hidden
+text:
+| F1 Help  Alt-X Exit                    |
+attr:
+|abbaaaaaaccccccccccccaaaaaaaaaaaaaaaaaaa|
+legend:
+  . default
+  a fg=BIOS(0) bg=BIOS(7)
+  b fg=BIOS(4) bg=BIOS(7)
+  c fg=BIOS(8) bg=BIOS(2)

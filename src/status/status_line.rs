@@ -5,9 +5,30 @@
 //! [`draw`](StatusLine::draw) (`drawSelect(0)`, `tstatusl.cpp:62`),
 //! [`find_items`](StatusLine::find_items) (`findItems`, `tstatusl.cpp:119`),
 //! [`item_mouse_is_in`](StatusLine::item_mouse_is_in) (`tstatusl.cpp:133`), the
-//! single-shot mouse-down arm + the `cmCommandSetChanged` broadcast arm of
-//! `handleEvent`, and the command-graying broker hook
+//! mouse-down press-and-hold drag-highlight loop + the `cmCommandSetChanged`
+//! broadcast arm of `handleEvent`, and the command-graying broker hook
 //! ([`View::update_menu_commands`]).
+//!
+//! ## Mouse press-and-hold drag-highlight (D9 — `tstatusl.cpp:160-179`)
+//!
+//! The C++ `handleEvent` `evMouseDown` branch spins a
+//! `do { drawSelect(T = itemMouseIsIn(mouse)) } while (mouseEvent(event,
+//! evMouseMove))` loop, re-highlighting the item under the cursor each move.
+//! After the loop: if `T != 0 && commandEnabled(T->command)`, fire the command.
+//!
+//! rstv adoption (D9 / A3 seam):
+//! * **`MouseDown`**: hit-test → set `pressed_item`, set `tracking = true`,
+//!   arm [`TrackMask`]`{ mouse_move: true }`. Do NOT post yet.
+//! * **`MouseMove`** (guarded by `tracking`): re-derive item under the
+//!   view-local position; update `pressed_item` (→ `None` when off all items).
+//!   The next whole-tree redraw renders the new highlight.
+//! * **`MouseUp`** (guarded by `tracking`): if the final `pressed_item` is
+//!   `Some(idx)` and `commandEnabled(items[idx].command)`, post the command.
+//!   Clear `pressed_item` / `tracking`.
+//!
+//! The `abs_origin` field caches the view-local `(0, 0)` in absolute screen
+//! coords from the last `draw`, used by the capture to localize events
+//! (the `Button::abs_origin` pattern — D3/D9).
 //!
 //! Structured like [`MenuBar`](crate::menu::MenuBar): a plain struct embedding a
 //! [`ViewState`] with hand-written `View` methods (**not** a D2 `#[delegate]`
@@ -49,14 +70,13 @@
 //!   ported (call [`set_help_ctx`](StatusLine::set_help_ctx) to drive it
 //!   directly). `TODO(status update(): help-ctx refresh from TopView::getHelpCtx
 //!   — lands with TProgram wiring)`.
-//! - **`drawSelect(selected)` hover highlighting** + the press-and-hold
-//!   drag-highlight loop — only `draw` (= `drawSelect(0)`) is needed; the
-//!   `Some(item)` hover path is part of the deferred D9 press-and-hold loop.
-//!   `TODO(row 31, D9: status-line press-and-hold drag-highlight + drawSelect
-//!   hover)`.
+//! - **`drawSelect(selected)` hover highlighting + press-and-hold drag-highlight
+//!   loop**: **DONE** (B2 batch, A3 seam) — see the "Mouse press-and-hold"
+//!   section above.
 //! - **Streaming** (`read`/`write`/`build`/`streamableName`) → **D12 dropped**.
 //! - **`disposeItems`/destructor** → moot (owned `Vec`s, RAII via `Drop`).
 
+use crate::capture::TrackMask;
 use crate::color::Style;
 use crate::command::CommandSet;
 use crate::event::Event;
@@ -167,6 +187,18 @@ pub struct StatusLine {
     /// has none; C++ `drawSelect` calls `commandEnabled` live, which we snapshot
     /// here.
     disabled_cmds: Option<CommandSet>,
+    /// The item index currently being highlighted during a press-and-hold drag
+    /// (the C++ `drawSelect(T)` selected pointer). `None` when the cursor is
+    /// over no item (C++ `T = 0`). Reset to `None` on `MouseUp`.
+    pressed_item: Option<usize>,
+    /// Whether a mouse hold-track is in flight (between the arming `MouseDown`
+    /// and the terminating `MouseUp`). Guards the `MouseMove`/`MouseUp` tracking
+    /// arms against stray (untracked) events — `MouseUp` is not mask-gated in
+    /// `Group::wants`.
+    tracking: bool,
+    /// Absolute screen position of view-local `(0, 0)`, cached each `draw` for
+    /// the mouse-tracking capture (D3/D9 — the `Button::abs_origin` pattern).
+    abs_origin: Point,
 }
 
 impl StatusLine {
@@ -192,6 +224,9 @@ impl StatusLine {
             help_ctx: HelpCtx::NO_CONTEXT, // C++ helpCtx default
             hint: Box::new(|_| None),      // C++ default hint() -> ""
             disabled_cmds: None,
+            pressed_item: None,
+            tracking: false,
+            abs_origin: Point::new(0, 0),
         };
         sl.find_items();
         sl
@@ -283,14 +318,26 @@ impl View for StatusLine {
         &mut self.state
     }
 
-    /// `TStatusLine::draw` → `drawSelect(0)` (`tstatusl.cpp:62-117`). Fill the row,
+    /// `TStatusLine::draw` → `drawSelect(T)` (`tstatusl.cpp:62-117`). Fill the row,
     /// then lay the selected def's visible items out left-to-right, each with a
     /// leading + trailing space in the per-item colour, then the hint tail.
     ///
-    /// `selected` is always `None` here (the `drawSelect(Some)` hover variant is
-    /// part of the deferred press-and-hold loop). The C++ `TDrawBuffer` +
-    /// `writeLine` becomes direct view-local [`DrawCtx`] writes (D8).
+    /// `selected` is [`pressed_item`](StatusLine::pressed_item) — `None` when no
+    /// press-and-hold is in flight (`drawSelect(0)` in C++), or `Some(idx)` when
+    /// the item at `idx` is the one currently under the held button
+    /// (`drawSelect(T)` in C++). The `(enabled, selected)` pair feeds
+    /// [`StatusColors::item`], which selects `cSelect`/`cSelDisabled` for the
+    /// highlighted item and `cNormal`/`cNormDisabled` for all others (D9 drag
+    /// highlight).
+    ///
+    /// The C++ `TDrawBuffer` + `writeLine` becomes direct view-local [`DrawCtx`]
+    /// writes (D8). `abs_origin` is cached here for the mouse-tracking capture.
     fn draw(&mut self, ctx: &mut DrawCtx) {
+        // Cache the absolute origin for the mouse-tracking capture (D3/D9 —
+        // the MouseTrackCapture converts abs mouse coords to view-local via
+        // this value, matching the Button::abs_origin pattern).
+        self.abs_origin = ctx.origin();
+
         let colors = StatusColors::resolve(ctx);
         let size = self.state.size;
 
@@ -298,15 +345,17 @@ impl View for StatusLine {
         ctx.fill(Rect::new(0, 0, size.x, 1), ' ', colors.normal.0);
 
         let mut i = 0i32;
-        for item in self.items() {
+        for (idx, item) in self.items().iter().enumerate() {
             // C++: the `i += l + 2` advance is INSIDE `if (text != 0)`, so a
             // text==None item draws nothing AND consumes no width.
             if let Some(text) = &item.text {
                 let l = cstrlen(text);
                 if i + l < size.x {
                     let enabled = self.command_enabled(item.command);
-                    // selected is always None this row (no hover highlighting).
-                    let (lo, hi) = colors.item(enabled, false);
+                    // selected = true iff this item is the one being held (C++
+                    // `T == selected` in drawSelect; None -> no item selected).
+                    let selected = self.pressed_item == Some(idx);
+                    let (lo, hi) = colors.item(enabled, selected);
                     ctx.put_char(i, 0, ' ', lo);
                     ctx.put_cstr(i + 1, 0, text, lo, hi);
                     ctx.put_char(i + l + 1, 0, ' ', lo);
@@ -341,9 +390,17 @@ impl View for StatusLine {
     ///   [`Deferred::UpdateMenu`](crate::view::Deferred::UpdateMenu) + the
     ///   [`update_menu_commands`](View::update_menu_commands) hook). C++ does
     ///   `drawView()` here; dropped under D8 whole-tree redraw.
-    /// - **`evMouseDown`** → single-shot: hit-test the item under the (view-local)
-    ///   mouse; if it exists and is enabled, post its command. Always clear the
-    ///   mouse-down (C++ clears unconditionally after the drag loop).
+    /// - **`evMouseDown`** — the first iteration of the C++
+    ///   `do { drawSelect(T = itemMouseIsIn) } while (mouseEvent(evMouseMove))`
+    ///   loop (`tstatusl.cpp:162-178`): hit-test the item, store as
+    ///   [`pressed_item`](StatusLine::pressed_item), set `tracking = true`, arm
+    ///   [`TrackMask`]`{ mouse_move: true }`. Do NOT post yet.
+    /// - **`evMouseMove`** (guarded by `tracking`) — the loop body: re-derive the
+    ///   item; update `pressed_item`. The next whole-tree redraw renders the
+    ///   new highlight.
+    /// - **`evMouseUp`** (guarded by `tracking`) — the post-loop code
+    ///   (`tstatusl.cpp:170-175`): if `pressed_item` is Some and the command is
+    ///   enabled, post it. Clear `pressed_item` / `tracking`.
     ///
     /// The keyDown global-accelerator arm is **deferred** (see the module docs);
     /// the C++ leading `TView::handleEvent(event)` call is a no-op for our
@@ -366,25 +423,71 @@ impl View for StatusLine {
                     ctx.request_update_menu(id);
                 }
             }
-            // C++ evMouseDown (tstatusl.cpp:160). The C++ runs a press-and-hold
-            // `do { drawSelect(itemMouseIsIn) } while(mouseEvent(evMouseMove))`
-            // drag-highlight loop, then on release fires the item under the mouse
-            // if commandEnabled, then clears unconditionally.
-            //
-            // TODO(row 31, D9: status-line press-and-hold drag-highlight +
-            // drawSelect hover) — single-shot port (the D9 press-and-hold
-            // deferral, identical to scroller/menu/list-viewer): one hit-test per
-            // mouse-down, no hover redraw. The group already delivers the mouse
-            // position view-local (D3 — makeLocal is gone).
+
+            // C++ evMouseDown (tstatusl.cpp:160-179). This is the FIRST ITERATION
+            // of the C++ hold loop (tstatusl.cpp:164-168): hit-test the item under
+            // the view-local mouse position, record it as `pressed_item` (the C++
+            // `T` pointer), and arm mouse-move tracking via the A3 seam.
+            // The command is NOT posted here — post waits until MouseUp (faithful
+            // to the loop structure: C++ fires after the loop exits on evMouseUp).
             Event::MouseDown(m) => {
-                if let Some(idx) = self.item_mouse_is_in(m.position) {
+                self.pressed_item = self.item_mouse_is_in(m.position);
+                if let Some(id) = self.state.id() {
+                    self.tracking = true;
+                    ctx.start_mouse_track(
+                        id,
+                        self.abs_origin,
+                        TrackMask {
+                            mouse_move: true,
+                            ..Default::default()
+                        },
+                    );
+                } else {
+                    // Degenerate fallback: no ViewId — ids are stamped at
+                    // Group::insert, so this is test-only (an uninserted status
+                    // line). Posts ON DOWN, diverging from the release-confirm
+                    // semantics (the act-on-down fallback shared by
+                    // button/cluster/frame in B2 wave 1).
+                    if let Some(idx) = self.pressed_item {
+                        let cmd = self.items()[idx].command;
+                        if self.command_enabled(cmd) {
+                            ctx.post(cmd);
+                        }
+                    }
+                    self.pressed_item = None;
+                }
+                // The clear is load-bearing in BOTH branches: an uncleared
+                // MouseDown would fall through to normal positional routing and
+                // reach the status line a SECOND time via the root group,
+                // double-arming the capture. Also faithful: the C++ line consumes
+                // the down by entering its modal loop (clearEvent after it).
+                ev.clear();
+            }
+
+            // C++ loop body (tstatusl.cpp:165-167): re-derive the item under the
+            // view-local mouse (already localized by the capture) and update
+            // `pressed_item`. The next whole-tree redraw renders the highlight.
+            // Guarded by `tracking` — MouseMove is not mask-gated in Group::wants
+            // for untracked events.
+            Event::MouseMove(m) if self.tracking => {
+                self.pressed_item = self.item_mouse_is_in(m.position);
+                ev.clear();
+            }
+
+            // C++ post-loop code (tstatusl.cpp:170-175): if the final item is
+            // non-None and commandEnabled, post its command; then clear.
+            // Guarded by `tracking` — MouseUp is not mask-gated in Group::wants.
+            Event::MouseUp(_) if self.tracking => {
+                self.tracking = false;
+                if let Some(idx) = self.pressed_item.take() {
                     let cmd = self.items()[idx].command;
                     if self.command_enabled(cmd) {
-                        ctx.post(cmd); // C++ putEvent(evCommand)
+                        ctx.post(cmd);
                     }
                 }
-                ev.clear(); // C++ clears unconditionally after the loop.
+                ev.clear();
             }
+
             // tstatusl.cpp keyDown arm: match the keyCode against EVERY item (incl.
             // text == None hidden global hotkeys) and, if enabled, TRANSFORM the
             // event into evCommand IN PLACE — no clear, no post. The pre-routing in
@@ -690,6 +793,32 @@ mod tests {
     }
 
     // -- handle_event: mouse arm --------------------------------------------
+    //
+    // The tracking arms (MouseMove, MouseUp) are driven directly with
+    // view-local positions — exactly as the pump's Deferred::MouseTrack apply
+    // arm does after the capture localizes them. The PushCapture path (the
+    // Deferred::PushCapture that start_mouse_track queues) is tested via the
+    // with_ctx_d helper and the integration test in program.rs wiring.
+
+    use crate::timer::TimerQueue;
+    use crate::view::{Context, Deferred};
+    use std::collections::VecDeque;
+
+    /// Run f with a fresh Context; return (out_events, deferred, return_value).
+    fn with_ctx_d<R>(
+        line: &mut StatusLine,
+        ev: &mut Event,
+        timers: &mut TimerQueue,
+        f: impl FnOnce(&mut StatusLine, &mut Event, &mut Context) -> R,
+    ) -> (Vec<Event>, Vec<Deferred>, R) {
+        let mut out = VecDeque::new();
+        let mut deferred: Vec<Deferred> = Vec::new();
+        let r = {
+            let mut ctx = Context::new(&mut out, timers, 0, &mut deferred);
+            f(line, ev, &mut ctx)
+        };
+        (out.into_iter().collect(), deferred, r)
+    }
 
     fn mouse_down(x: i32, y: i32) -> Event {
         Event::MouseDown(MouseEvent {
@@ -702,49 +831,72 @@ mod tests {
         })
     }
 
+    fn mouse_move(x: i32, y: i32) -> Event {
+        Event::MouseMove(MouseEvent {
+            position: Point::new(x, y),
+            buttons: MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+
+    fn mouse_up(x: i32, y: i32) -> Event {
+        Event::MouseUp(MouseEvent {
+            position: Point::new(x, y),
+            ..Default::default()
+        })
+    }
+
+    /// Stamp the view with a fresh id (like Group::insert would).
+    fn stamp_id(line: &mut StatusLine) -> crate::view::ViewId {
+        let id = crate::view::ViewId::next();
+        line.state.id = Some(id);
+        id
+    }
+
+    // Existing single-shot tests remain as coverage for the no-id degenerate
+    // fallback path (an uninserted status line, no ViewId -> immediate post).
+    // This path exists to preserve backward compatibility for unit tests that
+    // create a StatusLine without inserting it into a Group.
+
     #[test]
     fn mouse_down_on_enabled_item_posts_command_and_clears() {
-        use crate::view::Context;
-        use std::collections::VecDeque;
-
+        // No id -> degenerate single-shot fallback: post immediately on MouseDown.
+        // Adapted from the old single-shot behavior; kept as coverage for the
+        // no-id path.  The real tracking path is tested in the `_with_id` tests
+        // below (post-on-release, sanctioned correction — same as cluster/button
+        // in wave 1).
         let mut line = StatusLine::new(Rect::new(0, 0, 40, 1), sample_defs());
-        let mut out = VecDeque::new();
-        let mut timers = crate::timer::TimerQueue::new();
-        let mut deferred = Vec::new();
-        // Click inside "Alt-X Exit" (item 1, span [9, 21)) -> post QUIT.
+        let mut timers = TimerQueue::new();
+        // Click inside "Alt-X Exit" (item 1, span [9, 21)) -> post QUIT immediately.
         let mut ev = mouse_down(10, 0);
-        {
-            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
-            line.handle_event(&mut ev, &mut ctx);
-        }
+        let (out, _deferred, ()) = with_ctx_d(&mut line, &mut ev, &mut timers, |l, e, ctx| {
+            l.handle_event(e, ctx)
+        });
 
         assert!(ev.is_nothing(), "mouse-down is always cleared");
         assert!(
             out.iter()
                 .any(|e| matches!(e, Event::Command(Command::QUIT))),
-            "an enabled item posts its command"
+            "no-id path: enabled item posts immediately on MouseDown"
         );
     }
 
     #[test]
     fn mouse_down_on_disabled_item_clears_but_posts_nothing() {
-        use crate::view::Context;
-        use std::collections::VecDeque;
-
         let mut line = StatusLine::new(Rect::new(0, 0, 40, 1), sample_defs());
         // Disable QUIT via the broker snapshot (the DISABLED set).
         let mut disabled = CommandSet::new();
         disabled.insert(Command::QUIT);
         line.update_menu_commands(&disabled);
 
-        let mut out = VecDeque::new();
-        let mut timers = crate::timer::TimerQueue::new();
-        let mut deferred = Vec::new();
+        let mut timers = TimerQueue::new();
         let mut ev = mouse_down(10, 0); // on the (disabled) Exit item
-        {
-            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
-            line.handle_event(&mut ev, &mut ctx);
-        }
+        let (out, _deferred, ()) = with_ctx_d(&mut line, &mut ev, &mut timers, |l, e, ctx| {
+            l.handle_event(e, ctx)
+        });
 
         assert!(ev.is_nothing(), "mouse-down is cleared even when disabled");
         assert!(
@@ -755,21 +907,234 @@ mod tests {
 
     #[test]
     fn mouse_down_off_row_clears_but_posts_nothing() {
-        use crate::view::Context;
-        use std::collections::VecDeque;
-
         let mut line = StatusLine::new(Rect::new(0, 0, 40, 1), sample_defs());
-        let mut out = VecDeque::new();
-        let mut timers = crate::timer::TimerQueue::new();
-        let mut deferred = Vec::new();
+        let mut timers = TimerQueue::new();
         let mut ev = mouse_down(2, 1); // y != 0 -> no item hit
-        {
-            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
-            line.handle_event(&mut ev, &mut ctx);
-        }
+        let (out, _deferred, ()) = with_ctx_d(&mut line, &mut ev, &mut timers, |l, e, ctx| {
+            l.handle_event(e, ctx)
+        });
 
         assert!(ev.is_nothing());
         assert!(!out.iter().any(|e| matches!(e, Event::Command(_))));
+    }
+
+    // -- mouse hold-tracking arm tests (the A3 seam — the real path) ----------
+    //
+    // These tests use a stamped id (as Group::insert would supply) so the
+    // MouseDown arm takes the real tracking path instead of the no-id fallback.
+    // Positions are view-local (as the capture localizes them).
+
+    /// Helper: a 40×1 status line with a stamped id, armed by a MouseDown on
+    /// "Alt-X Exit" (local col 10, span [9, 21)).  Returns the line + the
+    /// PushCapture deferred entry.
+    fn tracked_status_line() -> (StatusLine, crate::view::ViewId) {
+        let mut line = StatusLine::new(Rect::new(0, 0, 40, 1), sample_defs());
+        let id = stamp_id(&mut line);
+        let mut timers = TimerQueue::new();
+        let mut ev = mouse_down(10, 0); // inside "Alt-X Exit"
+        with_ctx_d(&mut line, &mut ev, &mut timers, |l, e, ctx| {
+            l.handle_event(e, ctx)
+        });
+        assert!(line.tracking, "MouseDown on an item arms tracking");
+        assert_eq!(
+            line.pressed_item,
+            Some(1),
+            "pressed_item = Alt-X Exit (idx 1)"
+        );
+        (line, id)
+    }
+
+    /// MouseDown on an item WITH an id: arms tracking (PushCapture deferred),
+    /// records pressed_item, does NOT post the command yet.
+    #[test]
+    fn mouse_down_with_id_arms_tracking_no_command() {
+        let mut line = StatusLine::new(Rect::new(0, 0, 40, 1), sample_defs());
+        let id = stamp_id(&mut line);
+        let mut timers = TimerQueue::new();
+        // Click inside "Alt-X Exit" (item 1, span [9, 21)).
+        let mut ev = mouse_down(10, 0);
+        let (out, deferred, ()) = with_ctx_d(&mut line, &mut ev, &mut timers, |l, e, ctx| {
+            l.handle_event(e, ctx)
+        });
+
+        assert!(ev.is_nothing(), "MouseDown is always cleared");
+        assert!(line.tracking, "tracking armed");
+        assert_eq!(
+            line.pressed_item,
+            Some(1),
+            "pressed_item set to the hit item index"
+        );
+        assert!(
+            out.is_empty(),
+            "command NOT posted at down time (post-on-release)"
+        );
+        // A PushCapture must have been deferred.
+        assert_eq!(deferred.len(), 1, "one PushCapture deferred");
+        assert!(
+            matches!(deferred[0], Deferred::PushCapture(_)),
+            "deferred[0] is PushCapture"
+        );
+        // The pushed capture's view() must return the status line's id.
+        if let Deferred::PushCapture(ref h) = deferred[0] {
+            assert_eq!(h.view(), Some(id), "capture tracks the status line's id");
+        }
+    }
+
+    /// MouseDown on NO item: tracking is armed (capture deferred), pressed_item
+    /// = None, no command posted.
+    #[test]
+    fn mouse_down_with_id_off_item_arms_tracking_no_pressed_item() {
+        let mut line = StatusLine::new(Rect::new(0, 0, 40, 1), sample_defs());
+        let _id = stamp_id(&mut line);
+        let mut timers = TimerQueue::new();
+        // Click past the last visible item (col 30) -> no hit.
+        let mut ev = mouse_down(30, 0);
+        let (out, deferred, ()) = with_ctx_d(&mut line, &mut ev, &mut timers, |l, e, ctx| {
+            l.handle_event(e, ctx)
+        });
+
+        assert!(ev.is_nothing());
+        assert!(
+            line.tracking,
+            "tracking armed even off items (mirrors C++ loop start)"
+        );
+        assert_eq!(line.pressed_item, None, "no item under the cursor");
+        assert!(out.is_empty(), "no command");
+        assert_eq!(deferred.len(), 1, "PushCapture still deferred");
+    }
+
+    /// MouseMove while tracking re-derives the item: move off item → pressed_item
+    /// becomes None; move back on → Some again.
+    #[test]
+    fn track_move_updates_pressed_item() {
+        let (mut line, _id) = tracked_status_line();
+        let mut timers = TimerQueue::new();
+
+        // Move off all items (col 30, past "Alt-X Exit" span [9, 21)).
+        let mut ev = mouse_move(30, 0);
+        let (out, deferred, ()) = with_ctx_d(&mut line, &mut ev, &mut timers, |l, e, ctx| {
+            l.handle_event(e, ctx)
+        });
+        assert!(ev.is_nothing(), "tracked move is consumed");
+        assert!(deferred.is_empty());
+        assert!(out.is_empty());
+        assert_eq!(
+            line.pressed_item, None,
+            "off items -> pressed_item = None (C++ drawSelect(0))"
+        );
+
+        // Move back onto "F1 Help" (item 0, span [0, 9)).
+        let mut ev = mouse_move(4, 0);
+        let (_, _, ()) = with_ctx_d(&mut line, &mut ev, &mut timers, |l, e, ctx| {
+            l.handle_event(e, ctx)
+        });
+        assert_eq!(
+            line.pressed_item,
+            Some(0),
+            "moved to item 0 -> pressed_item updated"
+        );
+        assert!(line.tracking, "still tracking");
+    }
+
+    /// Untracked MouseMove (tracking == false) falls through without updating
+    /// pressed_item.
+    #[test]
+    fn untracked_move_falls_through() {
+        let mut line = StatusLine::new(Rect::new(0, 0, 40, 1), sample_defs());
+        let mut timers = TimerQueue::new();
+        let mut ev = mouse_move(4, 0);
+        let (out, _, ()) = with_ctx_d(&mut line, &mut ev, &mut timers, |l, e, ctx| {
+            l.handle_event(e, ctx)
+        });
+        // Event is not consumed (falls through to the _ arm).
+        assert!(!ev.is_nothing(), "untracked move is not consumed");
+        assert!(out.is_empty());
+    }
+
+    /// MouseUp while tracking with a valid pressed_item fires the command.
+    #[test]
+    fn track_release_on_item_fires_command() {
+        let (mut line, _id) = tracked_status_line();
+        let mut timers = TimerQueue::new();
+
+        let mut ev = mouse_up(10, 0); // still on "Alt-X Exit"
+        let (out, deferred, ()) = with_ctx_d(&mut line, &mut ev, &mut timers, |l, e, ctx| {
+            l.handle_event(e, ctx)
+        });
+
+        assert!(ev.is_nothing(), "tracked MouseUp is consumed");
+        assert!(!line.tracking, "tracking cleared on MouseUp");
+        assert_eq!(line.pressed_item, None, "pressed_item cleared on MouseUp");
+        assert!(deferred.is_empty());
+        assert!(
+            out.iter()
+                .any(|e| matches!(e, Event::Command(Command::QUIT))),
+            "enabled item fires its command on release"
+        );
+    }
+
+    /// MouseUp while tracking with pressed_item = None (cursor was off all items
+    /// when released) does NOT fire any command.
+    #[test]
+    fn track_release_off_item_fires_nothing() {
+        let (mut line, _id) = tracked_status_line();
+        let mut timers = TimerQueue::new();
+
+        // First move off items so pressed_item = None.
+        let mut ev = mouse_move(30, 0);
+        with_ctx_d(&mut line, &mut ev, &mut timers, |l, e, ctx| {
+            l.handle_event(e, ctx)
+        });
+        assert_eq!(line.pressed_item, None);
+
+        // Release while off items.
+        let mut ev = mouse_up(30, 0);
+        let (out, _, ()) = with_ctx_d(&mut line, &mut ev, &mut timers, |l, e, ctx| {
+            l.handle_event(e, ctx)
+        });
+
+        assert!(ev.is_nothing(), "tracked up is consumed even with no item");
+        assert!(!line.tracking);
+        assert!(out.is_empty(), "no command when off items");
+    }
+
+    /// MouseUp while tracking with a DISABLED pressed_item does NOT fire the
+    /// command (C++ `commandEnabled(T->command)` guard, tstatusl.cpp:170).
+    #[test]
+    fn track_release_on_disabled_item_fires_nothing() {
+        let (mut line, _id) = tracked_status_line();
+        // Disable QUIT (the pressed item's command).
+        let mut disabled = CommandSet::new();
+        disabled.insert(Command::QUIT);
+        line.update_menu_commands(&disabled);
+
+        let mut timers = TimerQueue::new();
+        let mut ev = mouse_up(10, 0);
+        let (out, _, ()) = with_ctx_d(&mut line, &mut ev, &mut timers, |l, e, ctx| {
+            l.handle_event(e, ctx)
+        });
+
+        assert!(ev.is_nothing(), "tracked up is consumed");
+        assert!(!line.tracking);
+        assert!(
+            out.is_empty(),
+            "disabled item fires nothing on release (commandEnabled guard)"
+        );
+    }
+
+    /// A stray MouseUp with no tracking in flight falls through untouched.
+    #[test]
+    fn stray_mouse_up_without_tracking_is_ignored() {
+        let mut line = StatusLine::new(Rect::new(0, 0, 40, 1), sample_defs());
+        let mut timers = TimerQueue::new();
+        let mut ev = mouse_up(10, 0);
+        let (out, _, ()) = with_ctx_d(&mut line, &mut ev, &mut timers, |l, e, ctx| {
+            l.handle_event(e, ctx)
+        });
+
+        assert!(!ev.is_nothing(), "stray up is not consumed");
+        assert!(out.is_empty());
+        assert!(!line.tracking);
     }
 
     // -- draw snapshots -----------------------------------------------------
@@ -839,6 +1204,38 @@ mod tests {
             })
             .build();
         let mut line = StatusLine::new(Rect::new(0, 0, 40, 1), defs);
+        insta::assert_snapshot!(render(&mut line, 40, 1));
+    }
+
+    /// Drag-highlight snapshot: with `pressed_item = Some(1)` (the "Alt-X Exit"
+    /// item held), `draw` renders that item with the `cSelect`/`cSelDisabled`
+    /// pair and all others in `cNormal`/`cNormDisabled`.
+    ///
+    /// This is the `drawSelect(T)` path (C++ `tstatusl.cpp:67-117`) with a non-null
+    /// `selected`: item 1 is drawn with `colors.select` (the "held" look), item 0
+    /// with `colors.normal`. The snapshot freezes the selected style for regression
+    /// protection; hand-verify that item 1 appears visually distinct from item 0.
+    #[test]
+    fn snapshot_drag_highlight_held_item() {
+        let mut line = StatusLine::new(Rect::new(0, 0, 40, 1), sample_defs());
+        // Simulate a hold on "Alt-X Exit" (item 1) as if MouseDown was processed
+        // and pressed_item was set. No actual event dispatch needed — draw reads
+        // pressed_item directly.
+        line.pressed_item = Some(1);
+        insta::assert_snapshot!(render(&mut line, 40, 1));
+    }
+
+    /// Drag-highlight with a DISABLED held item: when the pressed item's command
+    /// is disabled, `draw` uses `cSelDisabled` (the disabled-selected pair) for
+    /// that item, not `cSelect`.
+    #[test]
+    fn snapshot_drag_highlight_held_disabled_item() {
+        let mut line = StatusLine::new(Rect::new(0, 0, 40, 1), sample_defs());
+        // Disable QUIT (item 1's command) so colors.item(false, true) = sel_disabled.
+        let mut disabled = CommandSet::new();
+        disabled.insert(Command::QUIT);
+        line.update_menu_commands(&disabled);
+        line.pressed_item = Some(1);
         insta::assert_snapshot!(render(&mut line, 40, 1));
     }
 }

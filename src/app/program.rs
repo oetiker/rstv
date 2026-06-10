@@ -1062,8 +1062,8 @@ impl Program {
     /// * **the completion**, run after the loop breaks but BEFORE remove/drop,
     ///   while the modal is still in the tree by `id` (so it can read
     ///   `get_selection`). It is a DIRECT `group` mutation, NOT a deferred queue
-    ///   entry — the deferred drain in `pump_once` is gated on `!ev.is_nothing()`
-    ///   and would never fire from here in a headless test.
+    ///   entry — the deferred drain in `pump_once` fires only when a `Some(ev)`
+    ///   pump pass runs, and would never fire from here in a headless test.
     /// * **the `gather`** seam (row 63, PART 2 — `inputBox`'s `getData`). If
     ///   `Some(gid)` and the result is not [`Command::CANCEL`], the value of the
     ///   view with that id is read (`View::value`, the D10 currency) while the
@@ -1237,8 +1237,8 @@ impl Program {
 
         // Run the completion BEFORE remove/drop, while the modal is still in the
         // tree by `id` (so it can read e.g. get_selection). Direct group mutation —
-        // NOT the deferred queue (that drain is gated on !ev.is_nothing() inside
-        // pump_once and would never fire here in a headless test).
+        // NOT the deferred queue (that drain fires only when a Some(ev) pump pass
+        // runs inside pump_once, and would never fire here in a headless test).
         if let Some(c) = completion {
             // RouteModalAnswer returns a `then_command` event to re-post (the async
             // modal-from-a-view round-trip); push it into the re-inject queue so the
@@ -1518,12 +1518,11 @@ impl Program {
                         _ => false,
                     };
                     if pre && let Some(v) = group.find_mut(sl) {
-                        // LATENT COUPLING: the pre-route must not queue a Deferred —
-                        // the deferred drain below is gated on `!ev.is_nothing()`, and
-                        // a cleared mouseDown (the status line always clears) skips it.
-                        // Safe today because the status line only defers from its
-                        // Broadcast arm, which is never pre-routed (pre is keyDown /
-                        // mouseDown only). Revisit if a pre-routed arm ever defers.
+                        // Pre-route deferreds are FIRST-CLASS: the deferred drain at
+                        // the tail of this arm runs even when the pre-route consumed
+                        // (cleared) the event, so anything the status line queues here
+                        // (e.g. the mouse-track PushCapture, B2 statusline lesson)
+                        // applies through the same drain as every other widget.
                         //
                         // Translate a mouse position into the status line's own frame
                         // before handing it over: normally Group::deliver does this
@@ -1552,14 +1551,17 @@ impl Program {
                 }
 
                 if !ev.is_nothing() {
-                    // Refresh bounds-gating capture handlers (the modal frame) from
-                    // the live tree before dispatch, so a modal that has been
-                    // dragged/resized is gated at its CURRENT position, not the one
-                    // cached at push time (else the moved dialog goes mouse-dead).
-                    captures
-                        .sync_gate_bounds(|id| group.find_mut(id).map(|v| v.state().get_bounds()));
                     // The Context borrow ends at this block's close, before we
                     // drain the deferred queue back into loop/tree state.
+                    //
+                    // Refresh bounds-gating capture handlers (the modal frame)
+                    // from the live tree BEFORE dispatching: this picks up both
+                    // the current pump's resize relayout (top of pump_once) and
+                    // every previous pump's applied deferreds (ChangeBounds from
+                    // a drag, captures pushed via the pre-route path) — a moved
+                    // dialog must not go mouse-dead or mis-gate outside clicks.
+                    captures
+                        .sync_gate_bounds(|id| group.find_mut(id).map(|v| v.state().get_bounds()));
                     {
                         let mut ctx = Context::new(out_events, timers, now, deferred);
                         // Per-pump refresh of the Context's disabled-command
@@ -1623,539 +1625,545 @@ impl Program {
                             }
                         }
                     }
-                    // Apply the deferred queue AFTER dispatch — one drain, in
-                    // insertion order. Drain to a local first (`mem::take`): the
-                    // apply-Context borrows the now-empty `deferred` field (so a
-                    // SetState/Close that re-queues lands for the NEXT pump), which
-                    // would otherwise alias the iteration. ONE pass only — anything
-                    // an applied effect re-queues (none do today) waits for the next
-                    // pump; do not loop until empty (a bug would spin).
-                    //
-                    // The three families touch disjoint loop-owned state — capture
-                    // stack / command set / view tree — so applying in insertion
-                    // order (interleaving kinds) is equivalent to today's
-                    // captures-then-commands-then-tree ordering: cross-family order
-                    // cannot affect the result, and same-family relative order is
-                    // preserved. PushCapture still applies after dispatch, so a
-                    // pushed handler still sees the NEXT event (compose_full_protocol).
-                    let effects: Vec<Deferred> = std::mem::take(deferred);
-                    if !effects.is_empty() {
-                        let mut ctx = Context::new(out_events, timers, now, deferred);
-                        // Snapshot taken BEFORE the Enable/DisableCommand arms
-                        // mutate the live set: an apply-phase callee reading
-                        // ctx.command_enabled sees this pass's pre-apply state
-                        // (snapshot semantics; next pump sees the change).
-                        ctx.set_disabled_commands(disabled_commands.clone());
-                        for effect in effects {
-                            match effect {
-                                Deferred::PushCapture(h) => captures.push(h),
-                                // Inline the enable/disable bodies — the destructure
-                                // gives the fields, not `self`. The set holds DISABLED
-                                // commands (denylist), so enable removes / disable
-                                // inserts. Flip `command_set_changed` on a real change
-                                // so the next idle broadcasts cmCommandSetChanged.
-                                Deferred::EnableCommand(cmd) => {
-                                    if disabled_commands.has(cmd) {
-                                        disabled_commands.remove(cmd);
-                                        *command_set_changed = true;
-                                    }
+                }
+                // Apply the deferred queue AFTER dispatch — one drain, in
+                // insertion order. INVARIANT: the drain runs even when the
+                // pre-route consumed the event — pre-route deferreds are
+                // first-class (B2 statusline lesson: a status-line MouseDown that
+                // arms a mouse track queues its PushCapture from the pre-route,
+                // where the `!ev.is_nothing()` dispatch gate above is skipped).
+                //
+                // Drain to a local first (`mem::take`): the
+                // apply-Context borrows the now-empty `deferred` field (so a
+                // SetState/Close that re-queues lands for the NEXT pump), which
+                // would otherwise alias the iteration. ONE pass only — anything
+                // an applied effect re-queues (none do today) waits for the next
+                // pump; do not loop until empty (a bug would spin).
+                //
+                // The three families touch disjoint loop-owned state — capture
+                // stack / command set / view tree — so applying in insertion
+                // order (interleaving kinds) is equivalent to today's
+                // captures-then-commands-then-tree ordering: cross-family order
+                // cannot affect the result, and same-family relative order is
+                // preserved. PushCapture still applies after dispatch, so a
+                // pushed handler still sees the NEXT event (compose_full_protocol).
+                let effects: Vec<Deferred> = std::mem::take(deferred);
+                if !effects.is_empty() {
+                    let mut ctx = Context::new(out_events, timers, now, deferred);
+                    // Snapshot taken BEFORE the Enable/DisableCommand arms
+                    // mutate the live set: an apply-phase callee reading
+                    // ctx.command_enabled sees this pass's pre-apply state
+                    // (snapshot semantics; next pump sees the change).
+                    ctx.set_disabled_commands(disabled_commands.clone());
+                    for effect in effects {
+                        match effect {
+                            Deferred::PushCapture(h) => captures.push(h),
+                            // Inline the enable/disable bodies — the destructure
+                            // gives the fields, not `self`. The set holds DISABLED
+                            // commands (denylist), so enable removes / disable
+                            // inserts. Flip `command_set_changed` on a real change
+                            // so the next idle broadcasts cmCommandSetChanged.
+                            Deferred::EnableCommand(cmd) => {
+                                if disabled_commands.has(cmd) {
+                                    disabled_commands.remove(cmd);
+                                    *command_set_changed = true;
                                 }
-                                Deferred::DisableCommand(cmd) => {
-                                    if !disabled_commands.has(cmd) {
-                                        disabled_commands.insert(cmd);
-                                        *command_set_changed = true;
-                                    }
+                            }
+                            Deferred::DisableCommand(cmd) => {
+                                if !disabled_commands.has(cmd) {
+                                    disabled_commands.insert(cmd);
+                                    *command_set_changed = true;
                                 }
-                                Deferred::ChangeBounds(id, r) => {
-                                    if let Some(v) = group.find_mut(id) {
-                                        v.change_bounds(r);
-                                    }
+                            }
+                            Deferred::ChangeBounds(id, r) => {
+                                if let Some(v) = group.find_mut(id) {
+                                    v.change_bounds(r);
                                 }
-                                Deferred::SetState(id, f, e) => {
-                                    if let Some(v) = group.find_mut(id) {
-                                        v.set_state(f, e, &mut ctx);
-                                    }
+                            }
+                            Deferred::SetState(id, f, e) => {
+                                if let Some(v) = group.find_mut(id) {
+                                    v.set_state(f, e, &mut ctx);
                                 }
-                                Deferred::Close(id) => {
-                                    group.remove_descendant(id, &mut ctx);
+                            }
+                            Deferred::Close(id) => {
+                                group.remove_descendant(id, &mut ctx);
+                            }
+                            // TLabel::focusLink — select the linked view within
+                            // its owning group (the group walk applies the
+                            // ofSelectable gate). Ignore the found/not-found bool,
+                            // like Close.
+                            Deferred::FocusById(id) => {
+                                group.focus_descendant(id, &mut ctx);
+                            }
+                            // TGroup::endModal — set the loop end state; the
+                            // nested exec_view loop (row 34) observes it.
+                            Deferred::EndModal(cmd) => {
+                                *end_state = Some(cmd);
+                            }
+                            // -- row 27: TScroller cross-view broker --------
+                            //
+                            // The pump is the broker: a scroller (a leaf, D3)
+                            // can neither read nor mutate its window-frame
+                            // sibling scrollbars, so the read/write happens here
+                            // where the whole tree is reachable via `group`.
+                            //
+                            // Read direction (TScroller::scrollDraw): resolve
+                            // each bar and read its `value` (via View::value →
+                            // FieldValue::Int) in its OWN find_mut so only one
+                            // `&mut` is live at a time, then find_mut the
+                            // scroller and push the delta in.
+                            Deferred::SyncScrollerDelta { scroller, h, v } => {
+                                use crate::widgets::Scroller;
+                                let dx = h
+                                    .and_then(|id| group.find_mut(id))
+                                    .and_then(|view| view.value())
+                                    .and_then(field_int)
+                                    .unwrap_or(0);
+                                let dy = v
+                                    .and_then(|id| group.find_mut(id))
+                                    .and_then(|view| view.value())
+                                    .and_then(field_int)
+                                    .unwrap_or(0);
+                                if let Some(s) = group
+                                    .find_mut(scroller)
+                                    .and_then(|view| view.as_any_mut())
+                                    .and_then(|a| a.downcast_mut::<Scroller>())
+                                {
+                                    s.apply_delta(Point::new(dx, dy));
                                 }
-                                // TLabel::focusLink — select the linked view within
-                                // its owning group (the group walk applies the
-                                // ofSelectable gate). Ignore the found/not-found bool,
-                                // like Close.
-                                Deferred::FocusById(id) => {
-                                    group.focus_descendant(id, &mut ctx);
+                            }
+                            // Outline viewer read-sync (row 89): like
+                            // SyncScrollerDelta — read both bars' `value`s,
+                            // write the delta into the viewer's `OutlineViewerState`
+                            // (downcast to `Outline`). Read-only, no write-back.
+                            Deferred::SyncOutlineViewerDelta { viewer, h, v } => {
+                                use crate::widgets::{Outline, OutlineViewer};
+                                let dx = h
+                                    .and_then(|id| group.find_mut(id))
+                                    .and_then(|view| view.value())
+                                    .and_then(field_int)
+                                    .unwrap_or(0);
+                                let dy = v
+                                    .and_then(|id| group.find_mut(id))
+                                    .and_then(|view| view.value())
+                                    .and_then(field_int)
+                                    .unwrap_or(0);
+                                if let Some(o) = group
+                                    .find_mut(viewer)
+                                    .and_then(|view| view.as_any_mut())
+                                    .and_then(|a| a.downcast_mut::<Outline>())
+                                {
+                                    o.ov_mut().apply_delta(Point::new(dx, dy));
                                 }
-                                // TGroup::endModal — set the loop end state; the
-                                // nested exec_view loop (row 34) observes it.
-                                Deferred::EndModal(cmd) => {
-                                    *end_state = Some(cmd);
+                            }
+                            // Write direction (TScrollBar::setParams driven by
+                            // TScroller::setLimit/scrollTo): fill each `None`
+                            // field from the bar's live value, then set_params
+                            // (which clamps and may re-broadcast CHANGED — fine,
+                            // no loop: the read-sync writes nothing back). `group`
+                            // and `ctx` are disjoint borrows here.
+                            Deferred::ScrollBarSetParams {
+                                id,
+                                value,
+                                min,
+                                max,
+                                page_step,
+                                arrow_step,
+                            } => {
+                                use crate::widgets::ScrollBar;
+                                if let Some(sb) = group
+                                    .find_mut(id)
+                                    .and_then(|view| view.as_any_mut())
+                                    .and_then(|a| a.downcast_mut::<ScrollBar>())
+                                {
+                                    let v = value.unwrap_or(sb.value);
+                                    let lo = min.unwrap_or(sb.min_value);
+                                    let hi = max.unwrap_or(sb.max_value);
+                                    let pg = page_step.unwrap_or(sb.page_step);
+                                    let ar = arrow_step.unwrap_or(sb.arrow_step);
+                                    sb.set_params(v, lo, hi, pg, ar, &mut ctx);
                                 }
-                                // -- row 27: TScroller cross-view broker --------
-                                //
-                                // The pump is the broker: a scroller (a leaf, D3)
-                                // can neither read nor mutate its window-frame
-                                // sibling scrollbars, so the read/write happens here
-                                // where the whole tree is reachable via `group`.
-                                //
-                                // Read direction (TScroller::scrollDraw): resolve
-                                // each bar and read its `value` (via View::value →
-                                // FieldValue::Int) in its OWN find_mut so only one
-                                // `&mut` is live at a time, then find_mut the
-                                // scroller and push the delta in.
-                                Deferred::SyncScrollerDelta { scroller, h, v } => {
-                                    use crate::widgets::Scroller;
-                                    let dx = h
-                                        .and_then(|id| group.find_mut(id))
-                                        .and_then(|view| view.value())
-                                        .and_then(field_int)
-                                        .unwrap_or(0);
-                                    let dy = v
-                                        .and_then(|id| group.find_mut(id))
-                                        .and_then(|view| view.value())
-                                        .and_then(field_int)
-                                        .unwrap_or(0);
-                                    if let Some(s) = group
-                                        .find_mut(scroller)
-                                        .and_then(|view| view.as_any_mut())
-                                        .and_then(|a| a.downcast_mut::<Scroller>())
-                                    {
-                                        s.apply_delta(Point::new(dx, dy));
-                                    }
+                            }
+                            // Visibility direction (TScroller::showSBar →
+                            // show/hide): write the flag in the OWNING group
+                            // (no propagating StateFlag::Visible; the painter
+                            // skips !visible) and run the C++
+                            // setState(sfVisible) currency tail — if the flag
+                            // really changed and the child is selectable, the
+                            // owning group resetCurrents, BOTH directions (A2).
+                            // Today's consumers (scrollbars / indicators) are
+                            // non-selectable, so the tail is a no-op for them.
+                            Deferred::SetVisible(id, visible) => {
+                                group.set_visible_descendant(id, visible, &mut ctx);
+                            }
+                            // -- row 28: TListViewer read-sync broker -------
+                            //
+                            // Like SyncScrollerDelta, but the list base is a
+                            // TRAIT (subclasses reuse its draw + override
+                            // get_text/is_selected), so `dyn View → dyn
+                            // ListViewer` cannot be downcast. Instead we read
+                            // each bar's `value` (each in its own find_mut so
+                            // only one &mut is live) and call back through the
+                            // defaulted View::apply_list_scroll trait method.
+                            //
+                            // This read-sync WRITES BACK (apply_list_scroll →
+                            // focus_item_num → focusItem → v-bar setValue), so it
+                            // could re-enter — but ScrollBar::set_params is
+                            // change-guarded (re-broadcasts only on an actual
+                            // value change), so the write-back of the already-
+                            // current value is a silent no-op and the cycle goes
+                            // quiet. `ctx` is live here (same as the
+                            // ScrollBarSetParams arm), so the write-back's
+                            // request_scroll_bar_params lands in `deferred` for
+                            // the NEXT pump.
+                            Deferred::SyncListViewer { list, h, v } => {
+                                let hv = h
+                                    .and_then(|id| group.find_mut(id))
+                                    .and_then(|view| view.value())
+                                    .and_then(field_int);
+                                let vv = v
+                                    .and_then(|id| group.find_mut(id))
+                                    .and_then(|view| view.value())
+                                    .and_then(field_int);
+                                if let Some(view) = group.find_mut(list) {
+                                    view.apply_list_scroll(hv, vv, &mut ctx);
                                 }
-                                // Outline viewer read-sync (row 89): like
-                                // SyncScrollerDelta — read both bars' `value`s,
-                                // write the delta into the viewer's `OutlineViewerState`
-                                // (downcast to `Outline`). Read-only, no write-back.
-                                Deferred::SyncOutlineViewerDelta { viewer, h, v } => {
-                                    use crate::widgets::{Outline, OutlineViewer};
-                                    let dx = h
-                                        .and_then(|id| group.find_mut(id))
-                                        .and_then(|view| view.value())
-                                        .and_then(field_int)
-                                        .unwrap_or(0);
-                                    let dy = v
-                                        .and_then(|id| group.find_mut(id))
-                                        .and_then(|view| view.value())
-                                        .and_then(field_int)
-                                        .unwrap_or(0);
-                                    if let Some(o) = group
-                                        .find_mut(viewer)
-                                        .and_then(|view| view.as_any_mut())
-                                        .and_then(|a| a.downcast_mut::<Outline>())
-                                    {
-                                        o.ov_mut().apply_delta(Point::new(dx, dy));
-                                    }
+                            }
+                            // -- row 49: TMenuView command-graying broker --
+                            //
+                            // The menu view (a child, D3) cannot read the
+                            // command set inline — the pump owns it. Resolve
+                            // the menu view and call back through the defaulted
+                            // View::update_menu_commands trait method with the
+                            // live DISABLED set in hand (it regrays the menu
+                            // tree: an item grays iff its command is in the
+                            // set). `group` and `disabled_commands` are disjoint
+                            // destructured fields, so no `ctx` is needed (like
+                            // ChangeBounds).
+                            Deferred::UpdateMenu(id) => {
+                                if let Some(v) = group.find_mut(id) {
+                                    v.update_menu_commands(disabled_commands);
                                 }
-                                // Write direction (TScrollBar::setParams driven by
-                                // TScroller::setLimit/scrollTo): fill each `None`
-                                // field from the bar's live value, then set_params
-                                // (which clamps and may re-broadcast CHANGED — fine,
-                                // no loop: the read-sync writes nothing back). `group`
-                                // and `ctx` are disjoint borrows here.
-                                Deferred::ScrollBarSetParams {
-                                    id,
-                                    value,
-                                    min,
-                                    max,
-                                    page_step,
-                                    arrow_step,
-                                } => {
-                                    use crate::widgets::ScrollBar;
-                                    if let Some(sb) = group
-                                        .find_mut(id)
-                                        .and_then(|view| view.as_any_mut())
-                                        .and_then(|a| a.downcast_mut::<ScrollBar>())
-                                    {
-                                        let v = value.unwrap_or(sb.value);
-                                        let lo = min.unwrap_or(sb.min_value);
-                                        let hi = max.unwrap_or(sb.max_value);
-                                        let pg = page_step.unwrap_or(sb.page_step);
-                                        let ar = arrow_step.unwrap_or(sb.arrow_step);
-                                        sb.set_params(v, lo, hi, pg, ar, &mut ctx);
-                                    }
+                            }
+                            // -- rows 50-52: the TMenuView modal layer ------
+                            //
+                            // OpenMenuBox: build a MenuBox from the (cloned)
+                            // submenu over `bounds` and insert it into the
+                            // ROOT group with the session's pre-minted id (no
+                            // focus move — a box is never current, Clean
+                            // Architecture A). `bounds` is already the
+                            // box-sized rect (menu_box_rect ran at the session;
+                            // MenuBox::new re-clamps inside its own bounds, a
+                            // no-op for an already-fitted rect since b == a+w/h).
+                            Deferred::OpenMenuBox { id, menu, bounds } => {
+                                use crate::menu::MenuBox;
+                                group.insert_with_id(Box::new(MenuBox::new(bounds, menu)), id);
+                            }
+                            // SetMenuCurrent: write the session-owned highlight
+                            // cache into the bar/box view for `draw` (the
+                            // set_menu_current trait hook — no downcast, like
+                            // update_menu_commands).
+                            Deferred::SetMenuCurrent(id, current) => {
+                                if let Some(v) = group.find_mut(id) {
+                                    v.set_menu_current(current);
                                 }
-                                // Visibility direction (TScroller::showSBar →
-                                // show/hide): write the flag in the OWNING group
-                                // (no propagating StateFlag::Visible; the painter
-                                // skips !visible) and run the C++
-                                // setState(sfVisible) currency tail — if the flag
-                                // really changed and the child is selectable, the
-                                // owning group resetCurrents, BOTH directions (A2).
-                                // Today's consumers (scrollbars / indicators) are
-                                // non-selectable, so the tail is a no-op for them.
-                                Deferred::SetVisible(id, visible) => {
-                                    group.set_visible_descendant(id, visible, &mut ctx);
-                                }
-                                // -- row 28: TListViewer read-sync broker -------
-                                //
-                                // Like SyncScrollerDelta, but the list base is a
-                                // TRAIT (subclasses reuse its draw + override
-                                // get_text/is_selected), so `dyn View → dyn
-                                // ListViewer` cannot be downcast. Instead we read
-                                // each bar's `value` (each in its own find_mut so
-                                // only one &mut is live) and call back through the
-                                // defaulted View::apply_list_scroll trait method.
-                                //
-                                // This read-sync WRITES BACK (apply_list_scroll →
-                                // focus_item_num → focusItem → v-bar setValue), so it
-                                // could re-enter — but ScrollBar::set_params is
-                                // change-guarded (re-broadcasts only on an actual
-                                // value change), so the write-back of the already-
-                                // current value is a silent no-op and the cycle goes
-                                // quiet. `ctx` is live here (same as the
-                                // ScrollBarSetParams arm), so the write-back's
-                                // request_scroll_bar_params lands in `deferred` for
-                                // the NEXT pump.
-                                Deferred::SyncListViewer { list, h, v } => {
-                                    let hv = h
-                                        .and_then(|id| group.find_mut(id))
-                                        .and_then(|view| view.value())
-                                        .and_then(field_int);
-                                    let vv = v
-                                        .and_then(|id| group.find_mut(id))
-                                        .and_then(|view| view.value())
-                                        .and_then(field_int);
-                                    if let Some(view) = group.find_mut(list) {
-                                        view.apply_list_scroll(hv, vv, &mut ctx);
-                                    }
-                                }
-                                // -- row 49: TMenuView command-graying broker --
-                                //
-                                // The menu view (a child, D3) cannot read the
-                                // command set inline — the pump owns it. Resolve
-                                // the menu view and call back through the defaulted
-                                // View::update_menu_commands trait method with the
-                                // live DISABLED set in hand (it regrays the menu
-                                // tree: an item grays iff its command is in the
-                                // set). `group` and `disabled_commands` are disjoint
-                                // destructured fields, so no `ctx` is needed (like
-                                // ChangeBounds).
-                                Deferred::UpdateMenu(id) => {
-                                    if let Some(v) = group.find_mut(id) {
-                                        v.update_menu_commands(disabled_commands);
-                                    }
-                                }
-                                // -- rows 50-52: the TMenuView modal layer ------
-                                //
-                                // OpenMenuBox: build a MenuBox from the (cloned)
-                                // submenu over `bounds` and insert it into the
-                                // ROOT group with the session's pre-minted id (no
-                                // focus move — a box is never current, Clean
-                                // Architecture A). `bounds` is already the
-                                // box-sized rect (menu_box_rect ran at the session;
-                                // MenuBox::new re-clamps inside its own bounds, a
-                                // no-op for an already-fitted rect since b == a+w/h).
-                                Deferred::OpenMenuBox { id, menu, bounds } => {
-                                    use crate::menu::MenuBox;
-                                    group.insert_with_id(Box::new(MenuBox::new(bounds, menu)), id);
-                                }
-                                // SetMenuCurrent: write the session-owned highlight
-                                // cache into the bar/box view for `draw` (the
-                                // set_menu_current trait hook — no downcast, like
-                                // update_menu_commands).
-                                Deferred::SetMenuCurrent(id, current) => {
-                                    if let Some(v) = group.find_mut(id) {
-                                        v.set_menu_current(current);
-                                    }
-                                }
-                                // -- row 57: the THistory view-triggered async-modal seam --
-                                //
-                                // recordHistory(link->data) for the broadcast arm:
-                                // read the link's current text and history_add it.
-                                Deferred::RecordHistory { link, history_id } => {
+                            }
+                            // -- row 57: the THistory view-triggered async-modal seam --
+                            //
+                            // recordHistory(link->data) for the broadcast arm:
+                            // read the link's current text and history_add it.
+                            Deferred::RecordHistory { link, history_id } => {
+                                record_history_for(group, link, history_id);
+                            }
+                            // OpenHistory: the THistory leaf holds only the link's
+                            // id (D3) and cannot call exec_view (top-level only), so
+                            // it requested the open and the pump does everything
+                            // reachable here (group + ctx + pending_modal, none
+                            // aliased — ctx borrows out_events/timers/deferred, not
+                            // group/pending_modal). It does NOT exec_view here: it
+                            // stashes the built window into pending_modal for the
+                            // outer pump_and_drive to run at top level.
+                            Deferred::OpenHistory {
+                                link,
+                                history_id,
+                                require_focus,
+                            } => {
+                                let focused = group
+                                    .find_mut(link)
+                                    .map(|v| v.state().state.focused)
+                                    .unwrap_or(false);
+                                // Keyboard-trigger gate (faithful to
+                                // `(link->state & sfFocused)`): the keyboard arm
+                                // only opens when the link is already focused; the
+                                // mouse arm (require_focus == false) always opens.
+                                if require_focus && !focused {
+                                    // not focused — drop the request (no open).
+                                } else if let Some(bounds) = build_history_bounds(group, link) {
+                                    // link->focus() — DEVIATION: our focus is
+                                    // deferred (focus_descendant) with no inline
+                                    // success bool, so the C++ focus-abort
+                                    // (`if (!link->focus()) return`) is OUT (§0);
+                                    // request focus + proceed (same class as the
+                                    // row-39/41 deferred-focus TODOs).
+                                    group.focus_descendant(link, &mut ctx);
+                                    // recordHistory(link->data): the link's CURRENT
+                                    // text at OPEN, never the picked value (faithful
+                                    // pin — the completion never re-records).
                                     record_history_for(group, link, history_id);
-                                }
-                                // OpenHistory: the THistory leaf holds only the link's
-                                // id (D3) and cannot call exec_view (top-level only), so
-                                // it requested the open and the pump does everything
-                                // reachable here (group + ctx + pending_modal, none
-                                // aliased — ctx borrows out_events/timers/deferred, not
-                                // group/pending_modal). It does NOT exec_view here: it
-                                // stashes the built window into pending_modal for the
-                                // outer pump_and_drive to run at top level.
-                                Deferred::OpenHistory {
-                                    link,
-                                    history_id,
-                                    require_focus,
-                                } => {
-                                    let focused = group
-                                        .find_mut(link)
-                                        .map(|v| v.state().state.focused)
-                                        .unwrap_or(false);
-                                    // Keyboard-trigger gate (faithful to
-                                    // `(link->state & sfFocused)`): the keyboard arm
-                                    // only opens when the link is already focused; the
-                                    // mouse arm (require_focus == false) always opens.
-                                    if require_focus && !focused {
-                                        // not focused — drop the request (no open).
-                                    } else if let Some(bounds) = build_history_bounds(group, link) {
-                                        // link->focus() — DEVIATION: our focus is
-                                        // deferred (focus_descendant) with no inline
-                                        // success bool, so the C++ focus-abort
-                                        // (`if (!link->focus()) return`) is OUT (§0);
-                                        // request focus + proceed (same class as the
-                                        // row-39/41 deferred-focus TODOs).
-                                        group.focus_descendant(link, &mut ctx);
-                                        // recordHistory(link->data): the link's CURRENT
-                                        // text at OPEN, never the picked value (faithful
-                                        // pin — the completion never re-records).
-                                        record_history_for(group, link, history_id);
-                                        // initHistoryWindow + stash for the outer drive.
-                                        // helpCtx propagation is OMITTED — no help-ctx-
-                                        // on-view plumbing yet (TODO(help-ctx propagation)).
-                                        let hw =
-                                            crate::widgets::HistoryWindow::new(bounds, history_id);
-                                        *pending_modal = Some((
-                                            Box::new(hw),
-                                            ModalCompletion::HistoryPick { link },
-                                            None, // HistoryWindow manages its own focus
-                                        ));
-                                    }
-                                }
-                                // -- row 66: the TEditor cross-view brokers ----
-                                //
-                                // Read direction (TEditor::checkScrollBar):
-                                // resolve each bar, read its `value`, then
-                                // downcast the editor and call apply_scroll_delta
-                                // (its checkScrollBar body). Like SyncScrollerDelta
-                                // but the editor is NOT a Scroller, so it is its own
-                                // concrete downcast target.
-                                Deferred::SyncEditorDelta { editor, h, v } => {
-                                    let dx = h
-                                        .and_then(|id| group.find_mut(id))
-                                        .and_then(|view| view.value())
-                                        .and_then(field_int);
-                                    let dy = v
-                                        .and_then(|id| group.find_mut(id))
-                                        .and_then(|view| view.value())
-                                        .and_then(field_int);
-                                    // The editor id may resolve to a FileEditor (in an
-                                    // EditWindow) or a plain Editor/Memo — editor_mut
-                                    // peels to the inner Editor in either case.
-                                    if let Some(ed) =
-                                        group.find_mut(editor).and_then(crate::widgets::editor_mut)
-                                    {
-                                        ed.apply_scroll_delta(dx, dy, &mut ctx);
-                                    }
-                                }
-                                // Indicator write (TEditor::doUpdate →
-                                // indicator->setValue): resolve the indicator,
-                                // downcast, set_value.
-                                Deferred::IndicatorSetValue {
-                                    indicator,
-                                    location,
-                                    modified,
-                                } => {
-                                    use crate::widgets::Indicator;
-                                    if let Some(ind) = group
-                                        .find_mut(indicator)
-                                        .and_then(|view| view.as_any_mut())
-                                        .and_then(|a| a.downcast_mut::<Indicator>())
-                                    {
-                                        ind.set_value(location, modified);
-                                    }
-                                }
-                                // Clipboard copy (TEditor::clipCopy → setText):
-                                // the backend is reachable here via renderer.
-                                Deferred::SetClipboard(s) => {
-                                    renderer.backend_mut().set_clipboard(&s);
-                                }
-                                // Clipboard paste (TEditor::clipPaste →
-                                // requestText): read the backend clipboard, then
-                                // downcast the editor and insert. The insert pushes
-                                // further deferred scrollbar-param ops that settle
-                                // next pump (ONE-pass drain — expected).
-                                Deferred::EditorPaste(id) => {
-                                    let txt = renderer.backend_mut().get_clipboard();
-                                    // The id may resolve to a FileEditor or a plain
-                                    // Editor/Memo — editor_mut peels to the inner Editor.
-                                    if let Some(t) = txt
-                                        && let Some(ed) =
-                                            group.find_mut(id).and_then(crate::widgets::editor_mut)
-                                    {
-                                        ed.insert_text(t.as_bytes(), false, &mut ctx);
-                                    }
-                                }
-                                // -- row 77: cmFileFocused payload broker -------
-                                //
-                                // Resolve the payload-carrying cmFileFocused
-                                // broadcast (D4: source is the resolvable subject,
-                                // not a value carrier). Read the focused SearchRec
-                                // from the source FileList in its OWN find_mut and
-                                // drop the borrow, THEN find_mut the subscriber and
-                                // write it — only one &mut is live at a time, like
-                                // SyncScrollerDelta's read-then-write.
-                                Deferred::ResolveFocusedFile { subscriber, source } => {
-                                    use crate::dialog::{FileInfoPane, FileInputLine, FileList};
-                                    let rec = group
-                                        .find_mut(source)
-                                        .and_then(|view| view.as_any_mut())
-                                        .and_then(|a| a.downcast_mut::<FileList>())
-                                        .and_then(|fl| fl.focused_rec());
-                                    // Two consumers share the broker: a FileInputLine
-                                    // (row 77) and a FileInfoPane (row 78). Try each
-                                    // downcast in turn; `rec` moves into the matching
-                                    // arm (the two are mutually exclusive).
-                                    if let Some(fil) = group
-                                        .find_mut(subscriber)
-                                        .and_then(|view| view.as_any_mut())
-                                        .and_then(|a| a.downcast_mut::<FileInputLine>())
-                                    {
-                                        fil.on_file_focused(rec);
-                                    } else if let Some(fip) = group
-                                        .find_mut(subscriber)
-                                        .and_then(|view| view.as_any_mut())
-                                        .and_then(|a| a.downcast_mut::<FileInfoPane>())
-                                    {
-                                        fip.on_file_focused(rec);
-                                    }
-                                }
-                                // -- row 80: TDirListBox → chDirButton makeDefault --
-                                //
-                                // The dir list (a leaf, D3) gained/lost focus and
-                                // wants its sibling chDirButton to grab/release the
-                                // default look. Resolve the button, downcast, and call
-                                // make_default(enable, ctx); its GRAB/RELEASE_DEFAULT
-                                // re-broadcast settles next pump (like EditorPaste).
-                                Deferred::MakeButtonDefault { button, enable } => {
-                                    use crate::widgets::Button;
-                                    if let Some(b) = group
-                                        .find_mut(button)
-                                        .and_then(|view| view.as_any_mut())
-                                        .and_then(|a| a.downcast_mut::<Button>())
-                                    {
-                                        b.make_default(enable, &mut ctx);
-                                    }
-                                }
-                                // -- A3: the MouseTrackCapture router (D9) --
-                                //
-                                // The capture localized + forwarded a masked mouse
-                                // event during the hold; deliver it straight to the
-                                // tracked view's handle_event — the apply-time
-                                // analogue of the pump's outside-modal redirect
-                                // above. No downcast: the widget's own
-                                // MouseMove/MouseAuto/MouseUp arms ARE the C++
-                                // hold-loop body / post-loop code (decisive for
-                                // trait-object viewers). `ctx` already carries the
-                                // disabled-command snapshot (set above, mirroring
-                                // the redirect's Context), and its phase defaults
-                                // to Focused — correct for a directly-addressed
-                                // delivery (no pre/post walk is in flight).
-                                Deferred::MouseTrack { view, event } => {
-                                    if let Some(v) = group.find_mut(view) {
-                                        let mut ev = event;
-                                        v.handle_event(&mut ev, &mut ctx);
-                                    }
-                                }
-                                // -- colorpick: the color-picker drag broker (D3) --
-                                //
-                                // `ColorDragCapture` posts `ColorPickerDrag` on each
-                                // `MouseMove`/`MouseUp`. Resolve `picker`, downcast to
-                                // `ColorPicker` via `as_any_mut`, and call `apply_drag(pos)`.
-                                // The region being scrubbed lives in the picker's
-                                // `active_drag` — no widget-layer type in this variant.
-                                Deferred::ColorPickerDrag { picker, pos } => {
-                                    if let Some(p) = group
-                                        .find_mut(picker)
-                                        .and_then(|v| v.as_any_mut())
-                                        .and_then(|a| {
-                                            a.downcast_mut::<crate::dialog::ColorPicker>()
-                                        })
-                                    {
-                                        p.apply_drag(pos);
-                                    }
-                                }
-                                // -- the async-modal-from-a-view seam (handle_event paths) --
-                                //
-                                // A downward-borrowed `&mut View`'s valid() requested
-                                // a messageBox. Build the centered box + stash it into
-                                // pending_modal for the outer pump_and_drive to exec at
-                                // top level (a view cannot call exec_view here — same
-                                // structural constraint as OpenHistory). The completion
-                                // routes the answer back (RouteModalAnswer) and re-posts
-                                // then_command. (The modal-close path at 886 drives its
-                                // own box inline — it is NOT on this event-gated drain.)
-                                Deferred::OpenMessageBox {
-                                    text,
-                                    kind,
-                                    buttons,
-                                    answer_to,
-                                    then_command,
-                                } => {
-                                    let r = centered_msgbox_rect_for(group, *desktop, &text);
-                                    let (d, first) =
-                                        crate::dialog::build_message_box(r, &text, kind, buttons);
-                                    let completion = match answer_to {
-                                        Some(answer_to) => ModalCompletion::RouteModalAnswer {
-                                            answer_to,
-                                            then_command,
-                                        },
-                                        // Informational (OK-only) box: nothing to route.
-                                        None => ModalCompletion::Informational,
-                                    };
-                                    // Thread the first-button focus (C++ selectNext(False))
-                                    // so the default button (Yes/OK) is focused on open —
-                                    // matching the sync `message_box_rect` + inline
-                                    // `validate_modal_close` paths.
-                                    *pending_modal = Some((Box::new(d), completion, first));
-                                }
-                                // -- saveAs: the view-triggered FileDialog seam ----
-                                //
-                                // A FileEditor leaf requested a save-as picker (it
-                                // holds only &mut Context and cannot exec a nested
-                                // modal — same structural constraint as OpenHistory /
-                                // OpenMessageBox). Build the C++ edSaveAs dialog
-                                // (`TFileDialog("*.*", "Save file as", "~N~ame",
-                                // fdOKButton, 101)`), pre-fill the input line with the
-                                // editor's current filename (C++ passes `fileName` to
-                                // editorDialog → setData), and stash it into
-                                // pending_modal for the outer pump_and_drive. The
-                                // SaveAsPick completion reads the picked name back +
-                                // re-injects cmSave.
-                                Deferred::OpenSaveAsDialog { editor_id } => {
-                                    use crate::dialog::{FD_OK_BUTTON, FileDialog};
-                                    // Pre-fill: the editor's current filename, if any
-                                    // (C++ saveAs starts the input at `fileName`).
-                                    let initial = group
-                                        .find_mut(editor_id)
-                                        .and_then(|v| v.as_any_mut())
-                                        .and_then(|a| {
-                                            a.downcast_mut::<crate::widgets::FileEditor>()
-                                        })
-                                        .and_then(|fe| {
-                                            fe.file_name
-                                                .as_ref()
-                                                .map(|p| p.to_string_lossy().into_owned())
-                                        });
-                                    // C++ edSaveAs: TFileDialog("*.*", "Save file as",
-                                    // "~N~ame", fdOKButton, 101). The dialog self-centers
-                                    // (ofCentered + its 49x19 floor) — no bounds param.
-                                    let mut fd = FileDialog::new(
-                                        "*.*",
-                                        "Save file as",
-                                        "~N~ame",
-                                        FD_OK_BUTTON,
-                                        101,
-                                    );
-                                    if let Some(name) = initial {
-                                        crate::view::View::set_value(
-                                            &mut fd,
-                                            crate::data::FieldValue::Text(name),
-                                        );
-                                    }
-                                    // FileDialog manages its own focus (reset_current
-                                    // focuses the input line) — no initial_focus.
+                                    // initHistoryWindow + stash for the outer drive.
+                                    // helpCtx propagation is OMITTED — no help-ctx-
+                                    // on-view plumbing yet (TODO(help-ctx propagation)).
+                                    let hw = crate::widgets::HistoryWindow::new(bounds, history_id);
                                     *pending_modal = Some((
-                                        Box::new(fd),
-                                        ModalCompletion::SaveAsPick { editor_id },
-                                        None,
+                                        Box::new(hw),
+                                        ModalCompletion::HistoryPick { link },
+                                        None, // HistoryWindow manages its own focus
                                     ));
                                 }
+                            }
+                            // -- row 66: the TEditor cross-view brokers ----
+                            //
+                            // Read direction (TEditor::checkScrollBar):
+                            // resolve each bar, read its `value`, then
+                            // downcast the editor and call apply_scroll_delta
+                            // (its checkScrollBar body). Like SyncScrollerDelta
+                            // but the editor is NOT a Scroller, so it is its own
+                            // concrete downcast target.
+                            Deferred::SyncEditorDelta { editor, h, v } => {
+                                let dx = h
+                                    .and_then(|id| group.find_mut(id))
+                                    .and_then(|view| view.value())
+                                    .and_then(field_int);
+                                let dy = v
+                                    .and_then(|id| group.find_mut(id))
+                                    .and_then(|view| view.value())
+                                    .and_then(field_int);
+                                // The editor id may resolve to a FileEditor (in an
+                                // EditWindow) or a plain Editor/Memo — editor_mut
+                                // peels to the inner Editor in either case.
+                                if let Some(ed) =
+                                    group.find_mut(editor).and_then(crate::widgets::editor_mut)
+                                {
+                                    ed.apply_scroll_delta(dx, dy, &mut ctx);
+                                }
+                            }
+                            // Indicator write (TEditor::doUpdate →
+                            // indicator->setValue): resolve the indicator,
+                            // downcast, set_value.
+                            Deferred::IndicatorSetValue {
+                                indicator,
+                                location,
+                                modified,
+                            } => {
+                                use crate::widgets::Indicator;
+                                if let Some(ind) = group
+                                    .find_mut(indicator)
+                                    .and_then(|view| view.as_any_mut())
+                                    .and_then(|a| a.downcast_mut::<Indicator>())
+                                {
+                                    ind.set_value(location, modified);
+                                }
+                            }
+                            // Clipboard copy (TEditor::clipCopy → setText):
+                            // the backend is reachable here via renderer.
+                            Deferred::SetClipboard(s) => {
+                                renderer.backend_mut().set_clipboard(&s);
+                            }
+                            // Clipboard paste (TEditor::clipPaste →
+                            // requestText): read the backend clipboard, then
+                            // downcast the editor and insert. The insert pushes
+                            // further deferred scrollbar-param ops that settle
+                            // next pump (ONE-pass drain — expected).
+                            Deferred::EditorPaste(id) => {
+                                let txt = renderer.backend_mut().get_clipboard();
+                                // The id may resolve to a FileEditor or a plain
+                                // Editor/Memo — editor_mut peels to the inner Editor.
+                                if let Some(t) = txt
+                                    && let Some(ed) =
+                                        group.find_mut(id).and_then(crate::widgets::editor_mut)
+                                {
+                                    ed.insert_text(t.as_bytes(), false, &mut ctx);
+                                }
+                            }
+                            // -- row 77: cmFileFocused payload broker -------
+                            //
+                            // Resolve the payload-carrying cmFileFocused
+                            // broadcast (D4: source is the resolvable subject,
+                            // not a value carrier). Read the focused SearchRec
+                            // from the source FileList in its OWN find_mut and
+                            // drop the borrow, THEN find_mut the subscriber and
+                            // write it — only one &mut is live at a time, like
+                            // SyncScrollerDelta's read-then-write.
+                            Deferred::ResolveFocusedFile { subscriber, source } => {
+                                use crate::dialog::{FileInfoPane, FileInputLine, FileList};
+                                let rec = group
+                                    .find_mut(source)
+                                    .and_then(|view| view.as_any_mut())
+                                    .and_then(|a| a.downcast_mut::<FileList>())
+                                    .and_then(|fl| fl.focused_rec());
+                                // Two consumers share the broker: a FileInputLine
+                                // (row 77) and a FileInfoPane (row 78). Try each
+                                // downcast in turn; `rec` moves into the matching
+                                // arm (the two are mutually exclusive).
+                                if let Some(fil) = group
+                                    .find_mut(subscriber)
+                                    .and_then(|view| view.as_any_mut())
+                                    .and_then(|a| a.downcast_mut::<FileInputLine>())
+                                {
+                                    fil.on_file_focused(rec);
+                                } else if let Some(fip) = group
+                                    .find_mut(subscriber)
+                                    .and_then(|view| view.as_any_mut())
+                                    .and_then(|a| a.downcast_mut::<FileInfoPane>())
+                                {
+                                    fip.on_file_focused(rec);
+                                }
+                            }
+                            // -- row 80: TDirListBox → chDirButton makeDefault --
+                            //
+                            // The dir list (a leaf, D3) gained/lost focus and
+                            // wants its sibling chDirButton to grab/release the
+                            // default look. Resolve the button, downcast, and call
+                            // make_default(enable, ctx); its GRAB/RELEASE_DEFAULT
+                            // re-broadcast settles next pump (like EditorPaste).
+                            Deferred::MakeButtonDefault { button, enable } => {
+                                use crate::widgets::Button;
+                                if let Some(b) = group
+                                    .find_mut(button)
+                                    .and_then(|view| view.as_any_mut())
+                                    .and_then(|a| a.downcast_mut::<Button>())
+                                {
+                                    b.make_default(enable, &mut ctx);
+                                }
+                            }
+                            // -- A3: the MouseTrackCapture router (D9) --
+                            //
+                            // The capture localized + forwarded a masked mouse
+                            // event during the hold; deliver it straight to the
+                            // tracked view's handle_event — the apply-time
+                            // analogue of the pump's outside-modal redirect
+                            // above. No downcast: the widget's own
+                            // MouseMove/MouseAuto/MouseUp arms ARE the C++
+                            // hold-loop body / post-loop code (decisive for
+                            // trait-object viewers). `ctx` already carries the
+                            // disabled-command snapshot (set above, mirroring
+                            // the redirect's Context), and its phase defaults
+                            // to Focused — correct for a directly-addressed
+                            // delivery (no pre/post walk is in flight).
+                            Deferred::MouseTrack { view, event } => {
+                                if let Some(v) = group.find_mut(view) {
+                                    let mut ev = event;
+                                    v.handle_event(&mut ev, &mut ctx);
+                                }
+                            }
+                            // -- colorpick: the color-picker drag broker (D3) --
+                            //
+                            // `ColorDragCapture` posts `ColorPickerDrag` on each
+                            // `MouseMove`/`MouseUp`. Resolve `picker`, downcast to
+                            // `ColorPicker` via `as_any_mut`, and call `apply_drag(pos)`.
+                            // The region being scrubbed lives in the picker's
+                            // `active_drag` — no widget-layer type in this variant.
+                            Deferred::ColorPickerDrag { picker, pos } => {
+                                if let Some(p) = group
+                                    .find_mut(picker)
+                                    .and_then(|v| v.as_any_mut())
+                                    .and_then(|a| a.downcast_mut::<crate::dialog::ColorPicker>())
+                                {
+                                    p.apply_drag(pos);
+                                }
+                            }
+                            // -- the async-modal-from-a-view seam (handle_event paths) --
+                            //
+                            // A downward-borrowed `&mut View`'s valid() requested
+                            // a messageBox. Build the centered box + stash it into
+                            // pending_modal for the outer pump_and_drive to exec at
+                            // top level (a view cannot call exec_view here — same
+                            // structural constraint as OpenHistory). The completion
+                            // routes the answer back (RouteModalAnswer) and re-posts
+                            // then_command. (The modal-close path at 886 drives its
+                            // own box inline — it is NOT on this event-gated drain.)
+                            Deferred::OpenMessageBox {
+                                text,
+                                kind,
+                                buttons,
+                                answer_to,
+                                then_command,
+                            } => {
+                                let r = centered_msgbox_rect_for(group, *desktop, &text);
+                                let (d, first) =
+                                    crate::dialog::build_message_box(r, &text, kind, buttons);
+                                let completion = match answer_to {
+                                    Some(answer_to) => ModalCompletion::RouteModalAnswer {
+                                        answer_to,
+                                        then_command,
+                                    },
+                                    // Informational (OK-only) box: nothing to route.
+                                    None => ModalCompletion::Informational,
+                                };
+                                // Thread the first-button focus (C++ selectNext(False))
+                                // so the default button (Yes/OK) is focused on open —
+                                // matching the sync `message_box_rect` + inline
+                                // `validate_modal_close` paths.
+                                *pending_modal = Some((Box::new(d), completion, first));
+                            }
+                            // -- saveAs: the view-triggered FileDialog seam ----
+                            //
+                            // A FileEditor leaf requested a save-as picker (it
+                            // holds only &mut Context and cannot exec a nested
+                            // modal — same structural constraint as OpenHistory /
+                            // OpenMessageBox). Build the C++ edSaveAs dialog
+                            // (`TFileDialog("*.*", "Save file as", "~N~ame",
+                            // fdOKButton, 101)`), pre-fill the input line with the
+                            // editor's current filename (C++ passes `fileName` to
+                            // editorDialog → setData), and stash it into
+                            // pending_modal for the outer pump_and_drive. The
+                            // SaveAsPick completion reads the picked name back +
+                            // re-injects cmSave.
+                            Deferred::OpenSaveAsDialog { editor_id } => {
+                                use crate::dialog::{FD_OK_BUTTON, FileDialog};
+                                // Pre-fill: the editor's current filename, if any
+                                // (C++ saveAs starts the input at `fileName`).
+                                let initial = group
+                                    .find_mut(editor_id)
+                                    .and_then(|v| v.as_any_mut())
+                                    .and_then(|a| a.downcast_mut::<crate::widgets::FileEditor>())
+                                    .and_then(|fe| {
+                                        fe.file_name
+                                            .as_ref()
+                                            .map(|p| p.to_string_lossy().into_owned())
+                                    });
+                                // C++ edSaveAs: TFileDialog("*.*", "Save file as",
+                                // "~N~ame", fdOKButton, 101). The dialog self-centers
+                                // (ofCentered + its 49x19 floor) — no bounds param.
+                                let mut fd = FileDialog::new(
+                                    "*.*",
+                                    "Save file as",
+                                    "~N~ame",
+                                    FD_OK_BUTTON,
+                                    101,
+                                );
+                                if let Some(name) = initial {
+                                    crate::view::View::set_value(
+                                        &mut fd,
+                                        crate::data::FieldValue::Text(name),
+                                    );
+                                }
+                                // FileDialog manages its own focus (reset_current
+                                // focuses the input line) — no initial_focus.
+                                *pending_modal = Some((
+                                    Box::new(fd),
+                                    ModalCompletion::SaveAsPick { editor_id },
+                                    None,
+                                ));
                             }
                         }
                     }
                 }
+                // (Gate-bounds refresh happens at the TOP of the dispatch gate
+                // above — captures only act during dispatch, so syncing just
+                // before it covers the current pump's resize AND all previous
+                // pumps' applied deferreds, including pre-route-pushed captures
+                // whose first dispatch necessarily passes that sync.)
             }
         }
 
@@ -2293,9 +2301,9 @@ fn centered_msgbox_rect_for(group: &Group, desktop: Option<ViewId>, msg: &str) -
 }
 
 /// Run a [`ModalCompletion`] (row 57) as a DIRECT `group` mutation, while the modal
-/// is still in the tree by `modal_id`. NOT a deferred queue entry (that drain is
-/// gated on `!ev.is_nothing()` inside `pump_once` and would never fire from
-/// `exec_view`). Two sequential `find_mut` borrows — never simultaneous.
+/// is still in the tree by `modal_id`. NOT a deferred queue entry (that drain
+/// fires only when a `Some(ev)` pump pass runs inside `pump_once`, and would
+/// never fire from `exec_view`). Two sequential `find_mut` borrows — never simultaneous.
 fn apply_modal_completion(
     c: ModalCompletion,
     result: Command,
@@ -3303,8 +3311,9 @@ mod tests {
         )));
         program.out_events.clear();
 
-        // Queue the request + a benign broadcast so the pump reaches its deferred
-        // drain (event-gated on !ev.is_nothing()).
+        // Queue the request + a benign broadcast so the pump picks a Some(ev)
+        // and reaches its deferred drain (which runs for every picked event,
+        // consumed-by-pre-route or not).
         program
             .deferred
             .push(Deferred::OpenSaveAsDialog { editor_id });
@@ -7943,7 +7952,14 @@ mod tests {
             // line is row 9), then click the line at "Alt-X Exit" (span [0, 12)):
             // normal routing would be gated out (the click is outside the modal ->
             // ModalFrame returns Consumed), so only the pre-route can deliver it.
-            // The line posts cmQuit + clears; cmQuit routes next pump.
+            //
+            // Adapted for the B2 press-and-hold seam (post-on-release):
+            //   pump 1 (MouseDown): pre-route arms tracking + PushCapture applied;
+            //                       ev cleared, no command yet.
+            //   pump 2 (MouseUp):   MouseTrackCapture (top of stack) forwards the
+            //                       localized MouseUp to the status line; its MouseUp
+            //                       arm fires cmQuit and clears. The capture pops.
+            //   pump 3:             the posted cmQuit routes to the cmQuit catch.
             //
             // BITE: removing the mouseDown pre-route arm makes the modal gate eat the
             // click -> the line never posts -> end_state stays None -> red.
@@ -7955,7 +7971,9 @@ mod tests {
                 .push(Box::new(ModalFrame::new(modal_id, Rect::new(0, 0, 40, 9))));
 
             program.out_events.push_back(mouse_down_at(2, 9));
-            program.pump_once(); // pre-route delivers to the line: posts cmQuit, clears
+            program.pump_once(); // pre-route delivers MouseDown: arms tracking, no command yet
+            program.out_events.push_back(mouse_up_at(2, 9));
+            program.pump_once(); // MouseTrackCapture delivers MouseUp -> status line fires cmQuit
             program.pump_once(); // posted cmQuit routes -> cmQuit catch
             assert_eq!(
                 program.end_state(),
