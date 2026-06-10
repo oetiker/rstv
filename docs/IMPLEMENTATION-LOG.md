@@ -5,6 +5,55 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — button shadow color, mouse hold-tracking, gray dialog surface
+
+User report, two button bugs from live testing: **(a)** the cells around every
+button render solid dark grey regardless of the surface it sits on; **(b)** a
+button fires on mouse-*down* instead of the modern (and faithful C++) press-
+down / track / fire-on-release-inside behavior. Mid-session follow-up: after
+fixing (a), the dialog surface itself turned out to be **blue** while every
+dialog widget is colored for the C++ *gray* dialog — the real (a) culprit.
+
+- **`36188f4` fix(theme): ButtonShadow follows the gray-dialog palette chain.**
+  `classic_blue` had `ButtonShadow` hardcoded darkgray-on-black, with a comment
+  claiming the literal chain value "is not shadow-like". The chain
+  `cpButton[8]=0x0F → cpGrayDialog[15]=0x2E → cpAppColor[46]=0x70` is
+  black-on-**lightgray**: the ▄█▀ half-block glyphs paint black while the
+  background half shows the dialog surface — that *is* the adaptive classic
+  shadow. (Every other Button role already matched its chain.) 13 snapshots.
+- **`9aa291d` feat(button): mouse press-and-hold tracking (D9 capture).**
+  Button deferral 3 implemented now that the capture stack exists:
+  `ButtonTrackCapture` (the `DragCapture`/`ColorDragCapture` shape) + two new
+  `Deferred` variants (`ButtonTrackDown`, `ButtonTrackRelease`) + pump brokers
+  (the `MakeButtonDefault` shape). Faithful details: tracking rect is
+  `clickRect.b.x++` (one wider than the press gate); the press decision uses
+  the **last move's** containment, not the mouse-up position (the C++ loop body
+  never re-evaluates the up event); all non-mouse events are swallowed during
+  the hold (`mouseEvent`'s discard — the hold is modal). `abs_origin` cached at
+  draw time converts the capture's absolute coords to button-local (the
+  ColorPicker `body_origin` pattern). Id-less (uninserted) buttons keep the
+  immediate press as a documented degenerate fallback.
+- **`14544f6` feat(theme,frame): gray dialog surface (the row-34 gray chunk).**
+  `Frame` hardcoded the blue `Frame*` roles for windows *and* dialogs; in C++
+  `TFrame::draw` resolves through the **owner's** palette, so a `TDialog` gets
+  the lightgray surface its widgets are colored for. Added
+  `FrameGrayActive/Passive/Dragging/Icon` (literal chain
+  `cpFrame → cpGrayDialog → cpAppColor`: 0x70 / 0x7F / 0x7A / 0x7A);
+  `Frame.palette: WindowPalette` selects the role family in `draw`;
+  `Window::set_palette` now propagates to the frame child (it was
+  "recorded only" since row 34). Cyan still falls back to blue
+  (`TODO(row 34 cyan theming)`). 6 dialog snapshots flip frame/interior attrs
+  only; blue-window snapshots unchanged. Noted: blue `FrameDragging` 0x1E is a
+  pre-existing deviation from its literal chain value 0x1A (gray follows the
+  chain).
+
+**Verification:** 985 lib tests green; clippy + fmt clean. Snapshot diffs
+verified cell-by-cell (glyphs identical, only the targeted attrs flip).
+
+Process: subagent-driven (Sonnet implementers for the two button fixes, main-
+model implementer for the frame seam; spec-compliance review on each chunk +
+code-quality review on the tracking feature → 2 test fixes applied).
+
 ## Session — the D8 window-shadow pass lands (`d5d9354`)
 
 User report: **no shadows rendered** in `examples/hello.rs` — windows sat flat

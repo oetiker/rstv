@@ -145,13 +145,16 @@
 ## Next — all 92 rows complete; backlog seams being cleared
 
 **All 92 PORT-ORDER rows are COMPLETE.** Post-completion work now clears the
-deferred backlog seams. **HEAD = `d5d9354`; 985 lib tests green; clippy + fmt
-clean.** Cleared recently: the **D8 window-shadow pass** (the row-33 TODO —
-`Role::Shadow`, `DrawCtx::cast_shadow`, the `Group::draw` hook; windows/menu
-boxes now cast the classic offset-L drop shadow, verified live in `hello.rs`),
-the **ModalFrame outside-click seam** (row 56/57), **`FileEditor::saveAs`**
-(rows 68/69 breadcrumb), and the **`hello.rs` demo app** now wires
-`EditWindow + FileDialog` end-to-end — see IMPLEMENTATION-LOG.
+deferred backlog seams. **HEAD = `14544f6`; 985 lib tests green; clippy + fmt
+clean.** Cleared recently: **button mouse hold-tracking** (the button deferral-3
+D9 capture: press-down, track, fire-on-release-inside) + the **gray dialog
+surface** (row-34 gray theming: `FrameGray*` roles, `Frame.palette` role-family
+selection, `Window::set_palette` propagation — cyan still blue-fallback) + the
+**ButtonShadow chain fix** (black-on-lightgray 0x70), the **D8 window-shadow
+pass** (the row-33 TODO — `Role::Shadow`, `DrawCtx::cast_shadow`, the
+`Group::draw` hook), the **ModalFrame outside-click seam** (row 56/57),
+**`FileEditor::saveAs`** (rows 68/69 breadcrumb), and the **`hello.rs` demo
+app** wiring `EditWindow + FileDialog` end-to-end — see IMPLEMENTATION-LOG.
 
 **Rows 91–92 (terminal family) are COMPLETE and on `main`.** `TextDevice` (trait)
 and `Terminal` (ring-buffer terminal view) live in `src/widgets/terminal.rs`.
