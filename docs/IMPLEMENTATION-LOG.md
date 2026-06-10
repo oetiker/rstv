@@ -5,6 +5,38 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session — the backlog run begins: TODO audit, BACKLOG.md, theme chain (A4)
+
+The post-port backlog run started with a **full TODO audit** (every marker in
+the tree cross-checked against PORT-ORDER/HANDOVER), producing:
+
+- **`7efd683`** — comments-only hygiene: ~10 stale TODO breadcrumbs retired
+  (validator `error()` claims, the history outside-click "(C) DEFERRED",
+  frame.rs row-33 drag TODOs that `Window::start_drag`/`DragCapture` had long
+  satisfied, backend row-31 tags, the input-line row-59 transfer hedge).
+- **`fb99048`** — **`docs/BACKLOG.md`**, the PORT-ORDER successor: Phase A
+  FOUNDATION seams → Phase B mechanical fan-out → Phase C backlogged features.
+  Two user directives recorded: **OS clipboard by default** (A6; internal
+  buffer demoted to fallback) and **no hand-rolled terminal setup in app
+  code** (B7; `hello.rs` currently compensates — C++ `TApplication`/`TScreen`
+  does it in the ctor).
+- **`66e7527`** — **row A4, the theme-trust-the-chain pass** (subagent-built,
+  two-stage reviewed; spec reviewer independently re-derived 13 chains): every
+  `theme.rs` value now carries its literal `cpX → cpOwner → cpAppColor` chain
+  inline; 19 roles corrected (InputNormal 0x1F, the cluster 0x30/0x3F/0x3E
+  cyan-strip family, MenuSelected 0x20, the list matrix resolved for a
+  gray-dialog owner, indicator 0x1F/0x1A, label shortcuts 0x7E, outline-in-
+  blue-window, FrameDragging 0x1A). New roles (ROLE_COUNT 67→75): the
+  `FrameCyan*` quartet (cyan window scheme wired; all six `TODO(row 34 cyan
+  theming)` sites retired), `HistoryArrow`/`HistorySides`,
+  `HistoryViewerNormal/Focused` via the new **`ListRoles` quintet +
+  `ListViewer::list_roles()` hook** (the D7 successor of the
+  `THistoryViewer::getPalette` virtual; `HistoryViewer::LIST_ROLES` const;
+  `tv::ListRoles` re-exported). `HistoryWindow` keeps the blue family with two
+  documented unobservable deviations (passive frame fg; sb controls quirk).
+  31 snapshots regenerated, every changed cell chain-attributed. 989 lib
+  tests; clippy + fmt clean.
+
 ## Session addendum — topmost pre-inserted window unfocusable (currency foundation)
 
 Follow-up user report on `examples/hello.rs`: the three pre-inserted windows
