@@ -435,37 +435,31 @@ pub enum Deferred {
         editor_id: ViewId,
     },
 
-    // -- row 31 (button): the mouse press-and-hold tracking broker (D3/D9) ----
-    //
-    // The `ButtonTrackCapture` (D9) posts these on each `MouseMove`/`MouseUp`
-    // while the mouse button is held. The pump resolves `button`, downcasts to
-    // `Button` via `as_any_mut`, and applies the tracked state. Both touch the
-    // **view-tree** family (same as the scroller/list broker ops), so the
-    // insertion-order drain stays order-equivalent.
-    /// **Set the button's pressed look** while the mouse is held. The
-    /// `ButtonTrackCapture` posts this on each `MouseMove` when containment
-    /// flips. The pump resolves `button`, downcasts to
-    /// [`Button`](crate::widgets::Button), and sets `b.down = down`. The whole-tree
-    /// redraw in the next pump pass renders the updated look.
-    ButtonTrackDown {
-        /// The button whose pressed look to update.
-        button: ViewId,
-        /// `true` = pressed look; `false` = normal look.
-        down: bool,
-    },
-    /// **Release the button's press tracking** on mouse-up. The pump resolves
-    /// `button`, downcasts to [`Button`](crate::widgets::Button), sets `b.down =
-    /// false`, and — if `pressed` — calls `b.press(&mut ctx)` (the button
-    /// fires). `pressed` is the LAST MOVE's tracked containment state, not the
-    /// mouse-up position (the C++ `do{}while(mouseEvent(…,evMouseMove))` loop
-    /// body never re-evaluates the up-event's position; see the D9 note on
-    /// `ButtonTrackCapture`).
-    ButtonTrackRelease {
-        /// The button to release.
-        button: ViewId,
-        /// Whether the last tracked move was inside the tracking rect — i.e.
-        /// whether to call `press()`.
-        pressed: bool,
+    // -- A3: the mouse hold-tracking router (D9 MouseTrackCapture seam) -------
+    /// **Deliver a localized mouse event to the tracked view** while a mouse
+    /// button is held. Posted only by
+    /// [`MouseTrackCapture`](crate::capture::MouseTrackCapture) — the D9
+    /// successor of the C++ `do { … } while (mouseEvent(event, mask))` blocking
+    /// hold-loop (`tview.cpp:636-643`) — for each masked `MouseMove` /
+    /// `MouseAuto` / wheel pseudo-down and for the terminating `MouseUp`. The
+    /// pump resolves `view` via `group.find_mut` and calls
+    /// `handle_event(&mut event, …)` directly (the apply-time analogue of the
+    /// outside-modal redirect): the widget's `MouseMove`/`MouseAuto`/`MouseUp`
+    /// arms ARE the C++ loop body / post-loop code, so no widget downcast is
+    /// needed here (decisive for trait-object viewers like `ListViewer` /
+    /// `Outline`). `event` is already **view-local** (the capture subtracted
+    /// the origin cached at push time). Touches the **view-tree** family, so
+    /// the insertion-order drain stays order-equivalent.
+    ///
+    /// Direct delivery deliberately bypasses the `Group::wants` event-mask gate
+    /// — faithful: the C++ hold loop reads events straight off the queue, not
+    /// through the tracked view's `eventMask`.
+    MouseTrack {
+        /// The view being mouse-tracked (the one that pushed the capture).
+        view: ViewId,
+        /// The localized event to deliver (`MouseMove`/`MouseAuto`/wheel
+        /// `MouseDown`/`MouseUp`, position already view-local).
+        event: Event,
     },
 }
 
@@ -1175,26 +1169,44 @@ impl<'a> Context<'a> {
         });
     }
 
-    /// Request the button's pressed look be updated while the mouse is held —
-    /// **deferred** ([`Deferred::ButtonTrackDown`]). Posted by
-    /// `ButtonTrackCapture` on each `MouseMove` when containment flips. The pump
-    /// resolves `button`, downcasts to [`Button`](crate::widgets::Button), and
-    /// sets `b.down = down` (whole-tree redraw shows the updated look next pump).
-    pub fn request_button_track_down(&mut self, button: ViewId, down: bool) {
-        self.deferred
-            .push(Deferred::ButtonTrackDown { button, down });
+    /// Start mouse hold-tracking for `view` — the widget-facing D9 successor of
+    /// entering the C++ `do { … } while (mouseEvent(event, mask))` blocking
+    /// hold-loop (`tview.cpp:636-643`). Wraps [`push_capture`](Self::push_capture)
+    /// with a [`MouseTrackCapture`](crate::capture::MouseTrackCapture): from the
+    /// *next* pump on (the deferred-push latency, the `compose_full_protocol`
+    /// invariant — matching the C++ `do{}while` running the body once before the
+    /// first wait), every masked `MouseMove`/`MouseAuto`/wheel pseudo-down — and
+    /// the terminating `MouseUp` — is localized against `origin` and delivered
+    /// straight back to `view`'s `handle_event` via [`Deferred::MouseTrack`];
+    /// everything else is swallowed (the hold is modal). The widget's own
+    /// `MouseMove`/`MouseAuto` arms are the loop body; its `MouseUp` arm is the
+    /// post-loop code.
+    ///
+    /// `origin` is the absolute screen position of `view`-local `(0, 0)`, cached
+    /// by the widget's last `draw` (the `Button::abs_origin` /
+    /// `ColorPicker::body_origin` pattern, D3/D9).
+    ///
+    /// The widget's `MouseUp` arm **must** be guarded by a `tracking` flag set
+    /// at `MouseDown` time: `MouseUp` is not gated by `Group::wants`, so a
+    /// stray, untracked up delivered via normal routing would otherwise reach
+    /// the post-loop arm. See step 5 of `docs/design/mouse-track.md`.
+    pub fn start_mouse_track(
+        &mut self,
+        view: ViewId,
+        origin: Point,
+        mask: crate::capture::TrackMask,
+    ) {
+        self.push_capture(Box::new(crate::capture::MouseTrackCapture::new(
+            view, origin, mask,
+        )));
     }
 
-    /// Request the button's press tracking be released on mouse-up — **deferred**
-    /// ([`Deferred::ButtonTrackRelease`]). Posted by `ButtonTrackCapture` on
-    /// `MouseUp`. The pump resolves `button`, downcasts to
-    /// [`Button`](crate::widgets::Button), sets `b.down = false`, and — if
-    /// `pressed` — calls `b.press(&mut ctx)` (the button fires). `pressed` is
-    /// the LAST MOVE's tracked containment state, not the mouse-up position (the
-    /// C++ loop body never re-evaluates the up-event's position).
-    pub fn request_button_track_release(&mut self, button: ViewId, pressed: bool) {
-        self.deferred
-            .push(Deferred::ButtonTrackRelease { button, pressed });
+    /// Forward a localized mouse event to the tracked view — **deferred**
+    /// ([`Deferred::MouseTrack`]). `pub(crate)`: only
+    /// [`MouseTrackCapture`](crate::capture::MouseTrackCapture) posts this;
+    /// widgets enter tracking via [`start_mouse_track`](Self::start_mouse_track).
+    pub(crate) fn request_mouse_track(&mut self, view: ViewId, event: Event) {
+        self.deferred.push(Deferred::MouseTrack { view, event });
     }
 
     /// Request the pump to open a [`FileDialog`](crate::dialog::FileDialog) for

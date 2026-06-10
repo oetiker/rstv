@@ -15,8 +15,8 @@
 //! the protocol composes (the capture analogue of the row-19 end-to-end snapshot
 //! gate).
 
-use crate::event::Event;
-use crate::view::{Context, Rect, ViewId};
+use crate::event::{Event, MouseWheel};
+use crate::view::{Context, Point, Rect, ViewId};
 
 /// What a capture handler did with an event it was offered.
 ///
@@ -73,6 +73,112 @@ pub trait CaptureHandler {
     /// initial bounds are fixed for the duration of the drag and resyncing them
     /// from the (live, moving) tree would corrupt the drag math.
     fn set_gate_bounds(&mut self, _bounds: Rect) {}
+}
+
+// ---------------------------------------------------------------------------
+// MouseTrackCapture — the D9 mouse hold-tracking seam (backlog A3)
+// ---------------------------------------------------------------------------
+
+/// Which event classes the C++ hold-loop's `mouseEvent` mask included
+/// (everything else is discarded until `evMouseUp` — `tview.cpp:636`).
+///
+/// The C++ callers pass `evMouseMove` (button, cluster, list viewer, …),
+/// `evMouseMove | evMouseAuto` (scrollbar, editor, menu), or `evMouse` (frame —
+/// every mouse class including the wheel pseudo-downs). The struct-of-bools is
+/// the D5 form of that mask slice.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TrackMask {
+    /// Forward `evMouseMove` to the tracked view (`mask & evMouseMove`).
+    pub mouse_move: bool,
+    /// Forward `evMouseAuto` (auto-repeat while held; `mask & evMouseAuto`).
+    pub mouse_auto: bool,
+    /// Forward wheel pseudo-downs (`MouseDown` with `wheel != None`; the
+    /// `evMouseWheel` slice of an `evMouse` mask).
+    pub wheel: bool,
+}
+
+/// D9 successor of the C++ `do { … } while (mouseEvent(event, mask))` blocking
+/// hold-loop (`TView::mouseEvent`, `tview.cpp:636-643`): localizes and forwards
+/// masked mouse events to the tracked view, swallows everything else, pops on
+/// `MouseUp` (forwarding the localized up — cluster/frame read the up position
+/// post-loop, `tcluster.cpp:181-184` / `tframe.cpp:159-160`).
+///
+/// **A pure router, not a strategy.** The C++ loop *bodies* stay in the widgets
+/// (their `MouseMove`/`MouseAuto` arms are the body, the `MouseUp` arm the
+/// post-loop code): captures are `'static` and hold no view borrow, and several
+/// tracked views (`ListViewer`, `Outline`) are trait objects the pump could not
+/// downcast — so the capture only routes, via [`Deferred`](crate::view::Deferred)
+/// `::MouseTrack`, which the pump applies by calling the view's `handle_event`
+/// directly. Pushed via [`Context::start_mouse_track`]; because capture pushes
+/// are deferred (the `compose_full_protocol` invariant), the capture sees the
+/// **next** event — matching the C++ `do{}while` running the body once before
+/// the first wait.
+///
+/// `origin` is the absolute screen position of view-local `(0, 0)`, cached by
+/// the widget's last `draw` at push time (the `Button::abs_origin` /
+/// `ColorPicker::body_origin` pattern). Like `DragCapture` (window.rs), the
+/// origin is fixed for the duration of the hold: if the tracked view is moved /
+/// resized mid-hold the localization goes stale — acceptable, since a hold is
+/// short-lived and nothing moves the view while the (modal) hold swallows all
+/// other input.
+pub struct MouseTrackCapture {
+    /// The view being tracked (identity only, per the capture contract).
+    view: ViewId,
+    /// Absolute screen position of view-local `(0, 0)` at push time.
+    origin: Point,
+    /// Which event classes to forward (the C++ `mouseEvent` mask).
+    mask: TrackMask,
+}
+
+impl MouseTrackCapture {
+    /// Build a tracker for `view`. Constructed only by
+    /// [`Context::start_mouse_track`] (widgets never build one directly).
+    pub(crate) fn new(view: ViewId, origin: Point, mask: TrackMask) -> Self {
+        MouseTrackCapture { view, origin, mask }
+    }
+}
+
+impl CaptureHandler for MouseTrackCapture {
+    fn handle(&mut self, ev: &mut Event, ctx: &mut Context) -> CaptureFlow {
+        /// Localize an absolute-position mouse record against the push-time origin.
+        fn localize(m: &crate::event::MouseEvent, origin: Point) -> crate::event::MouseEvent {
+            let mut local = *m;
+            local.position -= origin;
+            local
+        }
+        match ev {
+            Event::MouseMove(m) if self.mask.mouse_move => {
+                ctx.request_mouse_track(self.view, Event::MouseMove(localize(m, self.origin)));
+                CaptureFlow::Consumed
+            }
+            Event::MouseAuto(m) if self.mask.mouse_auto => {
+                ctx.request_mouse_track(self.view, Event::MouseAuto(localize(m, self.origin)));
+                CaptureFlow::Consumed
+            }
+            // Wheel pseudo-downs (a `MouseDown` with `wheel != None` and no
+            // buttons, see `crossterm_backend`) — the `evMouseWheel` slice of an
+            // `evMouse` mask (the frame's hold loop).
+            Event::MouseDown(m) if self.mask.wheel && m.wheel != MouseWheel::None => {
+                ctx.request_mouse_track(self.view, Event::MouseDown(localize(m, self.origin)));
+                CaptureFlow::Consumed
+            }
+            // `mouseEvent` always returns on `evMouseUp` (the `mask | evMouseUp`
+            // test): forward the localized up — cluster/frame read its position
+            // post-loop — and pop this handler.
+            Event::MouseUp(m) => {
+                ctx.request_mouse_track(self.view, Event::MouseUp(localize(m, self.origin)));
+                CaptureFlow::ConsumedPop
+            }
+            // Everything else (unmasked mouse classes, keys, commands,
+            // broadcasts) is discarded until `evMouseUp` — the hold is modal
+            // (the C++ loop spins past events outside `mask | evMouseUp`).
+            _ => CaptureFlow::Consumed,
+        }
+    }
+
+    fn view(&self) -> Option<ViewId> {
+        Some(self.view)
+    }
 }
 
 /// A LIFO stack of [`CaptureHandler`]s (D9).
@@ -446,5 +552,189 @@ mod tests {
             "pushed handler saw the NEXT event after the deferred push was applied"
         );
         assert_eq!(pushed_log.borrow()[0], key_event(Key::Char('b')));
+    }
+
+    // -- MouseTrackCapture (the A3 hold-tracking router) ----------------------
+
+    use crate::event::{MouseButtons, MouseEvent};
+    use crate::view::Deferred;
+
+    /// Origin used by all router tests: view-local (0,0) sits at abs (5,3).
+    const ORIGIN: Point = Point::new(5, 3);
+
+    fn track_stack(mask: TrackMask) -> (CaptureStack, ViewId) {
+        let id = ViewId::next();
+        let mut stack = CaptureStack::new();
+        stack.push(Box::new(MouseTrackCapture::new(id, ORIGIN, mask)));
+        (stack, id)
+    }
+
+    fn mouse_record(x: i32, y: i32) -> MouseEvent {
+        MouseEvent {
+            position: Point::new(x, y),
+            buttons: MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// Dispatch one event through the stack, returning (consumed, deferred).
+    fn play(stack: &mut CaptureStack, mut ev: Event) -> (bool, Vec<crate::view::Deferred>) {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut deferred: Vec<crate::view::Deferred> = Vec::new();
+        let consumed = {
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
+            stack.dispatch(&mut ev, &mut ctx)
+        };
+        (consumed, deferred)
+    }
+
+    /// A masked `MouseMove` is forwarded as a **localized** `Deferred::MouseTrack`
+    /// payload; the handler stays on the stack (`Consumed`).
+    #[test]
+    fn track_masked_move_forwards_localized() {
+        let (mut stack, id) = track_stack(TrackMask {
+            mouse_move: true,
+            ..Default::default()
+        });
+        let (consumed, deferred) = play(&mut stack, Event::MouseMove(mouse_record(8, 4)));
+        assert!(consumed);
+        assert_eq!(stack.len(), 1, "Consumed keeps the tracker on the stack");
+        assert_eq!(deferred.len(), 1);
+        match &deferred[0] {
+            Deferred::MouseTrack {
+                view,
+                event: Event::MouseMove(m),
+            } => {
+                assert_eq!(*view, id);
+                assert_eq!(m.position, Point::new(3, 1), "abs (8,4) − origin (5,3)");
+            }
+            _ => panic!("expected a localized MouseTrack MouseMove"),
+        }
+    }
+
+    /// A masked `MouseAuto` forwards localized, like the move.
+    #[test]
+    fn track_masked_auto_forwards_localized() {
+        let (mut stack, id) = track_stack(TrackMask {
+            mouse_auto: true,
+            ..Default::default()
+        });
+        let (consumed, deferred) = play(&mut stack, Event::MouseAuto(mouse_record(6, 3)));
+        assert!(consumed);
+        assert_eq!(deferred.len(), 1);
+        match &deferred[0] {
+            Deferred::MouseTrack {
+                view,
+                event: Event::MouseAuto(m),
+            } => {
+                assert_eq!(*view, id);
+                assert_eq!(m.position, Point::new(1, 0));
+            }
+            _ => panic!("expected a localized MouseTrack MouseAuto"),
+        }
+    }
+
+    /// An UNmasked mouse class is swallowed without forwarding (the C++
+    /// `mouseEvent` discard — the hold is modal).
+    #[test]
+    fn track_unmasked_classes_are_swallowed() {
+        let (mut stack, _id) = track_stack(TrackMask {
+            mouse_move: true,
+            ..Default::default()
+        });
+        // MouseAuto not in the mask: consumed, nothing forwarded.
+        let (consumed, deferred) = play(&mut stack, Event::MouseAuto(mouse_record(8, 4)));
+        assert!(consumed, "unmasked auto is still consumed (modal hold)");
+        assert!(deferred.is_empty(), "…but not forwarded");
+        assert_eq!(stack.len(), 1);
+    }
+
+    /// A wheel pseudo-down (`MouseDown` with `wheel != None`) forwards only
+    /// under `mask.wheel`; a real-button `MouseDown` is swallowed regardless.
+    #[test]
+    fn track_wheel_pseudo_down_respects_wheel_mask() {
+        // wheel-masked: forwarded localized.
+        let (mut stack, id) = track_stack(TrackMask {
+            wheel: true,
+            ..Default::default()
+        });
+        let wheel_down = Event::MouseDown(MouseEvent {
+            position: Point::new(7, 5),
+            wheel: MouseWheel::Up,
+            ..Default::default()
+        });
+        let (consumed, deferred) = play(&mut stack, wheel_down);
+        assert!(consumed);
+        assert_eq!(deferred.len(), 1);
+        match &deferred[0] {
+            Deferred::MouseTrack {
+                view,
+                event: Event::MouseDown(m),
+            } => {
+                assert_eq!(*view, id);
+                assert_eq!(m.position, Point::new(2, 2));
+                assert_eq!(m.wheel, MouseWheel::Up);
+            }
+            _ => panic!("expected a localized MouseTrack wheel down"),
+        }
+
+        // A real-button down (wheel == None) is swallowed even with mask.wheel.
+        let (consumed, deferred) = play(&mut stack, Event::MouseDown(mouse_record(7, 5)));
+        assert!(consumed);
+        assert!(deferred.is_empty(), "buttoned down is not a wheel event");
+
+        // Without mask.wheel the pseudo-down is swallowed too.
+        let (mut stack, _id) = track_stack(TrackMask::default());
+        let wheel_down = Event::MouseDown(MouseEvent {
+            wheel: MouseWheel::Down,
+            ..Default::default()
+        });
+        let (consumed, deferred) = play(&mut stack, wheel_down);
+        assert!(consumed);
+        assert!(deferred.is_empty());
+    }
+
+    /// A `KeyDown` during the hold vanishes: consumed, nothing forwarded
+    /// (everything outside `mask | evMouseUp` is discarded, tview.cpp:636).
+    #[test]
+    fn track_key_down_vanishes() {
+        let (mut stack, _id) = track_stack(TrackMask {
+            mouse_move: true,
+            mouse_auto: true,
+            wheel: true,
+        });
+        let (consumed, deferred) = play(&mut stack, key_event(Key::Char('x')));
+        assert!(consumed, "key is swallowed (hold is modal)");
+        assert!(deferred.is_empty(), "nothing forwarded for a key");
+        assert_eq!(stack.len(), 1, "tracker stays until MouseUp");
+    }
+
+    /// `MouseUp` pops the tracker AND forwards the localized up (cluster/frame
+    /// read the up position post-loop) — regardless of the mask.
+    #[test]
+    fn track_mouse_up_pops_and_forwards() {
+        let (mut stack, id) = track_stack(TrackMask::default());
+        let up = Event::MouseUp(MouseEvent {
+            position: Point::new(9, 4),
+            ..Default::default()
+        });
+        let (consumed, deferred) = play(&mut stack, up);
+        assert!(consumed);
+        assert_eq!(stack.len(), 0, "MouseUp pops the tracker");
+        assert_eq!(deferred.len(), 1);
+        match &deferred[0] {
+            Deferred::MouseTrack {
+                view,
+                event: Event::MouseUp(m),
+            } => {
+                assert_eq!(*view, id);
+                assert_eq!(m.position, Point::new(4, 1), "localized up position");
+            }
+            _ => panic!("expected a localized MouseTrack MouseUp"),
+        }
     }
 }

@@ -92,7 +92,7 @@ pub mod window;
 
 pub use app::{Application, ModalFrame, Program};
 pub use backend::{Backend, CrosstermBackend, HeadlessBackend, HeadlessHandle, Renderer};
-pub use capture::{CaptureFlow, CaptureHandler, CaptureStack};
+pub use capture::{CaptureFlow, CaptureHandler, CaptureStack, TrackMask};
 pub use color::{Color, Modifiers, Style};
 pub use command::{Command, CommandSet};
 pub use data::FieldValue;

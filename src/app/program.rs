@@ -76,6 +76,102 @@ use crate::view::{Context, Deferred, DrawCtx, Group, Point, Rect, SelectMode, Vi
 /// per second). Headless ignores it (D11).
 const EVENT_TIMEOUT_MS: u64 = 20;
 
+/// `evMouseAuto` initial delay before the first auto-repeat, in ms.
+///
+/// Derivation from the C++ (the Borland event queue): on a button press
+/// `TEventQueue::getMouseEvent` sets `autoDelay = repeatDelay` where
+/// `repeatDelay = 8` ticks (tevent.cpp:52,167-168); the steady-state arm fires
+/// `evMouseAuto` once `ev.what - autoTicks > autoDelay` (tevent.cpp:196-201);
+/// tick timestamps are 55 ms BIOS ticks (`getTickCountMs() / 55`,
+/// hardwrvr.cpp:466-470). 8 ticks × 55 ms = **440 ms**.
+const MOUSE_AUTO_DELAY_MS: u64 = 440;
+
+/// `evMouseAuto` steady-state repeat period, in ms.
+///
+/// After the first auto fires, `getMouseEvent` sets `autoDelay = 1` tick
+/// (tevent.cpp:198) and the `>` comparison fires the next auto once more than
+/// one 55 ms tick has elapsed — i.e. on the second tick boundary, a **110 ms**
+/// cadence (tevent.cpp:196-201, hardwrvr.cpp:466-470).
+const MOUSE_AUTO_PERIOD_MS: u64 = 110;
+
+// ---------------------------------------------------------------------------
+// MouseAutoState — the global evMouseAuto synthesizer (backlog A3)
+// ---------------------------------------------------------------------------
+
+/// The pump's `evMouseAuto` synthesizer state — ports the `autoTicks` /
+/// `autoDelay` slice of `TEventQueue::getMouseEvent` (tevent.cpp:109-204).
+///
+/// While a real mouse button is held, an otherwise idle pump pass synthesizes
+/// [`Event::MouseAuto`] carrying the current (last-known) position: the first
+/// after [`MOUSE_AUTO_DELAY_MS`], then every [`MOUSE_AUTO_PERIOD_MS`]. Real
+/// events always win — the C++ auto arm is the *last* check in `getMouseEvent`
+/// (tevent.cpp:196), so an auto only fires on a pass that produced no event.
+///
+/// **Why a timer-driven synthesizer (D9 note):** upstream's modern platform
+/// layer only auto-repeats while the terminal keeps sending mouse reports
+/// (`THardwareInfo::getMouseEvent` returns False on an empty queue,
+/// hardware.cpp:69-78), so on a quiet terminal `evMouseAuto` starves. The
+/// widget code (scrollbar arrows, editor drag-scroll, menus) was written
+/// against the original Borland behavior — autos keep coming while the button
+/// is held — which this clock-driven synthesizer restores.
+#[derive(Debug, Default)]
+struct MouseAutoState {
+    /// The held-button record: buttons from the press, position/modifiers
+    /// updated by subsequent moves, `flags` cleared (the C++ auto event carries
+    /// `eventFlags = 0`, tevent.cpp:124). `None` = no button held.
+    held: Option<crate::event::MouseEvent>,
+    /// Clock deadline (ms) for the next synthesized auto.
+    next_auto_ms: u64,
+}
+
+impl MouseAutoState {
+    /// Bookkeeping on every *real* picked event (queue or backend), BEFORE
+    /// dispatch mutates/localizes it.
+    fn observe(&mut self, ev: &Event, now: u64) {
+        match ev {
+            // A press with a REAL button arms (re-arms) the delay —
+            // `autoTicks = downTicks = ev.what; autoDelay = repeatDelay`
+            // (tevent.cpp:167-168). Wheel pseudo-downs (crossterm_backend
+            // ScrollUp/Down → MouseDown with `wheel` set and NO buttons) must
+            // NOT arm: C++ returns on the wheel arm before reaching the
+            // press/auto bookkeeping (tevent.cpp:176-186).
+            Event::MouseDown(m) if m.buttons.left || m.buttons.right || m.buttons.middle => {
+                let mut held = *m;
+                held.flags = crate::event::MouseEventFlags::default();
+                self.held = Some(held);
+                self.next_auto_ms = now + MOUSE_AUTO_DELAY_MS;
+            }
+            // A move while held updates the stored position/modifiers ONLY —
+            // faithful: the C++ move arm updates `lastMouse` without touching
+            // `autoTicks`/`autoDelay` (tevent.cpp:188-194), so a move does NOT
+            // reset the cadence.
+            Event::MouseMove(m) => {
+                if let Some(h) = &mut self.held {
+                    h.position = m.position;
+                    h.modifiers = m.modifiers;
+                }
+            }
+            // Release disarms.
+            Event::MouseUp(_) => self.held = None,
+            _ => {}
+        }
+    }
+
+    /// On an idle pass (no real event), synthesize `evMouseAuto` at the
+    /// last-known position once the deadline has passed, then re-arm the
+    /// steady-state period (`autoTicks = ev.what; autoDelay = 1`,
+    /// tevent.cpp:196-201).
+    fn synthesize(&mut self, now: u64) -> Option<Event> {
+        let held = self.held?;
+        if now >= self.next_auto_ms {
+            self.next_auto_ms = now + MOUSE_AUTO_PERIOD_MS;
+            Some(Event::MouseAuto(held))
+        } else {
+            None
+        }
+    }
+}
+
 /// The startup-disabled command seed — ports `TView::initCommands` (`tview.cpp`
 /// static init: enable all 256, then disable `cmZoom`/`cmClose`/`cmResize`/
 /// `cmNext`/`cmPrev`), stored as its complement.
@@ -236,6 +332,10 @@ pub struct Program {
     /// created. The `getEvent` pre-routing in [`pump_once`](Self::pump_once) reads
     /// it to hand keyDown / over-the-line mouseDown events to the line first.
     status_line: Option<ViewId>,
+    /// The global `evMouseAuto` synthesizer (backlog A3): while a real mouse
+    /// button is held, idle pump passes synthesize [`Event::MouseAuto`] on the
+    /// 440 ms / 110 ms Borland cadence (see [`MouseAutoState`]).
+    mouse_auto: MouseAutoState,
     /// `TGroup::endState` — `Some(cmd)` ends the (modal) loop.
     end_state: Option<Command>,
     /// `TProgram::commandSetChanged` — set on an enable/disable change, broadcast
@@ -422,6 +522,7 @@ impl Program {
             desktop,
             menu_bar,
             status_line,
+            mouse_auto: MouseAutoState::default(),
             end_state: None,
             command_set_changed: false,
             pending_modal: None,
@@ -1308,6 +1409,7 @@ impl Program {
             // exhaustive destructure does not trip `-D warnings`.
             menu_bar: _,
             status_line,
+            mouse_auto,
             end_state,
             command_set_changed,
             pending_modal,
@@ -1341,10 +1443,28 @@ impl Program {
         }
 
         // 3. Pick the next event: drain the internal queue first, else poll.
+        //    Note the timeout: the 20 ms frame tick (event_wait_timeout, the
+        //    C++ eventTimeoutMs = 20, tprogram.cpp:38) already bounds the
+        //    mouse-auto jitter below to +20 ms — the same wake cadence C++ runs
+        //    its getMouseEvent checks on. No shorter wait is needed.
         let timeout = event_wait_timeout(timers, now);
         let ev = match out_events.pop_front() {
             Some(e) => Some(e),
             None => renderer.backend_mut().poll_event(timeout),
+        };
+
+        // 3b. The evMouseAuto synthesizer (A3, see MouseAutoState): a real
+        //     picked event updates the held-button bookkeeping (BEFORE dispatch
+        //     localizes/mutates it); an empty pick may instead synthesize an
+        //     auto, which then dispatches exactly like a real event. Real
+        //     events always win over autos — the C++ auto arm is the LAST check
+        //     in getMouseEvent (tevent.cpp:196).
+        let ev = match ev {
+            Some(e) => {
+                mouse_auto.observe(&e, now);
+                Some(e)
+            }
+            None => mouse_auto.synthesize(now),
         };
 
         match ev {
@@ -1908,32 +2028,24 @@ impl Program {
                                         b.make_default(enable, &mut ctx);
                                     }
                                 }
-                                // -- row 31: Button mouse press-and-hold broker (D3/D9) --
+                                // -- A3: the MouseTrackCapture router (D9) --
                                 //
-                                // `ButtonTrackCapture` posts these on `MouseMove`
-                                // (containment flip) and `MouseUp`. Resolve `button`,
-                                // downcast to `Button`, and apply the tracked state.
-                                Deferred::ButtonTrackDown { button, down } => {
-                                    use crate::widgets::Button;
-                                    if let Some(b) = group
-                                        .find_mut(button)
-                                        .and_then(|v| v.as_any_mut())
-                                        .and_then(|a| a.downcast_mut::<Button>())
-                                    {
-                                        b.down = down;
-                                    }
-                                }
-                                Deferred::ButtonTrackRelease { button, pressed } => {
-                                    use crate::widgets::Button;
-                                    if let Some(b) = group
-                                        .find_mut(button)
-                                        .and_then(|v| v.as_any_mut())
-                                        .and_then(|a| a.downcast_mut::<Button>())
-                                    {
-                                        b.down = false;
-                                        if pressed {
-                                            b.press(&mut ctx);
-                                        }
+                                // The capture localized + forwarded a masked mouse
+                                // event during the hold; deliver it straight to the
+                                // tracked view's handle_event — the apply-time
+                                // analogue of the pump's outside-modal redirect
+                                // above. No downcast: the widget's own
+                                // MouseMove/MouseAuto/MouseUp arms ARE the C++
+                                // hold-loop body / post-loop code (decisive for
+                                // trait-object viewers). `ctx` already carries the
+                                // disabled-command snapshot (set above, mirroring
+                                // the redirect's Context), and its phase defaults
+                                // to Focused — correct for a directly-addressed
+                                // delivery (no pre/post walk is in flight).
+                                Deferred::MouseTrack { view, event } => {
+                                    if let Some(v) = group.find_mut(view) {
+                                        let mut ev = event;
+                                        v.handle_event(&mut ev, &mut ctx);
                                     }
                                 }
                                 // -- colorpick: the color-picker drag broker (D3) --
@@ -3358,10 +3470,10 @@ mod tests {
         );
     }
 
-    // -- row 31: ButtonTrackCapture end-to-end through the pump ----------------
+    // -- A3: button mouse hold-tracking end-to-end through the pump ------------
 
-    /// **End-to-end test of the button mouse press-and-hold tracking (D9 capture
-    /// + `ButtonTrackDown`/`ButtonTrackRelease` pump arms).**
+    /// **End-to-end test of the button mouse press-and-hold tracking (the A3
+    /// `MouseTrackCapture` seam + `Deferred::MouseTrack` pump arm).**
     ///
     /// A button is inserted into the desktop at `(5, 5, 15, 7)` so its absolute
     /// origin is `(5, 5)`. An initial pump-draw caches `abs_origin`. Then:
@@ -3369,12 +3481,12 @@ mod tests {
     /// 1. `MouseDown` at absolute `(8, 5)` = button-local `(3, 0)` (inside
     ///    `clickRect`) → `button.down == true`, one capture pushed.
     /// 2. `MouseMove` at absolute `(4, 5)` = button-local `(-1, 0)` (outside
-    ///    `trackRect`) → pump applies `ButtonTrackDown { down: false }` →
-    ///    `button.down == false`.
+    ///    `trackRect`) → the capture routes the localized move into the
+    ///    button's loop-body arm → `button.down == false`.
     /// 3. `MouseMove` at absolute `(8, 5)` = button-local `(3, 0)` (inside) →
     ///    `button.down == true`.
-    /// 4. `MouseUp` → `ButtonTrackRelease { pressed: true }` → command fired,
-    ///    `button.down == false`, capture popped.
+    /// 4. `MouseUp` → the post-loop arm presses (last tracked state was
+    ///    inside) → command fired, `button.down == false`, capture popped.
     ///
     /// Button bounds: `(5, 5, 15, 7)` — size 10×2.
     ///   clickRect  = (1, 0, 9, 1) (button-local)
@@ -3451,8 +3563,9 @@ mod tests {
         );
 
         // --- Step 2: MouseMove at abs (4, 5) = button-local (-1, 0) — outside
-        // trackRect (1, 0, 10, 1). Capture posts ButtonTrackDown{down: false};
-        // pump applies it: button.down = false.
+        // trackRect (1, 0, 10, 1). Capture posts Deferred::MouseTrack with the
+        // localized move; the pump delivers it to the button's loop-body arm:
+        // button.down = false.
         program.out_events.push_back(mouse_move_at(4, 5));
         program.pump_once();
         assert!(
@@ -3478,8 +3591,8 @@ mod tests {
             "capture still live after re-enter"
         );
 
-        // --- Step 4: MouseUp — ButtonTrackRelease { pressed: true } → press()
-        // fires, down = false, capture popped.
+        // --- Step 4: MouseUp — forwarded to the post-loop arm; last tracked
+        // state was inside → press() fires, down = false, capture popped.
         program.out_events.push_back(mouse_up_at(8, 5));
         program.pump_once();
         assert!(
@@ -3500,6 +3613,267 @@ mod tests {
             drained.contains(&Event::Command(Command::OK)),
             "Command::OK fired after MouseUp inside"
         );
+    }
+
+    /// Press inside, drag outside, release: NO press fires (the C++ post-loop
+    /// `if (down)` on the LAST MOVE's tracked containment) — through real pumps.
+    #[test]
+    fn button_release_outside_does_not_press_through_pump() {
+        use crate::widgets::{Button, ButtonFlags};
+
+        let (backend, _handle) = HeadlessBackend::new(80, 25);
+        let theme = Theme::classic_blue();
+        let clock = Rc::new(ManualClock::new(0));
+        let ids: Rc<RefCell<Option<ViewId>>> = Rc::new(RefCell::new(None));
+        let ids_cap = ids.clone();
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            theme,
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                let btn = Button::new(
+                    Rect::new(5, 5, 15, 7),
+                    "~O~K",
+                    Command::OK,
+                    ButtonFlags::new(),
+                );
+                *ids_cap.borrow_mut() = Some(desktop.insert_view(Box::new(btn)));
+                Some(Box::new(desktop))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        program.out_events.clear();
+
+        // Draw once so abs_origin is cached, then press inside (abs (8,5)).
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.pump_once();
+        program.out_events.push_back(mouse_down_at(8, 5));
+        program.pump_once();
+        assert_eq!(program.capture_len(), 1, "tracking armed");
+
+        // Drag outside the track rect, then release.
+        program.out_events.push_back(mouse_move_at(2, 10));
+        program.pump_once();
+        program.out_events.push_back(mouse_up_at(2, 10));
+        program.pump_once();
+        assert_eq!(program.capture_len(), 0, "capture popped on MouseUp");
+        let drained: Vec<Event> = program.out_events.drain(..).collect();
+        assert!(
+            !drained.contains(&Event::Command(Command::OK)),
+            "release outside the track rect must not press"
+        );
+    }
+
+    // -- A3: the global evMouseAuto synthesizer ------------------------------
+
+    /// Build a program with a 10×4 recording probe at the screen origin whose
+    /// `event_mask.mouse_auto` is `mouse_auto_mask`, settle the startup queue,
+    /// and clear the log. Probe-local == absolute (probe at (0,0) in the root).
+    fn auto_probe_program(
+        mouse_auto_mask: bool,
+    ) -> (
+        Program,
+        HeadlessHandle,
+        Rc<ManualClock>,
+        Rc<RefCell<Vec<Event>>>,
+    ) {
+        let (mut program, handle, clock) = program_with_desktop(80, 25);
+        let log = Rc::new(RefCell::new(Vec::new()));
+        {
+            let mut probe = Probe::new(Rect::new(0, 0, 10, 4), 'P', log.clone());
+            probe.st.event_mask.mouse_auto = mouse_auto_mask;
+            program.group_mut().insert(Box::new(probe));
+        }
+        // Settle: drain insert-time broadcasts / command-set-changed idle posts
+        // so later passes are genuinely idle (the synthesizer only fires on an
+        // idle pick — real events always win).
+        for _ in 0..3 {
+            program.pump_once();
+        }
+        program.out_events.clear();
+        log.borrow_mut().clear();
+        (program, handle, clock, log)
+    }
+
+    /// Pump until the internal queue is empty, so the next pass is genuinely
+    /// idle (a routed MouseDown queues focus broadcasts that would otherwise
+    /// win the pick over the synthesizer — real events always win).
+    fn pump_until_quiet(program: &mut Program) {
+        for _ in 0..10 {
+            if program.out_events.is_empty() {
+                return;
+            }
+            program.pump_once();
+        }
+        panic!("queue did not quiesce within 10 pumps");
+    }
+
+    fn autos_at(log: &Rc<RefCell<Vec<Event>>>) -> Vec<Point> {
+        log.borrow()
+            .iter()
+            .filter_map(|e| match e {
+                Event::MouseAuto(m) => Some(m.position),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The Borland cadence: no auto at +439 ms; the first at +440 carrying the
+    /// down position; none at +549; the second at +550 (440 + 110).
+    #[test]
+    fn mouse_auto_fires_at_delay_then_period() {
+        let (mut program, handle, clock, log) = auto_probe_program(true);
+
+        // Press at (2, 1) over the probe: arms the synthesizer.
+        handle.push_event(mouse_down_at(2, 1));
+        program.pump_once();
+        pump_until_quiet(&mut program);
+        log.borrow_mut().clear();
+
+        // +439 ms: idle pass, still inside the initial delay.
+        clock.set(439);
+        program.pump_once();
+        assert!(
+            autos_at(&log).is_empty(),
+            "no auto at +439 ms (delay is 440)"
+        );
+
+        // +440 ms: the first auto, at the down position.
+        clock.set(440);
+        program.pump_once();
+        assert_eq!(
+            autos_at(&log),
+            vec![Point::new(2, 1)],
+            "first auto at +440 ms carries the down position"
+        );
+
+        // +549 ms: inside the 110 ms steady-state period.
+        clock.set(549);
+        program.pump_once();
+        assert_eq!(
+            autos_at(&log).len(),
+            1,
+            "no auto at +549 ms (period is 110)"
+        );
+
+        // +550 ms: the second auto.
+        clock.set(550);
+        program.pump_once();
+        assert_eq!(autos_at(&log).len(), 2, "second auto at +550 ms");
+    }
+
+    /// An interleaved `MouseMove` updates the auto position WITHOUT resetting
+    /// the cadence — faithful: the C++ move arm updates `lastMouse` only
+    /// (tevent.cpp:188-194); only a new press re-arms the 440 ms delay.
+    #[test]
+    fn mouse_auto_move_updates_position_without_resetting_cadence() {
+        let (mut program, handle, clock, log) = auto_probe_program(true);
+
+        handle.push_event(mouse_down_at(2, 1));
+        program.pump_once();
+        pump_until_quiet(&mut program);
+        log.borrow_mut().clear();
+
+        // +200 ms: a real move to (5, 2) — position bookkeeping only.
+        clock.set(200);
+        handle.push_event(mouse_move_at(5, 2));
+        program.pump_once();
+        pump_until_quiet(&mut program);
+
+        // +440 ms (NOT 200 + 440): the auto fires on the original deadline,
+        // carrying the MOVED position.
+        clock.set(440);
+        program.pump_once();
+        assert_eq!(
+            autos_at(&log),
+            vec![Point::new(5, 2)],
+            "auto fires at the un-reset +440 deadline, at the moved position"
+        );
+    }
+
+    /// `MouseUp` stops the autos; a re-press re-arms the full 440 ms delay.
+    #[test]
+    fn mouse_auto_stops_on_up_and_repress_rearms() {
+        let (mut program, handle, clock, log) = auto_probe_program(true);
+
+        handle.push_event(mouse_down_at(2, 1));
+        program.pump_once();
+        pump_until_quiet(&mut program);
+        clock.set(440);
+        program.pump_once();
+        assert_eq!(autos_at(&log).len(), 1, "held button autos");
+        log.borrow_mut().clear();
+
+        // Release: no more autos, ever.
+        handle.push_event(mouse_up_at(2, 1));
+        program.pump_once();
+        pump_until_quiet(&mut program);
+        clock.set(2000);
+        program.pump_once();
+        program.pump_once();
+        assert!(autos_at(&log).is_empty(), "MouseUp disarms the synthesizer");
+
+        // Re-press at +2000: the full 440 ms delay applies again.
+        handle.push_event(mouse_down_at(3, 1));
+        program.pump_once();
+        pump_until_quiet(&mut program);
+        clock.set(2439);
+        program.pump_once();
+        assert!(autos_at(&log).is_empty(), "re-press re-arms the full delay");
+        clock.set(2440);
+        program.pump_once();
+        assert_eq!(
+            autos_at(&log),
+            vec![Point::new(3, 1)],
+            "auto at re-press + 440 ms"
+        );
+    }
+
+    /// A wheel pseudo-down (crossterm ScrollUp/Down → `MouseDown` with `wheel`
+    /// set and NO buttons) must never arm the synthesizer.
+    #[test]
+    fn mouse_auto_wheel_pseudo_down_never_arms() {
+        let (mut program, handle, clock, log) = auto_probe_program(true);
+
+        handle.push_event(Event::MouseDown(MouseEvent {
+            position: Point::new(2, 1),
+            wheel: crate::event::MouseWheel::Up,
+            ..Default::default()
+        }));
+        program.pump_once();
+        pump_until_quiet(&mut program);
+        clock.set(1000);
+        program.pump_once();
+        program.pump_once();
+        assert!(
+            autos_at(&log).is_empty(),
+            "a buttonless wheel pseudo-down never arms evMouseAuto"
+        );
+    }
+
+    /// End-to-end routing proof without any B2 widget: a probe with
+    /// `event_mask.mouse_auto = true` receives the synthesized autos through
+    /// the normal positional routing (`Group::wants`); a probe without the
+    /// opt-in does not.
+    #[test]
+    fn mouse_auto_routing_respects_event_mask() {
+        // Opted out: the synthesizer fires, but Group::wants gates delivery.
+        let (mut program, handle, clock, log) = auto_probe_program(false);
+        handle.push_event(mouse_down_at(2, 1));
+        program.pump_once();
+        pump_until_quiet(&mut program);
+        clock.set(440);
+        program.pump_once();
+        assert!(
+            autos_at(&log).is_empty(),
+            "a probe without event_mask.mouse_auto receives no autos"
+        );
+        // (The opted-in case is covered by mouse_auto_fires_at_delay_then_period.)
     }
 
     #[test]

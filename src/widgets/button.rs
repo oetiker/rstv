@@ -57,25 +57,26 @@
 //! `event_mask` (which only gates `mouse_move`/`mouse_auto`), so no field is
 //! needed — the opt-in is automatic.
 //!
-//! # Mouse hold-tracking (D9 capture)
+//! # Mouse hold-tracking (D9 — the A3 MouseTrackCapture seam)
 //!
-//! A mouse-down inside `clickRect` arms tracking: the button sets `down = true`
-//! (pressed look) and pushes a [`ButtonTrackCapture`] onto the D9 capture stack.
-//! The capture runs before normal view routing and holds the button's id, the
-//! tracking rect (button-local), and the absolute origin of button-local `(0,0)`
-//! cached in `abs_origin` by the last `draw`.
+//! A mouse-down inside `clickRect` is the **first iteration** of the C++
+//! `do{}while(mouseEvent(event, evMouseMove))` hold loop (`tbutton.cpp:195-211`):
+//! the button sets `down = true` (the down position is inside `clickRect`, a
+//! subset of the tracking rect) and calls [`Context::start_mouse_track`] with
+//! `TrackMask { mouse_move: true, .. }` and the absolute origin of button-local
+//! `(0,0)` cached in `abs_origin` by the last `draw`.
 //!
-//! While the mouse is held the capture converts every `MouseMove`'s absolute
-//! position to button-local, compares it against the tracking rect, and posts
-//! `Deferred::ButtonTrackDown` whenever containment flips — the pump applies
-//! `b.down = inside` so the whole-tree redraw shows the updated look. On
-//! `MouseUp` the capture posts `Deferred::ButtonTrackRelease { pressed: last }` —
-//! where `last` is the LAST MOVE's tracked state, not the mouse-up position (the
-//! C++ `do{}while(mouseEvent(…,evMouseMove))` body never re-evaluates the up
-//! event's position) — and pops itself (`CaptureFlow::ConsumedPop`). The pump
-//! sets `b.down = false` and, if `pressed`, calls `b.press(ctx)`. Every other
-//! event during tracking is swallowed (`CaptureFlow::Consumed`), making the hold
-//! modal (the C++ `mouseEvent` discards non-move events while tracking).
+//! From the next pump on, the [`MouseTrackCapture`](crate::capture::MouseTrackCapture)
+//! routes every `MouseMove` (localized to button-local) back into this
+//! `handle_event` via `Deferred::MouseTrack` — the `MouseMove` arm is the loop
+//! *body*: flip `down` on tracking-rect containment (the rect is `clickRect`
+//! with `b.x++`, recomputed per event). The `MouseUp` arm is the *post-loop*
+//! code: press iff the LAST MOVE's tracked containment (`self.down`) — never
+//! the up position, which `tbutton.cpp:199-211` never re-reads — then clear
+//! `down`/`tracking`. Both arms are guarded by the `tracking` flag: `MouseUp`
+//! is not mask-gated in `Group::wants`, so a stray (untracked) up must fall
+//! through. Every other event during the hold is swallowed by the capture (the
+//! hold is modal, faithful to `TView::mouseEvent`).
 //!
 //! For a button without an id (an uninserted, test-only button) the old
 //! single-shot path is kept as a degenerate fallback.
@@ -99,14 +100,12 @@
 //! 3. **`showMarkers` / `specialChars` / `markers`** dropped (always the
 //!    no-markers branch).
 
-use crate::capture::{CaptureFlow, CaptureHandler};
+use crate::capture::TrackMask;
 use crate::command::Command;
 use crate::event::{Event, Key, hot_key, is_alt_hotkey, is_plain_hotkey};
 use crate::theme::Role;
 use crate::timer::TimerId;
-use crate::view::{
-    Context, DrawCtx, Options, Phase, Point, Rect, StateFlag, View, ViewId, ViewState,
-};
+use crate::view::{Context, DrawCtx, Options, Phase, Point, Rect, StateFlag, View, ViewState};
 use std::time::Duration;
 
 /// `animationDurationMs` — the press-flash duration before the command fires.
@@ -162,11 +161,17 @@ pub struct Button {
     /// redraw (D8). `true` during the press flash.
     pub down: bool,
     /// Absolute screen position of button-local `(0, 0)`, cached each `draw`
-    /// so the mouse-tracking capture (`ButtonTrackCapture`) can convert absolute
-    /// mouse coordinates to button-local — the
+    /// so the mouse-tracking capture
+    /// ([`MouseTrackCapture`](crate::capture::MouseTrackCapture)) can convert
+    /// absolute mouse coordinates to button-local — the
     /// [`ColorPicker::body_origin`](crate::dialog::ColorPicker) pattern (D3/D9).
     /// Initialized to `(0, 0)`; updated on the first `draw` pass.
     abs_origin: Point,
+    /// Whether a mouse hold-track is in flight (between the arming `MouseDown`
+    /// and the terminating `MouseUp`). Guards the `MouseMove`/`MouseUp`
+    /// tracking arms in `handle_event` against stray (untracked) events —
+    /// `MouseUp` is not mask-gated in `Group::wants`.
+    tracking: bool,
 }
 
 impl Button {
@@ -210,6 +215,7 @@ impl Button {
             animation_timer: None,
             down: false,
             abs_origin: Point::new(0, 0),
+            tracking: false,
         }
     }
 
@@ -239,11 +245,10 @@ impl Button {
     /// command (`bfBroadcast`, `source = self id`) or posts it as an
     /// `Event::Command` (which carries no source under D4).
     ///
-    /// `pub(crate)` so the pump's
-    /// [`ButtonTrackRelease`](crate::view::Deferred::ButtonTrackRelease) broker
-    /// can call it on the button after the mouse-hold tracking resolves (the
-    /// `ButtonTrackCapture` D9 round-trip — analogous to `make_default`).
-    pub(crate) fn press(&mut self, ctx: &mut Context) {
+    /// (Private since A3: the mouse-up press fires from this view's own
+    /// `MouseUp` arm — routed back by the `MouseTrackCapture` seam — so no
+    /// pump-side broker needs to reach in anymore.)
+    fn press(&mut self, ctx: &mut Context) {
         let id = self.state.id();
         ctx.broadcast(Command::RECORD_HISTORY, None);
         if self.flags.broadcast {
@@ -324,7 +329,7 @@ impl View for Button {
     /// drawn with `i = 2`. The bottom row is all shadow spaces.
     fn draw(&mut self, ctx: &mut DrawCtx) {
         // Cache the absolute origin for the mouse-tracking capture (D3/D9 —
-        // the ButtonTrackCapture converts abs mouse coords to button-local via
+        // the MouseTrackCapture converts abs mouse coords to button-local via
         // this value, mirroring the ColorPicker `body_origin` pattern).
         self.abs_origin = ctx.origin();
         let down = self.down;
@@ -416,29 +421,61 @@ impl View for Button {
                 // either way the result is: press iff !disabled && contains, then clear.
                 if !self.state.state.disabled && click_rect.contains(m.position) {
                     if let Some(id) = self.state.id() {
-                        // Normal path (inserted button with a ViewId): arm tracking.
-                        // Set the pressed look immediately, then push a ButtonTrackCapture
-                        // so subsequent MouseMove/MouseUp events track containment and
-                        // eventually fire press() via Deferred::ButtonTrackRelease.
-                        //
-                        // Tracking rect: clickRect widened by one on b.x (C++: `clickRect.b.x++`).
-                        let track_rect = Rect::from_points(
-                            click_rect.a,
-                            Point::new(click_rect.b.x + 1, click_rect.b.y),
-                        );
+                        // Normal path (inserted button with a ViewId): this IS
+                        // the first iteration of the C++ hold loop
+                        // (tbutton.cpp:195-211) — the down position is inside
+                        // clickRect ⊂ trackRect, so `down = true` (pressed
+                        // look) — then enter the loop by starting a mouse
+                        // track (A3 seam). The capture routes subsequent
+                        // MouseMove/MouseUp back into the arms below,
+                        // localized via `abs_origin` (cached by the last draw).
                         self.down = true;
-                        ctx.push_capture(Box::new(ButtonTrackCapture {
-                            button: id,
-                            track_rect,
-                            origin: self.abs_origin,
-                            down: true,
-                        }));
+                        self.tracking = true;
+                        ctx.start_mouse_track(
+                            id,
+                            self.abs_origin,
+                            TrackMask {
+                                mouse_move: true,
+                                ..Default::default()
+                            },
+                        );
                     } else {
                         // Degenerate fallback: an uninserted (test-only) button has no id,
                         // so the capture broker cannot resolve it. Press immediately,
                         // mimicking the old pre-D9 behavior.
                         self.press(ctx);
                     }
+                }
+                ev.clear();
+            }
+
+            // The C++ hold-loop BODY (tbutton.cpp:199-206), re-entered per
+            // tracked MouseMove via Deferred::MouseTrack (position already
+            // button-local): flip `down` on tracking-rect containment.
+            // Tracking rect: clickRect widened by one on b.x (`clickRect.b.x++`,
+            // tbutton.cpp:197), recomputed per event so it stays resize-fresh.
+            Event::MouseMove(m) if self.tracking => {
+                let track_rect =
+                    Rect::from_points(click_rect.a, Point::new(click_rect.b.x + 1, click_rect.b.y));
+                let inside = track_rect.contains(m.position);
+                if inside != self.down {
+                    self.down = inside;
+                }
+                ev.clear();
+            }
+
+            // The C++ POST-loop code (tbutton.cpp:207-211): press iff the LAST
+            // MOVE's tracked containment (`self.down`) — the loop body never
+            // re-evaluates the up-event's position (`mouseEvent` returns false
+            // on mouse-up before the body runs again), so the up position is
+            // deliberately not read. Guarded by `tracking` against stray ups
+            // (MouseUp is not mask-gated in Group::wants).
+            Event::MouseUp(_) if self.tracking => {
+                self.tracking = false;
+                let pressed = self.down;
+                self.down = false;
+                if pressed {
+                    self.press(ctx);
                 }
                 ev.clear();
             }
@@ -519,70 +556,6 @@ impl View for Button {
     /// `TView::handleEvent`'s base body only when `bfGrabFocus`).
     fn grabs_focus_on_click(&self) -> bool {
         self.flags.grab_focus
-    }
-}
-
-// ---------------------------------------------------------------------------
-// ButtonTrackCapture — D9 mouse press-and-hold capture (row 31)
-// ---------------------------------------------------------------------------
-
-/// D9 capture handler for button mouse press-and-hold tracking.
-///
-/// Pushed onto the capture stack on `MouseDown` inside the button's click rect.
-/// Tracks mouse movement, posting [`Deferred::ButtonTrackDown`] whenever
-/// containment in `track_rect` flips, and [`Deferred::ButtonTrackRelease`] on
-/// `MouseUp` — both applied by the pump to the button identified by `button`.
-///
-/// Uses the button's `abs_origin` (cached each `draw`) to convert the capture's
-/// absolute mouse coordinates to button-local (the `ColorPicker::body_origin`
-/// pattern, D3/D9).
-struct ButtonTrackCapture {
-    /// The button this capture is tracking.
-    button: ViewId,
-    /// Button-local tracking rect (the C++ `clickRect` after `b.x++`).
-    track_rect: Rect,
-    /// Absolute screen position of button-local `(0, 0)` at push time —
-    /// the button's `abs_origin` captured once so the drag math is stable
-    /// (the `DragCapture` 3a coordinate-frame assumption).
-    origin: Point,
-    /// Last tracked containment state. Starts `true` (mouse-down was inside
-    /// click_rect, which is a subset of track_rect). Used to send only on
-    /// flips (no spam) and as the `pressed` payload on `MouseUp` — the C++
-    /// decision uses the LAST MOVE's state, not the mouse-up position.
-    down: bool,
-}
-
-impl CaptureHandler for ButtonTrackCapture {
-    fn handle(&mut self, ev: &mut Event, ctx: &mut Context) -> CaptureFlow {
-        match ev {
-            Event::MouseMove(m) => {
-                // Absolute → button-local (capture runs before group routing).
-                let local = m.position - self.origin;
-                let inside = self.track_rect.contains(local);
-                if inside != self.down {
-                    self.down = inside;
-                    ctx.request_button_track_down(self.button, inside);
-                }
-                CaptureFlow::Consumed
-            }
-            Event::MouseUp(_) => {
-                // The C++ `do{}while(mouseEvent(…,evMouseMove))` loop body
-                // never re-evaluates the up-event's position — `mouseEvent`
-                // returns `false` on mouse-up before the body runs again.
-                // So the decision (press or not) uses the LAST MOVE's tracked
-                // state (`self.down`), not the mouse-up position.
-                ctx.request_button_track_release(self.button, self.down);
-                CaptureFlow::ConsumedPop
-            }
-            // C++ `mouseEvent(event, evMouseMove)` discards everything that is
-            // not a mouse-move/up while tracking — the hold is modal. Swallow
-            // the rest (MouseAuto, keys, commands, broadcasts) without effect.
-            _ => CaptureFlow::Consumed,
-        }
-    }
-
-    fn view(&self) -> Option<ViewId> {
-        Some(self.button)
     }
 }
 
@@ -1100,125 +1073,136 @@ mod tests {
         assert!(deferred.is_empty(), "no capture for disabled button");
     }
 
-    // -- ButtonTrackCapture unit tests ---------------------------------------
+    // -- mouse hold-tracking arm tests (the A3 seam's loop body / post-loop) --
+    //
+    // The MouseTrackCapture routes localized MouseMove/MouseUp events back into
+    // the button's own handle_event (Deferred::MouseTrack); these tests drive
+    // those arms directly with button-local positions, exactly as the pump's
+    // apply arm does. The router itself is unit-tested in `capture::tests`.
 
-    /// Helper: construct a `ButtonTrackCapture` at origin (5, 3), tracking rect
-    /// (1, 0, 10, 1) button-local (track_rect = clickRect widened by 1 on b.x
-    /// for a 10×2 button). `down` starts `true`.
-    ///
-    /// Returns `(capture, button_id)`.
-    fn make_capture() -> (ButtonTrackCapture, ViewId) {
-        let id = ViewId::next();
-        // 10×2 button: clickRect = (1,0,9,1); trackRect = (1,0,10,1).
-        let cap = ButtonTrackCapture {
-            button: id,
-            track_rect: Rect::new(1, 0, 10, 1),
-            origin: Point::new(5, 3), // abs origin of button-local (0,0)
-            down: true,
-        };
-        (cap, id)
+    /// Helper: a 10×2 button with an id, armed by a MouseDown inside clickRect
+    /// (`tracking == true`, `down == true`, one `PushCapture` deferred).
+    fn tracked_button() -> Button {
+        let mut b = Button::new(
+            Rect::new(0, 0, 10, 2),
+            "OK",
+            Command::OK,
+            ButtonFlags::new(),
+        );
+        button_with_id(&mut b);
+        let mut timers = TimerQueue::new();
+        // clickRect = (1,0,9,1): (3,0) is inside; trackRect = (1,0,10,1).
+        let mut ev = mouse_down(3, 0);
+        with_ctx_d(&mut timers, 0, |ctx| b.handle_event(&mut ev, ctx));
+        assert!(b.tracking, "MouseDown inside clickRect arms tracking");
+        assert!(b.down);
+        b
     }
 
-    /// `MouseMove` outside the track rect → `ButtonTrackDown { down: false }`,
-    /// `Consumed`; `MouseMove` back inside → `ButtonTrackDown { down: true }`.
+    /// Tracked `MouseMove` outside the track rect flips `down` to false;
+    /// a move back inside flips it back (the C++ loop body).
     #[test]
-    fn capture_move_outside_then_inside_emits_flips() {
-        let (mut cap, id) = make_capture();
+    fn track_move_outside_then_inside_flips_down() {
+        let mut b = tracked_button();
         let mut timers = TimerQueue::new();
 
-        // Move to abs (5, 3) = button-local (0, 0): outside trackRect (x < 1).
-        let mut ev = mouse_move(5, 3);
-        let (_, deferred, flow) = with_ctx_d(&mut timers, 0, |ctx| cap.handle(&mut ev, ctx));
-        assert!(matches!(flow, CaptureFlow::Consumed));
-        assert!(!cap.down, "down flipped to false");
-        assert_eq!(deferred.len(), 1);
-        assert!(
-            matches!(deferred[0], Deferred::ButtonTrackDown { button, down: false } if button == id)
-        );
+        // Button-local (0, 0): outside trackRect (x < 1).
+        let mut ev = mouse_move(0, 0);
+        with_ctx(&mut timers, 0, |ctx| b.handle_event(&mut ev, ctx));
+        assert!(ev.is_nothing(), "tracked move is consumed");
+        assert!(!b.down, "down flipped to false");
 
-        // Move back inside: abs (8, 3) = button-local (3, 0): inside trackRect.
-        let mut ev = mouse_move(8, 3);
-        let (_, deferred, flow) = with_ctx_d(&mut timers, 0, |ctx| cap.handle(&mut ev, ctx));
-        assert!(matches!(flow, CaptureFlow::Consumed));
-        assert!(cap.down, "down flipped back to true");
-        assert_eq!(deferred.len(), 1);
-        assert!(
-            matches!(deferred[0], Deferred::ButtonTrackDown { button, down: true } if button == id)
-        );
+        // Back inside: (3, 0).
+        let mut ev = mouse_move(3, 0);
+        with_ctx(&mut timers, 0, |ctx| b.handle_event(&mut ev, ctx));
+        assert!(b.down, "down flipped back to true");
+        assert!(b.tracking, "still tracking until MouseUp");
     }
 
-    /// Two consecutive moves inside → no flip, no deferred item (no spam).
+    /// Consecutive moves inside keep `down` (containment unchanged — the loop
+    /// body's `if (down != contains)` no-flip path).
     #[test]
-    fn capture_no_spam_when_containment_unchanged() {
-        let (mut cap, _id) = make_capture();
+    fn track_no_flip_when_containment_unchanged() {
+        let mut b = tracked_button();
         let mut timers = TimerQueue::new();
 
-        // First move inside: abs (8, 3) = button-local (3, 0) — inside, and
-        // `down` already `true`, so NO flip and no deferred emit.
-        let mut ev = mouse_move(8, 3);
-        let (_, deferred, _) = with_ctx_d(&mut timers, 0, |ctx| cap.handle(&mut ev, ctx));
-        assert!(deferred.is_empty(), "no emit when containment unchanged");
-
-        // Second move inside: still no emit.
-        let mut ev = mouse_move(9, 3);
-        let (_, deferred, _) = with_ctx_d(&mut timers, 0, |ctx| cap.handle(&mut ev, ctx));
-        assert!(deferred.is_empty(), "still no emit on second inside move");
+        let mut ev = mouse_move(3, 0);
+        with_ctx(&mut timers, 0, |ctx| b.handle_event(&mut ev, ctx));
+        assert!(b.down);
+        let mut ev = mouse_move(4, 0);
+        with_ctx(&mut timers, 0, |ctx| b.handle_event(&mut ev, ctx));
+        assert!(b.down, "still down on second inside move");
     }
 
-    /// `MouseUp` after last inside move → `ButtonTrackRelease { pressed: true }`,
-    /// `ConsumedPop`.
+    /// `MouseUp` while the last tracked state is inside → press fires
+    /// (RECORD_HISTORY + the posted command), `down`/`tracking` cleared.
     #[test]
-    fn capture_mouse_up_after_inside_fires_press() {
-        let (mut cap, id) = make_capture();
+    fn track_release_inside_fires_press() {
+        let mut b = tracked_button();
         let mut timers = TimerQueue::new();
 
-        let mut ev = mouse_up(8, 3);
-        let (_, deferred, flow) = with_ctx_d(&mut timers, 0, |ctx| cap.handle(&mut ev, ctx));
-        assert!(
-            matches!(flow, CaptureFlow::ConsumedPop),
-            "MouseUp pops the capture"
-        );
-        assert_eq!(deferred.len(), 1);
-        assert!(
-            matches!(deferred[0], Deferred::ButtonTrackRelease { button, pressed: true } if button == id),
-            "ButtonTrackRelease with pressed=true when last tracked state was inside"
-        );
-    }
-
-    /// `MouseUp` after last outside move → `pressed: false` (no fire).
-    #[test]
-    fn capture_mouse_up_after_outside_no_press() {
-        let (mut cap, id) = make_capture();
-        let mut timers = TimerQueue::new();
-
-        // Move outside first.
-        let mut ev = mouse_move(5, 3); // button-local (0, 0), outside
-        with_ctx_d(&mut timers, 0, |ctx| cap.handle(&mut ev, ctx));
-        assert!(!cap.down);
-
-        // Then MouseUp.
-        let mut ev = mouse_up(5, 3);
-        let (_, deferred, flow) = with_ctx_d(&mut timers, 0, |ctx| cap.handle(&mut ev, ctx));
-        assert!(matches!(flow, CaptureFlow::ConsumedPop));
+        let mut ev = mouse_up(3, 0);
+        let (out, ()) = with_ctx(&mut timers, 0, |ctx| b.handle_event(&mut ev, ctx));
+        assert!(ev.is_nothing(), "tracked up is consumed");
+        assert!(!b.tracking, "tracking ends on MouseUp");
+        assert!(!b.down, "pressed look cleared");
         assert_eq!(
-            deferred.len(),
-            1,
-            "MouseUp must post exactly one ButtonTrackRelease"
+            out[0],
+            Event::Broadcast {
+                command: Command::RECORD_HISTORY,
+                source: None
+            }
         );
-        assert!(
-            matches!(deferred[0], Deferred::ButtonTrackRelease { button, pressed: false } if button == id),
-            "ButtonTrackRelease with pressed=false when last tracked state was outside"
+        assert_eq!(out[1], Event::Command(Command::OK));
+    }
+
+    /// `MouseUp` at an INSIDE position after the last move tracked OUTSIDE →
+    /// no press: the decision uses the LAST MOVE's containment, never the
+    /// up-event's position (tbutton.cpp:199-211 never re-reads it).
+    #[test]
+    fn track_release_uses_last_move_not_up_position() {
+        let mut b = tracked_button();
+        let mut timers = TimerQueue::new();
+
+        // Move outside: down = false.
+        let mut ev = mouse_move(0, 0);
+        with_ctx(&mut timers, 0, |ctx| b.handle_event(&mut ev, ctx));
+        assert!(!b.down);
+
+        // Up at (3, 0) — inside clickRect, but the up position must be ignored.
+        let mut ev = mouse_up(3, 0);
+        let (out, ()) = with_ctx(&mut timers, 0, |ctx| b.handle_event(&mut ev, ctx));
+        assert!(ev.is_nothing(), "tracked up is consumed even without press");
+        assert!(!b.tracking);
+        assert!(out.is_empty(), "no press: last tracked state was outside");
+    }
+
+    /// A stray `MouseUp` with no tracking in flight falls through untouched
+    /// (the `tracking` guard — MouseUp is not mask-gated in `Group::wants`).
+    #[test]
+    fn stray_mouse_up_without_tracking_is_ignored() {
+        let mut b = Button::new(
+            Rect::new(0, 0, 10, 2),
+            "OK",
+            Command::OK,
+            ButtonFlags::new(),
         );
+        button_with_id(&mut b);
+        let mut timers = TimerQueue::new();
+        let mut ev = mouse_up(3, 0);
+        let (out, ()) = with_ctx(&mut timers, 0, |ctx| b.handle_event(&mut ev, ctx));
+        assert!(!ev.is_nothing(), "stray up is not consumed");
+        assert!(out.is_empty(), "stray up fires nothing");
+        assert!(!b.down);
     }
 
     /// A `bfBroadcast` button pressed via the mouse-track path fires its command
     /// as a broadcast carrying its own id — not as an `Event::Command`. The
     /// existing `broadcast_button_fires_broadcast_with_source` covers the
-    /// keyboard/timer path; this covers the mouse path by applying the
-    /// `Deferred::ButtonTrackRelease { pressed: true }` effect exactly as the
-    /// pump arm does (set `down = false`, then `press(ctx)`).
+    /// keyboard/timer path; this covers the mouse path through the real arms
+    /// (MouseDown inside, then tracked MouseUp inside).
     #[test]
-    fn capture_release_fires_broadcast_for_bf_broadcast_button() {
+    fn track_release_fires_broadcast_for_bf_broadcast_button() {
         let mut b = Button::new(
             Rect::new(0, 0, 10, 2),
             "Go",
@@ -1229,15 +1213,14 @@ mod tests {
             },
         );
         let id = button_with_id(&mut b);
-        b.down = true; // armed by the MouseDown that pushed the capture
         let mut timers = TimerQueue::new();
 
-        // Apply ButtonTrackRelease { pressed: true } as the pump arm does.
-        let (out, ()) = with_ctx(&mut timers, 0, |ctx| {
-            b.down = false;
-            b.press(ctx);
-        });
+        let mut ev = mouse_down(3, 0);
+        with_ctx_d(&mut timers, 0, |ctx| b.handle_event(&mut ev, ctx));
+        assert!(b.tracking);
 
+        let mut ev = mouse_up(3, 0);
+        let (out, ()) = with_ctx(&mut timers, 0, |ctx| b.handle_event(&mut ev, ctx));
         assert!(!b.down, "pressed look cleared on release");
         // press(): RECORD_HISTORY then the BROADCAST (source = our id), no post.
         assert_eq!(
@@ -1258,25 +1241,6 @@ mod tests {
         assert!(
             !out.iter().any(|e| matches!(e, Event::Command(_))),
             "broadcast, not post"
-        );
-    }
-
-    /// A `KeyDown` during tracking is swallowed (`Consumed`, nothing deferred).
-    #[test]
-    fn capture_key_during_tracking_is_swallowed() {
-        let (mut cap, _id) = make_capture();
-        let mut timers = TimerQueue::new();
-
-        let mut ev = key(Key::Char('x'));
-        let (out, deferred, flow) = with_ctx_d(&mut timers, 0, |ctx| cap.handle(&mut ev, ctx));
-        assert!(
-            matches!(flow, CaptureFlow::Consumed),
-            "key is swallowed (hold is modal)"
-        );
-        assert!(out.is_empty());
-        assert!(
-            deferred.is_empty(),
-            "no deferred effect for a key during tracking"
         );
     }
 
