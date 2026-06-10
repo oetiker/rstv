@@ -93,5 +93,5 @@ legend:
   U fg=RGB(30,144,204) bg=RGB(30,144,204)
   V fg=RGB(30,144,221) bg=RGB(30,144,221)
   W fg=RGB(30,144,238) bg=RGB(30,144,238)
-  X fg=BIOS(8) bg=BIOS(2)
+  X fg=BIOS(14) bg=BIOS(1)
   Y fg=RGB(30,144,255) bg=RGB(30,144,255)

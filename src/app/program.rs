@@ -113,6 +113,19 @@ fn default_command_set() -> CommandSet {
         Command::CH_DIR,
         Command::DOS_SHELL,
         Command::CLOSE_ALL,
+        // File-dialog result commands (stddlg.h 1001–1006). In C++ these are
+        // `> 255`, so `commandEnabled` treats them as ALWAYS enabled (never
+        // maskable). The D1 allowlist dropped that ">255" rule, so we must list
+        // them explicitly or the pump's command filter silently drops the
+        // FileDialog OK/Open button result (cmFileOpen) before the dialog's
+        // handle_event can end the modal. (BANDAID — the real fix is to flip
+        // CommandSet to a denylist; tracked for the post-port architecture pass.)
+        Command::FILE_OPEN,
+        Command::FILE_REPLACE,
+        Command::FILE_CLEAR,
+        Command::FILE_INIT,
+        Command::CHANGE_DIR,
+        Command::REVERT,
     ] {
         cs.enable_cmd(cmd);
     }
@@ -7424,6 +7437,52 @@ mod tests {
             let (cmd, text) = program.input_box("Enter", "Path", "/tmp", 40);
             assert_eq!(cmd, Command::OK);
             assert_eq!(text, "/tmp");
+        }
+
+        // -- open_file_dialog / FileDialog command-filter regression ------------
+
+        /// REGRESSION: `cmFileOpen` (C++ stddlg.h 1001 — a `> 255` always-enabled
+        /// command) must survive the pump's command filter, or the FileDialog
+        /// OK/Open button does nothing (the modal never ends). The D1 allowlist
+        /// dropped C++'s ">255 always enabled" rule, so the file-dialog result
+        /// commands must be in `default_command_set()`. Drives the REAL pump.
+        #[test]
+        fn file_dialog_open_command_survives_pump_filter() {
+            use crate::data::FieldValue;
+            use crate::dialog::{FD_OPEN_BUTTON, FileDialog};
+            let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+            let mut fd = FileDialog::new("*.*", "Open", "~N~ame", FD_OPEN_BUTTON, 100);
+            // A concrete (non-wildcard, non-dir) name so valid() ACCEPTS instead of
+            // navigating — isolates the filter fix from directory-navigation.
+            View::set_value(&mut fd, FieldValue::Text("regression_test.txt".into()));
+            program
+                .out_events
+                .push_back(Event::Command(Command::FILE_OPEN));
+            let cmd = program.exec_view(Box::new(fd));
+            assert_eq!(
+                cmd,
+                Command::FILE_OPEN,
+                "cmFileOpen must end the modal — a dropped command would spin/hang \
+                 (the 'OK does nothing' bug)"
+            );
+            assert_eq!(program.capture_len(), 0, "ModalFrame popped on close");
+        }
+
+        /// The file-dialog result commands C++ treats as always-enabled (`> 255`)
+        /// are in the default set (the bandaid for the allowlist→denylist gap).
+        #[test]
+        fn default_command_set_enables_file_dialog_results() {
+            let cs = default_command_set();
+            for cmd in [
+                Command::FILE_OPEN,
+                Command::FILE_REPLACE,
+                Command::FILE_CLEAR,
+                Command::FILE_INIT,
+                Command::CHANGE_DIR,
+                Command::REVERT,
+            ] {
+                assert!(cs.has(cmd), "{cmd:?} must be enabled by default");
+            }
         }
 
         // -- color_dialog (Task 10, rstv-original extension) --------------------

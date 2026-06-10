@@ -582,14 +582,16 @@ impl Theme {
         set(&mut styles, Role::InputSelected, 0xF, 0x2); // white on green
         set(&mut styles, Role::InputArrow, 0xE, 0x3); // yellow on cyan
 
-        // Scroller content fill (row 27). Provisional — the *app-direct* color
-        // `cpScroller "\x06\x07"` idx 1 resolves to `cpAppColor[6] = 0x28` (BIOS
-        // byte `bg<<4 | fg`). A scroller inside a window remaps via the palette
-        // chain, so this realigns with the deferred window-scheme / gray theming
-        // (`TODO(row 34 gray theming / window-scheme remap)`).
-        // `ScrollerSelected` (idx 2 = `0x24`) is deferred to `TEditor` row 66.
-        set(&mut styles, Role::ScrollerNormal, 0x8, 0x2); // darkgray on green (0x28)
-        set(&mut styles, Role::ScrollerSelected, 0x4, 0x2); // red on green (0x24)
+        // Scroller / editor content fill (rows 27, 66). Faithful to the C++ palette
+        // chain for a TScroller/TEditor inside a (blue) window — the realistic case,
+        // since rstv collapsed per-window palettes into a single Role (D7):
+        //   cpScroller[1]=0x06 → cpBlueWindow[6]=0x0D → cpAppColor[0x0D]=0x1E (normal)
+        //   cpScroller[2]=0x07 → cpBlueWindow[7]=0x0E → cpAppColor[0x0E]=0x71 (selected)
+        // (The earlier provisional green 0x28/0x24 was the degenerate "scroller
+        // directly on the program, no window remap" resolution — never the case in
+        // practice, and it made a live editor render as a flat green field.)
+        set(&mut styles, Role::ScrollerNormal, 0xE, 0x1); // yellow on blue (0x1E)
+        set(&mut styles, Role::ScrollerSelected, 0x1, 0x7); // blue on lightgray (0x71)
 
         // Menu family (rows 50/51). Provisional values modelled on the classic
         // menu look: a lightgray-on-black bar (`cpMenuView` resolves through

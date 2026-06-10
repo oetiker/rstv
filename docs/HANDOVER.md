@@ -271,6 +271,21 @@ terminal-suspend seam + SIGTSTP.
 
 ## Standing deferrals (still open — grep the TODOs)
 
+- **🔴 `CommandSet` allowlist → denylist (architecture pass).** `CommandSet`
+  (`src/command.rs`) is an **allowlist** (`has = cmds.contains`, default empty →
+  everything disabled), so `pump_once`'s filter drops any `Event::Command` not in
+  the central `default_command_set()` (`program.rs`). This is **unfaithful** —
+  C++ `tview.cpp::initCommands` is enabled-by-default with a 5-command denylist
+  (cmZoom/cmClose/cmResize/cmNext/cmPrev) + everything `>255` always-enabled — and
+  it **couples** every new feature to a central list (a FileDialog can't
+  self-register; its `cmFileOpen` got silently dropped → "OK does nothing" bug).
+  **Fix:** flip to a denylist (`has = !disabled.contains`), seed startup with the
+  5 disabled window commands; `default_command_set()` shrinks accordingly. User
+  chose a **bandaid for now** (added the file-dialog `>255` result commands —
+  FILE_OPEN/REPLACE/CLEAR/INIT/CHANGE_DIR/REVERT — to the allowlist); do the real
+  flip in the post-port architecture pass. (The numbered-command "90s smell" is a
+  non-issue: `Command` is already an open `&'static str` newtype, `CommandSet` a
+  `HashSet` — only the allowlist *polarity* is wrong.)
 - **idle→`statusLine->update()` help-ctx refresh** — inert under a single `All`
   `StatusDef`; only worth doing when a context-split `OneOf` line lands (needs a
   `View::get_help_ctx` + a `TopView` resolver).
