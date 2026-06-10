@@ -33,12 +33,12 @@
 
 | row | item | needs | sites |
 |---|---|---|---|
-| B1 | command-graying adoptions | A1 | `button.rs:196,463` (cmCommandSetChanged graying), `input_line.rs:280,688` (cut/copy/paste enable) |
+| B1 ✅ | command-graying adoptions | A1 | **COMPLETE (`680aabc`):** button `cmCommandSetChanged` arm sets `state.disabled = !ctx.command_enabled(command)`; initial graying on startup via `command_set_changed: true` in `Program::new`. InputLine `can_update_commands`/`update_commands` pushed from `handle_event` tail + `set_state` transition. |
 | B2 ✅ | press-and-hold adoptions | A3 | **COMPLETE (`90fc0ce`,`de1c0f0`,`62bbd15`,`eb7648d`,`694963d`):** all 8 — scrollbar, inputline, cluster, frame, listviewer, outline, statusline (+ first-class pre-route deferreds in the pump), editor (+ the untracked-wheel fidelity fix) |
-| B3 | InputLine clipboard | A6 | `input_line.rs:662`: wire cmCut/cmCopy/cmPaste to the existing `SetClipboard`/paste brokers (editor precedent). The brokers reach the backend clipboard, which A6 makes the OS clipboard. |
+| B3 ✅ | InputLine clipboard | A6 | **COMPLETE (`680aabc`):** cmCut/cmCopy write to backend clipboard via `ctx.set_clipboard`; cmPaste uses `Deferred::InputLinePaste` broker (pump reads clipboard, calls `paste_text`). `paste_text` bulk-inserts with `save_state`/`check_valid`/`max_len` clamp + scroll-follow + `sync_cursor`. |
 | B4 ✅ | accelerator adoptions + ctrlToArrow | A5 | **landed WITH A5** (`43c9d30`): button/label plain-letter postProcess accelerators, cluster accelerator scan, ctrl_to_arrow for cluster + scrollbar |
 | B5 | resize republish family | — | `scroller.rs:51` + `list_viewer.rs:58,314` (re-emit scrollbar params on `change_bounds`), `window.rs:371` (re-push `set_zoomed`), keyboard resize sub-mode `window.rs:672,818` (33d-2) |
-| B6 | FileDialog finishers | — | `filedlg.rs:1797,2315` (`wfGrow`), `:1889` (screen-relative resize block), `:89` (real fs attr/time/size in `SearchRec`) |
+| B6 ✅ | FileDialog finishers | — | **COMPLETE (`6ae0222`):** `wfGrow` for FileDialog + ChDirDialog via `Dialog::set_flags`; "21st-century percentages" screen-relative resize deferred to first `handle_event` (`needs_screen_resize` guard, `ctx.owner_size()`); `SearchRec` attr/size/time populated from `std::fs` metadata (`FA_DIREC` for dirs, `pack_dos_time` DOS ftime packing). |
 | B7 ✅ | backend terminal lifecycle | — | **User confirm (2026-06-10): a TV program must not hand-roll terminal setup — C++ `TApplication`/`TScreen` does it in the ctor.** Move raw-mode/alt-screen/mouse-capture from `examples/hello.rs:218` into `CrosstermBackend` (RAII: setup at construction, teardown in `Drop` + a panic hook so a crashed app restores the terminal) and strip it from `hello.rs`. Also: paste event (`crossterm_backend.rs:313`), focus events (`:317`). Can run early — independent of Phase A. |
 | B8 | small singletons | — | `input_line.rs:744` (`max_len` clamp on `set_value`), `input_line.rs:702` (`valid-select` — likely unblocked: `valid` now takes `ctx`), `program.rs:1375` (timer payload), `application.rs:47,63` (init/doneHistory), `program.rs:1776` (help-ctx propagation plumbing) |
 

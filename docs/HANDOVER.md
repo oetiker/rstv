@@ -14,7 +14,17 @@
 > When a row lands: add an IMPLEMENTATION-LOG section, tick the BACKLOG row,
 > update this file.
 
-## Current state (2026-06-10, end of the backlog-run session)
+## Current state (2026-06-10, B1+B3+B6 session)
+
+**HEAD = `e322f16`; 1126 lib tests green; clippy + fmt clean.**
+
+B1, B3, and B6 are landed on `main`. The paused worktrees are integrated and can be deleted.
+
+- **B1 ✅ (`680aabc`)** — button `cmCommandSetChanged` graying; `Program::new` seeds `command_set_changed: true` for initial broadcast. InputLine `can_update_commands`/`update_commands` from `handle_event` + `set_state`.
+- **B3 ✅ (`680aabc`)** — InputLine cmCut/cmCopy/cmPaste; `Deferred::InputLinePaste` broker; `paste_text` (save_state + max_len clamp + check_valid).
+- **B6 ✅ (`6ae0222`)** — FileDialog/ChDirDialog `wfGrow`; screen-relative resize deferred to first `handle_event`; `SearchRec` attr/size/time from `std::fs` + `pack_dos_time`.
+
+## Previous state (2026-06-10, end of the backlog-run session)
 
 **HEAD = `5757565`; 1104 lib tests green; clippy + fmt clean (run both
 default and `--no-default-features`); `cargo build --example hello` works.**
@@ -77,34 +87,12 @@ This session ran the **backlog run** end to end:
   "drain is gated on !ev.is_nothing()" comments were corrected — don't
   reintroduce the assumption.
 
-## PAUSED in-flight work (user said stop; two worktrees left intact)
+## PAUSED in-flight work
 
-1. **`/scratch/oetiker/claude-worktrees/rstv-b1-b3-graying-clipboard`**
-   (branch `b1-b3-graying-clipboard`, base `5757565`) — **rows B1+B3:
-   implementation COMPLETE, gates green (1119 lib tests), NOT yet reviewed.**
-   Button graying on `cmCommandSetChanged`; InputLine cut/copy/paste
-   enablement (`can_update_commands`/`update_commands` per tinputli.cpp) +
-   clipboard arms + new `Deferred::InputLinePaste` broker + `paste_text`.
-   The spec review was killed mid-verdict. **Re-run the two-stage review
-   before integrating; the load-bearing open question:** the button's
-   *initial* gray state relies on `Program` firing a `COMMAND_SET_CHANGED`
-   broadcast on the first idle when the disabled seed is non-empty — verify
-   `Program::new` actually arms `command_set_changed` at startup (if it
-   seeds the field with the flag false, a button for a startup-disabled
-   command starts un-grayed until the first real transition; fix = one
-   faithful line in `Program::new`, or a lazy first-draw derive).
-2. **`/scratch/oetiker/claude-worktrees/rstv-b6-filedlg`** (branch
-   `b6-filedlg`, base `5757565`) — **row B6: INCOMPLETE** (implementer
-   killed mid-clippy-fix; `dialog.rs` + `filedlg.rs` modified, gates NOT
-   run to completion). Scope was: `wfGrow` for FileDialog/ChDirDialog, the
-   C++ "21st-century" screen-relative resize block (adapt to the
-   `reset_current` open hook — ctors have no ctx), real `std::fs` metadata
-   in `SearchRec`. Inspect the diff and resume, or reset the worktree and
-   redo the row.
+*(none — all paused worktrees integrated this session)*
 
 ## Next — the remaining backlog (small, all unblocked)
 
-- **Finish B1+B3 and B6** (the paused worktrees above).
 - **B5 — resize republish family:** `scroller.rs` + `list_viewer.rs`
   `TODO(resize)` (re-emit scrollbar params on `change_bounds`),
   `window.rs:371` (re-push `set_zoomed` on owner resize), keyboard resize

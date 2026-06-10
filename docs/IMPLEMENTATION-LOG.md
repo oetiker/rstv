@@ -5,6 +5,49 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session addendum — B1+B3+B6 COMPLETE (2026-06-10)
+
+**`680aabc`** — **B1 + B3: button graying + InputLine clipboard.**
+
+*B1* — `cmCommandSetChanged` arm in `Button::handle_event` (tbutton.cpp:258-261):
+`self.state.state.disabled = !ctx.command_enabled(self.command)`. Initial graying on
+startup is covered by `command_set_changed: true` in `Program::new` (the C++ ctor
+does it directly; D3 defers to first idle broadcast). `InputLine::can_update_commands`
+/ `update_commands` (tinputli.cpp:540-559): push deferred enable/disable ops for
+cmCut/cmCopy (selection-conditional) and cmPaste (always-enabled). Called from
+`handle_event` tail and `set_state` transition (transition-detected via before/after
+`can_update_commands` sample — faithful to tinputli.cpp:520-529).
+
+*B3* — `handle_event` evCommand clipboard block (tinputli.cpp:403-492): cmCut/cmCopy
+copy selection via `ctx.set_clipboard` (cmCut also deletes + save_state/check_valid);
+both always consume the event (ev.clear() unconditional, faithful to C++ clearEvent).
+cmPaste → `ctx.request_input_line_paste` → `Deferred::InputLinePaste`: pump reads
+`renderer.backend_mut().get_clipboard()`, downcasts to `InputLine` via `as_any_mut`,
+calls `paste_text`. `paste_text`: `save_state` before mutation, bulk insert with UTF-8
+char-boundary clamping to `max_len`, scroll-follow firstPos, `sync_cursor`, then
+`check_valid(true)`. +15 tests.
+
+**`6ae0222`** — **B6: FileDialog finishers.**
+
+`wfGrow` for FileDialog and ChDirDialog (tfildlg.cpp:62): `Dialog::set_flags` /
+`Dialog::flags` pub(crate) accessors added; ctor sets `f.grow = true`.
+
+"21st-century percentages" screen-relative resize (tfildlg.cpp:140-167): C++ ctor
+runs it immediately against `TProgram::application->size`; rstv defers to first
+`handle_event` (`needs_screen_resize: bool` one-time guard, `ctx.owner_size()`,
+`ctx.request_bounds`). Same thresholds (90/63, 34/25), same grow amounts (15/0, 0/5),
+same screen-trim bounds for the `else-if` branches. Size floor (49×19) applied before
+the `bounds != original` guard. Before-first-draw ordering preserved.
+
+`SearchRec` metadata from `std::fs`: `FileList::raw_from_fs` populates size
+(`meta.len()` saturated to `i32`), mtime (`meta.modified().ok()`), is_dir. `build_listing`
+maps to `SearchRec`: `attr = FA_DIREC` for dirs, `size = 0` for dirs (faithful),
+`time = pack_dos_time(mtime)`. `pack_dos_time` uses Howard Hinnant's civil-from-days
+algorithm and packs the DOS `ftime` bitfield (5-bit year-1980, 4-bit month, 5-bit day
+in the high word; 5-bit hour, 6-bit min, 5-bit sec/2 in the low word). +12 tests.
+
+Total on integrated tree: **1126 lib tests green; clippy + fmt clean.**
+
 ## Session addendum — the editor holds: B2 COMPLETE
 
 **`694963d`** — the final and largest adoption (teditor1.cpp:539-583, both
