@@ -36,14 +36,17 @@
 //! - **getPalette → Theme roles** (D7): `cpOutlineViewer "\x6\x7\x3\x8"` →
 //!   [`Role::OutlineNormal`] / [`Role::OutlineFocused`] / [`Role::OutlineSelected`]
 //!   / [`Role::OutlineNotExpanded`].
-//! - **mouse press-and-hold / auto-scroll drag loop** → `TODO(row 31, D9)`
-//!   (single-shot positioning only, like the scrollbar / list viewer).
+//! - **mouse press-and-hold / auto-scroll drag loop** — **landed** (row 31, D9 adoption):
+//!   `MouseDown` arms the A3 `MouseTrackCapture`; `MouseMove`/`MouseAuto`/`MouseUp` route
+//!   the hold loop faithfully (out-of-view auto-scroll `mouseAutoToSkip = 3`; `dragged`
+//!   gate distinguishes click from drag for the graph-toggle post-loop).
 //! - **ctor `update()`**: `TOutline`'s ctor calls `update()`, which needs a
 //!   `Context` (to publish scrollbar params) we do not have at construction. The
 //!   consumer must call [`ov_update`] once after inserting the outline into a group
 //!   (the same constraint the scroller / list-viewer ctors hit — see
 //!   [`Outline::new`]).
 
+use crate::capture::TrackMask;
 use crate::command::Command;
 use crate::event::{Event, Key, ctrl_to_arrow};
 use crate::theme::Role;
@@ -57,6 +60,22 @@ const OV_EXPANDED: u16 = 0x01;
 const OV_CHILDREN: u16 = 0x02;
 /// `ovLast` — the node is the last child of its parent (└ vs ├).
 const OV_LAST: u16 = 0x04;
+
+/// `mouseAutoToSkip = 3` — number of `evMouseAuto` ticks to accumulate before
+/// stepping the focus by ±1 when the mouse is outside the view (toutline.cpp:421).
+const MOUSE_AUTO_TO_SKIP: i32 = 3;
+
+/// Per-hold mouse-tracking state for the outline viewer (the D9 successor of the
+/// C++ locals `count` and `dragged`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct OvTrack {
+    /// `count` — accumulated `evMouseAuto` ticks since the last step/reset.
+    count: i32,
+    /// `dragged` — iteration counter; capped at 2 (C++: `if (dragged < 2) dragged++`).
+    /// After the loop, `dragged < 2` distinguishes a "click" from a "drag": only
+    /// a click (dragged < 2) can toggle the graph expansion column.
+    dragged: u8,
+}
 
 // ---------------------------------------------------------------------------
 // TNode (row 88) — the tree node
@@ -134,6 +153,13 @@ pub struct OutlineViewerState {
     pub v_scroll_bar: Option<ViewId>,
     /// `TOutlineViewer::foc` — the focused item's DFS position (0-based).
     pub foc: i32,
+    /// Absolute screen position of this view's `(0, 0)`, cached by the last
+    /// `draw` call — feeds the [`MouseTrackCapture`] origin (D9/A3 seam).
+    pub(crate) abs_origin: Point,
+    /// Per-hold mouse-tracking state — `Some` while a track is in flight
+    /// (between `MouseDown` and `MouseUp`), `None` otherwise. Guards the
+    /// tracking arms against stray (untracked) events.
+    pub(crate) track: Option<OvTrack>,
 }
 
 impl OutlineViewerState {
@@ -162,6 +188,8 @@ impl OutlineViewerState {
             h_scroll_bar: h,
             v_scroll_bar: v,
             foc: 0,
+            abs_origin: Point::new(0, 0),
+            track: None,
         }
     }
 
@@ -526,7 +554,16 @@ pub fn ov_get_graph<L: OutlineViewer + ?Sized>(
 /// `color >> 8` when the node is not expanded), shifted left by `delta.x`. After
 /// the traversal the remaining rows are blank-filled (the C++ trailing
 /// `writeLine`).
-pub fn ov_draw<L: OutlineViewer + ?Sized>(this: &L, ctx: &mut DrawCtx) {
+///
+/// NOTE: `this: &mut L` (not `&L`) — the `abs_origin` cache write requires
+/// mutability. Do NOT revert to `&L`: the C++ draw is logically const, but the
+/// port stores the origin here to feed [`Context::start_mouse_track`]
+/// (the Button::abs_origin pattern, recipe step 1 in docs/design/mouse-track.md).
+pub fn ov_draw<L: OutlineViewer + ?Sized>(this: &mut L, ctx: &mut DrawCtx) {
+    // Cache the absolute origin for the mouse-tracking capture (D3/D9 — the
+    // MouseTrackCapture converts abs mouse coords to view-local via this value,
+    // mirroring the Button::abs_origin pattern).
+    this.ov_mut().abs_origin = ctx.origin();
     let size = this.ov().state.size;
     let delta = this.ov().delta;
     let foc = this.ov().foc;
@@ -789,12 +826,12 @@ pub fn ov_set_state<L: OutlineViewer + ?Sized>(
 }
 
 /// `TOutlineViewer::handleEvent` — the scrollbar broadcast filter (inherited from
-/// `TScroller`), single-shot mouse positioning, and the keyboard nav switch.
+/// `TScroller`), mouse hold-tracking (D9/A3 seam, row 31), and the keyboard nav switch.
 ///
-/// TODO(row 31, D9): the C++ runs a `while(mouseEvent(...))` press-and-hold / edge
-/// auto-scroll loop. Until the live event loop grows a capture handler for it, we
-/// do exactly one positioning per mouse-down — plus the double-click select and
-/// the single-click graph toggle.
+/// The press-and-hold / edge auto-scroll loop (toutline.cpp:433-463) is ported
+/// via the A3 `MouseTrackCapture` seam: `MouseDown` arms capture; tracked
+/// `MouseMove`/`MouseAuto` route the loop body; `MouseUp` runs the post-loop
+/// graph-toggle logic (`dragged < 2` distinguishes click from drag).
 pub fn ov_handle_event<L: OutlineViewer + View + ?Sized>(
     this: &mut L,
     ev: &mut Event,
@@ -813,6 +850,19 @@ pub fn ov_handle_event<L: OutlineViewer + View + ?Sized>(
     }
 
     match *ev {
+        // -------------------------------------------------------------------
+        // evMouseDown — first loop iteration: position, then arm the
+        // mouse-track capture (D9/A3 seam, toutline.cpp:433-463).
+        //
+        // C++ `do { … } while(mouseEvent(event, evMouseMove + evMouseAuto))`:
+        // the loop body runs once per DOWN, MOVE, or AUTO event; the post-loop
+        // block (double-click / graph-toggle) runs after the hold ends.
+        //
+        // Unlike ListViewer, the post-loop logic is COMPLEX — it depends on
+        // `dragged` (how many iterations ran) and `mouse.x` at exit. We store
+        // `dragged` in `OvTrack` so the MouseUp arm can perform the post-loop
+        // checks faithfully.
+        // -------------------------------------------------------------------
         Event::MouseDown(me) => {
             let delta = this.ov().delta;
             let limit_y = this.ov().limit.y;
@@ -830,18 +880,40 @@ pub fn ov_handle_event<L: OutlineViewer + View + ?Sized>(
             } else {
                 foc
             };
-            // TODO(row 31, D9): the press-and-hold / edge auto-scroll drag loop.
+
+            // First loop iteration: position (C++ body line 436-462).
+            // `dragged` starts at 0, then incremented to 1 on the first
+            // iteration (C++ `if (dragged < 2) dragged++`).
+            let dragged: u8 = 1; // after first iteration
+            if foc != new_focus {
+                adjust_focus(this, new_focus, ctx);
+            }
 
             if me.flags.double_click {
-                this.selected(foc);
+                // Double-click: break immediately (no tracking), then
+                // post-loop: `selected(foc)`. `foc` is the focused item at
+                // break time (which is `new_focus` after the first iteration).
+                this.selected(this.ov().foc);
+                ev.clear();
+            } else if let Some(id) = this.ov().state.id() {
+                // Non-double-click: arm the mouse-track capture (D9/A3 seam).
+                // The post-loop graph-toggle logic runs in the MouseUp arm.
+                let abs_origin = this.ov().abs_origin;
+                this.ov_mut().track = Some(OvTrack { count: 0, dragged });
+                ctx.start_mouse_track(
+                    id,
+                    abs_origin,
+                    TrackMask {
+                        mouse_move: true,
+                        mouse_auto: true,
+                        ..Default::default()
+                    },
+                );
+                ev.clear();
             } else {
-                // Single click: positioning + a graph-region click toggles expand.
-                if foc != new_focus {
-                    adjust_focus(this, new_focus, ctx);
-                }
-                // If the click x is within the focused node's graph, toggle it.
+                // Uninserted (test/degenerate) widget: single-shot behavior,
+                // mirroring the existing pre-D9 path.
                 if let Some((level, _lines, flags)) = ov_get_node_info(this, this.ov().foc) {
-                    // The default graph width is level*3 + 3 (levWidth=endWidth=3).
                     let graph_w = level * 3 + 3;
                     if mouse.x < graph_w {
                         let cur_pos = this.ov().foc;
@@ -850,7 +922,143 @@ pub fn ov_handle_event<L: OutlineViewer + View + ?Sized>(
                         ov_update(this, ctx);
                     }
                 }
+                ev.clear();
             }
+        }
+
+        // -------------------------------------------------------------------
+        // evMouseMove (tracked) — the loop body's in-view move case.
+        //
+        // C++ toutline.cpp:437-462: `if (dragged < 2) dragged++` fires first
+        // (every iteration), then `if (mouseInView)` → compute newFocus.
+        // Out-of-view moves do nothing (only evMouseAuto steps the focus).
+        // Guarded by `track.is_some()`.
+        // -------------------------------------------------------------------
+        Event::MouseMove(me) if this.ov().track.is_some() => {
+            let delta = this.ov().delta;
+            let limit_y = this.ov().limit.y;
+            let foc = this.ov().foc;
+            let mouse = me.position;
+            let size = this.ov().state.size;
+            let in_view = mouse.x >= 0 && mouse.y >= 0 && mouse.x < size.x && mouse.y < size.y;
+
+            // Increment dragged (capped at 2) — faithful: first in the loop body.
+            if let Some(t) = this.ov_mut().track.as_mut()
+                && t.dragged < 2
+            {
+                t.dragged += 1;
+            }
+
+            if in_view {
+                let new_focus = {
+                    let i = delta.y + mouse.y;
+                    if i < limit_y { i } else { foc }
+                };
+                if foc != new_focus {
+                    adjust_focus(this, new_focus, ctx);
+                    // drawView() dropped (D8).
+                }
+            }
+            // Out-of-view moves: no-op (only evMouseAuto steps for out-of-view).
+            ev.clear();
+        }
+
+        // -------------------------------------------------------------------
+        // evMouseAuto (tracked) — the loop body's auto-scroll case.
+        //
+        // C++ toutline.cpp:437-462: `if (dragged < 2) dragged++`; then
+        // `if (mouseInView)` → compute newFocus; else: `count++`, if
+        // `count == mouseAutoToSkip` (3): reset, step by ±1 based on y.
+        // Guarded by `track.is_some()`.
+        // -------------------------------------------------------------------
+        Event::MouseAuto(me) if this.ov().track.is_some() => {
+            let delta = this.ov().delta;
+            let limit_y = this.ov().limit.y;
+            let foc = this.ov().foc;
+            let mouse = me.position;
+            let size = this.ov().state.size;
+            let in_view = mouse.x >= 0 && mouse.y >= 0 && mouse.x < size.x && mouse.y < size.y;
+
+            // Increment dragged (capped at 2) — faithful: first in the loop body.
+            if let Some(t) = this.ov_mut().track.as_mut()
+                && t.dragged < 2
+            {
+                t.dragged += 1;
+            }
+
+            let new_focus = if in_view {
+                let i = delta.y + mouse.y;
+                if i < limit_y { i } else { foc }
+            } else {
+                // Out-of-view AUTO: increment count, step every MOUSE_AUTO_TO_SKIP ticks.
+                let stepped = if let Some(t) = this.ov_mut().track.as_mut() {
+                    t.count += 1;
+                    if t.count == MOUSE_AUTO_TO_SKIP {
+                        t.count = 0;
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if stepped {
+                    if mouse.y < 0 {
+                        foc - 1
+                    } else if mouse.y >= size.y {
+                        foc + 1
+                    } else {
+                        foc
+                    }
+                } else {
+                    foc
+                }
+            };
+
+            if foc != new_focus {
+                adjust_focus(this, new_focus, ctx);
+                // drawView() dropped (D8).
+            }
+            ev.clear();
+        }
+
+        // -------------------------------------------------------------------
+        // evMouseUp (tracked) — post-loop logic (toutline.cpp:465-480).
+        //
+        // C++ post-loop:
+        //   if (meDoubleClick) selected(foc);
+        //   else if (dragged < 2 && firstThat(isFocused) != 0) {
+        //       graph = getGraph(focLevel,focLines,focFlags);
+        //       if (mouse.x < strwidth(graph)) { adjust; update; }
+        //   }
+        //
+        // `meDoubleClick` cannot arrive via a MouseUp (it's only on a down event),
+        // so in the capture flow the double-click branch is unreachable here.
+        // `dragged < 2` gates the graph-toggle: only a short press (≤1 iteration
+        // after the first) toggles expansion; a drag must NOT toggle.
+        // `mouse` at exit is the last localized position, which for MouseUp is
+        // the release position (the capture forwards the localized up event).
+        // Guarded by `track.is_some()`.
+        // -------------------------------------------------------------------
+        Event::MouseUp(me) if this.ov().track.is_some() => {
+            let mouse = me.position;
+            let dragged = this.ov().track.map(|t| t.dragged).unwrap_or(2);
+            this.ov_mut().track = None;
+
+            // Post-loop graph-toggle: only if dragged < 2 (it was a click, not
+            // a drag) and there is a focused node with a graph column.
+            if dragged < 2
+                && let Some((level, _lines, flags)) = ov_get_node_info(this, this.ov().foc)
+            {
+                let graph_w = level * 3 + 3;
+                if mouse.x < graph_w {
+                    let cur_pos = this.ov().foc;
+                    let expanded = flags & OV_EXPANDED != 0;
+                    this.adjust(cur_pos, !expanded);
+                    ov_update(this, ctx);
+                }
+            }
+            // drawView() dropped (D8).
             ev.clear();
         }
 
@@ -1454,5 +1662,458 @@ mod tests {
         // not NotExpanded (darkgray-on-blue) — the snapshot legend makes this
         // visible and a regression to `not_expanded_color` would change it.
         insta::assert_snapshot!(render_outline(&mut outline, 20, 5));
+    }
+
+    // -- A3 mouse-track seam: Outline (D9 adoption) ---------------------------
+    //
+    // These tests verify that MouseDown arms tracking with the view-id payload,
+    // MouseMove/MouseAuto route focus, MouseAuto out-of-view scrolls after the
+    // skip count, and MouseUp performs the post-loop graph-toggle logic:
+    // drag (dragged >= 2) must NOT toggle; a click (dragged < 2) DOES toggle.
+
+    fn ov_mouse_down(x: i32, y: i32) -> Event {
+        Event::MouseDown(crate::event::MouseEvent {
+            position: Point::new(x, y),
+            buttons: crate::event::MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+
+    fn ov_mouse_move(x: i32, y: i32) -> Event {
+        Event::MouseMove(crate::event::MouseEvent {
+            position: Point::new(x, y),
+            buttons: crate::event::MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+
+    fn ov_mouse_auto(x: i32, y: i32) -> Event {
+        Event::MouseAuto(crate::event::MouseEvent {
+            position: Point::new(x, y),
+            ..Default::default()
+        })
+    }
+
+    fn ov_mouse_up(x: i32, y: i32) -> Event {
+        Event::MouseUp(crate::event::MouseEvent {
+            position: Point::new(x, y),
+            ..Default::default()
+        })
+    }
+
+    fn ov_double_click(x: i32, y: i32) -> Event {
+        Event::MouseDown(crate::event::MouseEvent {
+            position: Point::new(x, y),
+            flags: crate::event::MouseEventFlags {
+                double_click: true,
+                ..Default::default()
+            },
+            buttons: crate::event::MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+
+    /// Stamp an outline with a ViewId (as Group::insert would do).
+    fn give_ov_id(o: &mut Outline) -> ViewId {
+        let id = ViewId::next();
+        o.ov.state.id = Some(id);
+        id
+    }
+
+    /// `MouseDown` (non-double-click) on an inserted outline: arms tracking
+    /// with the correct view-id payload in the PushCapture deferred.
+    #[test]
+    fn ov_mouse_down_arms_tracking_and_pushes_capture() {
+        // 20×5 outline, 3-node "Animals" tree (limit.y = 3 after ov_update).
+        let mut o = Outline::new(Rect::new(0, 0, 20, 5), None, None, Some(animals_tree()));
+        let id = give_ov_id(&mut o);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            ov_update(&mut o, &mut ctx);
+        }
+        deferred.clear();
+
+        // Click at (5, 1): delta.y=0, i = 0+1=1 < limit_y=3 → new_focus = 1.
+        let mut ev = ov_mouse_down(5, 1);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            o.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "MouseDown consumed");
+        assert_eq!(o.ov().foc, 1, "focus positioned to item 1");
+        assert!(o.ov().track.is_some(), "track state armed");
+        // The PushCapture deferred must name this outline's id.
+        assert_eq!(deferred.len(), 1, "one PushCapture deferred");
+        assert!(
+            matches!(deferred[0], Deferred::PushCapture(_)),
+            "deferred[0] is PushCapture"
+        );
+        if let Deferred::PushCapture(ref h) = deferred[0] {
+            assert_eq!(h.view(), Some(id), "capture tracks the outline's id");
+        }
+    }
+
+    /// `MouseDown` without an id: single-shot behavior, no tracking.
+    #[test]
+    fn ov_mouse_down_without_id_is_single_shot() {
+        let mut o = Outline::new(Rect::new(0, 0, 20, 5), None, None, Some(animals_tree()));
+        // No id.
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            ov_update(&mut o, &mut ctx);
+        }
+        deferred.clear();
+
+        let mut ev = ov_mouse_down(5, 1);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            o.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(o.ov().track.is_none(), "no track without an id");
+        assert!(
+            deferred
+                .iter()
+                .all(|d| !matches!(d, Deferred::PushCapture(_))),
+            "no capture pushed for id-less outline"
+        );
+    }
+
+    /// `MouseMove` in-view while tracking: repositions focus.
+    #[test]
+    fn ov_mouse_move_in_view_recomputes_focus() {
+        let mut o = Outline::new(Rect::new(0, 0, 20, 5), None, None, Some(animals_tree()));
+        give_ov_id(&mut o);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            ov_update(&mut o, &mut ctx);
+        }
+        deferred.clear();
+
+        // Arm tracking with a click at row 0.
+        let mut ev = ov_mouse_down(5, 0);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            o.handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(o.ov().foc, 0);
+        deferred.clear();
+
+        // MouseMove to row 2: i = delta.y(0) + 2 = 2 < limit_y(3) → new_focus = 2.
+        let mut ev = ov_mouse_move(5, 2);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            o.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "MouseMove consumed");
+        assert_eq!(o.ov().foc, 2, "focus moves to row 2");
+        assert!(o.ov().track.is_some(), "still tracking after move");
+        // dragged increments: was 1 after down, now 2.
+        assert_eq!(o.ov().track.unwrap().dragged, 2, "dragged incremented");
+    }
+
+    /// `MouseAuto` out-of-view (tracking): skips 2 ticks, then steps on the 3rd.
+    #[test]
+    fn ov_mouse_auto_out_of_view_skips_then_steps() {
+        let mut o = Outline::new(Rect::new(0, 0, 20, 5), None, None, Some(animals_tree()));
+        give_ov_id(&mut o);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            ov_update(&mut o, &mut ctx);
+        }
+        // Focus item 1 (Cats), arm tracking manually.
+        o.ov_mut().foc = 1;
+        o.ov_mut().track = Some(OvTrack {
+            count: 0,
+            dragged: 1,
+        });
+        deferred.clear();
+
+        // 2 ticks below (y >= size.y = 5): count reaches 1, 2 — no step.
+        for tick in 1..=2 {
+            let mut ev = ov_mouse_auto(5, 6); // y=6 >= size.y=5
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            o.handle_event(&mut ev, &mut ctx);
+            assert_eq!(o.ov().foc, 1, "tick {tick}: no step yet");
+        }
+        // 3rd tick: count == MOUSE_AUTO_TO_SKIP → step forward.
+        let mut ev = ov_mouse_auto(5, 6);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            o.handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(o.ov().foc, 2, "3rd tick steps focus by +1 (below view)");
+    }
+
+    /// `MouseUp` while tracking + `dragged < 2` (click): graph-toggle fires if
+    /// the release x is within the graph column.
+    #[test]
+    fn ov_mouse_up_click_toggles_graph_expansion() {
+        // Build a tree with Animals (expanded, has children) at position 0.
+        // Animals at level 0 → graph_w = 0*3 + 3 = 3. Click at x < 3 → toggle.
+        let mut o = Outline::new(Rect::new(0, 0, 20, 5), None, None, Some(animals_tree()));
+        give_ov_id(&mut o);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            ov_update(&mut o, &mut ctx);
+        }
+        o.ov_mut().foc = 0;
+        // Arm tracking with dragged = 1 (click — fewer than 2 iterations).
+        o.ov_mut().track = Some(OvTrack {
+            count: 0,
+            dragged: 1,
+        });
+        deferred.clear();
+
+        // MouseUp at (1, 0): x=1 < graph_w=3 → should toggle Animals (expanded → collapsed).
+        assert!(o.root.as_ref().unwrap().expanded, "Animals starts expanded");
+        let mut ev = ov_mouse_up(1, 0);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            o.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "MouseUp consumed");
+        assert!(o.ov().track.is_none(), "track cleared on MouseUp");
+        assert!(
+            !o.root.as_ref().unwrap().expanded,
+            "Animals collapsed after click on graph"
+        );
+    }
+
+    /// `MouseUp` while tracking + `dragged >= 2` (drag): graph-toggle does NOT
+    /// fire — the drag discriminator (toutline.cpp:469 `if (dragged < 2)`) gates it.
+    #[test]
+    fn ov_mouse_up_drag_does_not_toggle_graph() {
+        let mut o = Outline::new(Rect::new(0, 0, 20, 5), None, None, Some(animals_tree()));
+        give_ov_id(&mut o);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            ov_update(&mut o, &mut ctx);
+        }
+        o.ov_mut().foc = 0;
+        // Arm tracking with dragged = 2 (drag — 2+ iterations).
+        o.ov_mut().track = Some(OvTrack {
+            count: 0,
+            dragged: 2,
+        });
+        deferred.clear();
+
+        assert!(o.root.as_ref().unwrap().expanded, "Animals starts expanded");
+        let mut ev = ov_mouse_up(1, 0); // x < graph_w — would toggle without the guard
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            o.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(o.ov().track.is_none(), "track cleared");
+        assert!(
+            o.root.as_ref().unwrap().expanded,
+            "Animals still expanded (drag must NOT toggle graph)"
+        );
+    }
+
+    /// `MouseUp` outside the graph column (click): does NOT toggle.
+    #[test]
+    fn ov_mouse_up_click_outside_graph_no_toggle() {
+        let mut o = Outline::new(Rect::new(0, 0, 20, 5), None, None, Some(animals_tree()));
+        give_ov_id(&mut o);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            ov_update(&mut o, &mut ctx);
+        }
+        o.ov_mut().foc = 0;
+        o.ov_mut().track = Some(OvTrack {
+            count: 0,
+            dragged: 1,
+        });
+        deferred.clear();
+
+        // graph_w = 3; release at x = 5 (outside graph) → no toggle.
+        let mut ev = ov_mouse_up(5, 0);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            o.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(o.root.as_ref().unwrap().expanded, "Animals still expanded");
+    }
+
+    /// Stray `MouseUp` (not tracking) falls through unconsumed.
+    #[test]
+    fn ov_stray_mouse_up_falls_through() {
+        let mut o = Outline::new(Rect::new(0, 0, 20, 5), None, None, Some(animals_tree()));
+        give_ov_id(&mut o);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+
+        let mut ev = ov_mouse_up(5, 2);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            o.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(
+            !ev.is_nothing(),
+            "stray MouseUp falls through (not consumed)"
+        );
+    }
+
+    /// Stray `MouseMove` (not tracking) falls through unconsumed.
+    #[test]
+    fn ov_stray_mouse_move_falls_through() {
+        let mut o = Outline::new(Rect::new(0, 0, 20, 5), None, None, Some(animals_tree()));
+        give_ov_id(&mut o);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+
+        let mut ev = ov_mouse_move(5, 2);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            o.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(
+            !ev.is_nothing(),
+            "stray MouseMove falls through (not consumed)"
+        );
+    }
+
+    /// Double-click: calls `selected(foc)`, no tracking armed.
+    #[test]
+    fn ov_double_click_calls_selected_no_tracking() {
+        // Override selected() to record the call by changing foc to a sentinel.
+        struct CountingOutline {
+            ov: OutlineViewerState,
+            root: Option<Box<Node>>,
+            selected_called: bool,
+        }
+        impl OutlineViewer for CountingOutline {
+            fn ov(&self) -> &OutlineViewerState {
+                &self.ov
+            }
+            fn ov_mut(&mut self) -> &mut OutlineViewerState {
+                &mut self.ov
+            }
+            fn get_root(&self) -> Option<&Node> {
+                self.root.as_deref()
+            }
+            fn get_next<'a>(&'a self, n: &'a Node) -> Option<&'a Node> {
+                n.next.as_deref()
+            }
+            fn get_child<'a>(&'a self, n: &'a Node, i: i32) -> Option<&'a Node> {
+                let mut p = n.child_list.as_deref();
+                let mut idx = 0;
+                while idx < i {
+                    p = p.and_then(|x| x.next.as_deref());
+                    idx += 1;
+                }
+                p
+            }
+            fn get_num_children(&self, n: &Node) -> i32 {
+                let mut i = 0;
+                let mut p = n.child_list.as_deref();
+                while let Some(x) = p {
+                    i += 1;
+                    p = x.next.as_deref();
+                }
+                i
+            }
+            fn get_text<'a>(&'a self, n: &'a Node) -> &'a str {
+                &n.text
+            }
+            fn is_expanded(&self, n: &Node) -> bool {
+                n.expanded
+            }
+            fn has_children(&self, n: &Node) -> bool {
+                n.child_list.is_some()
+            }
+            fn adjust(&mut self, pos: i32, expand: bool) {
+                if let Some(root) = self.root.as_deref_mut() {
+                    set_expanded_at_pos(root, pos, &mut 0i32, expand);
+                }
+            }
+            fn selected(&mut self, _i: i32) {
+                self.selected_called = true;
+            }
+        }
+        impl View for CountingOutline {
+            fn state(&self) -> &ViewState {
+                &self.ov.state
+            }
+            fn state_mut(&mut self) -> &mut ViewState {
+                &mut self.ov.state
+            }
+            fn draw(&mut self, ctx: &mut DrawCtx) {
+                ov_draw(self, ctx);
+            }
+            fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
+                ov_handle_event(self, ev, ctx);
+            }
+            fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
+                ov_set_state(self, flag, enable, ctx);
+            }
+            fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+                Some(self)
+            }
+        }
+
+        let mut o = CountingOutline {
+            ov: OutlineViewerState::new(Rect::new(0, 0, 20, 5), None, None),
+            root: Some(animals_tree()),
+            selected_called: false,
+        };
+        let id = ViewId::next();
+        o.ov.state.id = Some(id);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            ov_update(&mut o, &mut ctx);
+        }
+        deferred.clear();
+
+        // Double-click at row 1.
+        let mut ev = ov_double_click(5, 1);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            o.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "double-click consumed");
+        assert!(o.selected_called, "selected() called on double-click");
+        assert!(o.ov.track.is_none(), "no tracking armed on double-click");
+        assert!(
+            deferred
+                .iter()
+                .all(|d| !matches!(d, Deferred::PushCapture(_))),
+            "double-click does NOT arm tracking"
+        );
     }
 }

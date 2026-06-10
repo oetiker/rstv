@@ -54,8 +54,9 @@
 //!   / [`Role::ListNormalInactive`] / [`Role::ListFocused`] / [`Role::ListSelected`]
 //!   / [`Role::ListDivider`]; a subclass's `getPalette` override surfaces as a
 //!   different [`ListRoles`] quintet from [`ListViewer::list_roles`].
-//! - **mouse press-and-hold / auto-scroll loop** → `TODO(row 31, D9)` (single-shot
-//!   positioning only, like the scrollbar/cluster/input-line).
+//! - **mouse press-and-hold / auto-scroll loop** — **landed** (row 31, D9 adoption):
+//!   `MouseDown` arms the A3 `MouseTrackCapture`; `MouseMove`/`MouseAuto`/`MouseUp`
+//!   route the hold loop faithfully (out-of-view auto-scroll, `mouseAutosToSkip = 4`).
 //! - **`change_bounds` step republish** → `TODO(resize)` (no consumer yet). NOTE:
 //!   a resize consumer must NOT call [`update_steps`] — that reproduces the C++
 //!   **ctor** `setStep` formula, but `TListViewer::changeBounds` (tlstview.cpp:71-74)
@@ -66,6 +67,7 @@
 //! - **`showMarkers` block** dropped (removed framework-wide at row 23).
 //! - scroller/list-viewer read-sync unification → optional later, out of scope.
 
+use crate::capture::TrackMask;
 use crate::command::Command;
 use crate::event::{Event, Key, ctrl_to_arrow};
 use crate::theme::Role;
@@ -73,6 +75,23 @@ use crate::view::{Context, DrawCtx, Point, StateFlag, View, ViewId, ViewState};
 
 /// The empty-list placeholder text (`TListViewer::emptyText`, `tlstview.cpp`).
 const EMPTY_TEXT: &str = "<empty>";
+
+/// `mouseAutosToSkip = 4` — number of `evMouseAuto` ticks to skip (count reaches
+/// this threshold) before stepping the focus by one item when the mouse is
+/// outside the view (tlstview.cpp:219). Faithful.
+const MOUSE_AUTOS_TO_SKIP: i32 = 4;
+
+/// Per-hold tracking state — initialized by `MouseDown` and cleared by `MouseUp`
+/// (the D9 successor of the C++ locals `count` and `oldItem`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LvTrack {
+    /// `count` — accumulated `evMouseAuto` ticks since the last step/reset
+    /// (re-initialised to 0 each time `count == mouseAutosToSkip`).
+    count: i32,
+    /// `oldItem` — the focused item at the START of the current tick; used to
+    /// decide whether a `focusItemNum` + redraw is needed (C++ `if newItem != oldItem`).
+    old_item: i32,
+}
 
 // ---------------------------------------------------------------------------
 // ListViewerState — the non-virtual data members (TListViewer's fields)
@@ -100,6 +119,14 @@ pub struct ListViewerState {
     pub h_scroll_bar: Option<ViewId>,
     /// The vertical scrollbar, by id (`None` if absent). TV's `vScrollBar`.
     pub v_scroll_bar: Option<ViewId>,
+    /// Absolute screen position of this view's `(0, 0)`, cached by the last
+    /// `draw` call — feeds the [`MouseTrackCapture`] origin for localizing
+    /// subsequent `MouseMove`/`MouseAuto` events (D9/A3 seam).
+    pub(crate) abs_origin: Point,
+    /// Per-hold mouse-tracking state — `Some` while a track is in flight
+    /// (between `MouseDown` and `MouseUp`), `None` otherwise. Guards the
+    /// tracking arms against stray (untracked) events.
+    pub(crate) track: Option<LvTrack>,
 }
 
 impl ListViewerState {
@@ -135,6 +162,8 @@ impl ListViewerState {
             indent: 0,
             h_scroll_bar,
             v_scroll_bar,
+            abs_origin: Point::new(0, 0),
+            track: None,
         }
     }
 }
@@ -422,13 +451,18 @@ pub fn set_state<L: ListViewer + ?Sized>(
 pub fn handle_event<L: ListViewer + ?Sized>(this: &mut L, ev: &mut Event, ctx: &mut Context) {
     match *ev {
         // -------------------------------------------------------------------
-        // evMouseDown — single-shot positioning + double-click select.
+        // evMouseDown — first loop iteration: position + optional select, then
+        // arm the mouse-track capture (D9/A3 seam).
         //
-        // TODO(row 31, D9): the C++ runs a `do { … } while(mouseEvent(event,
-        // evMouseMove | evMouseAuto))` press-and-hold / edge auto-scroll loop.
-        // That synchronous inner pump needs the live event loop (a capture
-        // handler on MouseMove/MouseAuto/MouseUp). Until then we do exactly one
-        // positioning per mouse-down (and the double-click select).
+        // C++ tlstview.cpp:224-278: `do { … } while(mouseEvent(event,
+        // evMouseMove | evMouseAuto))`. The first iteration runs on the down
+        // event; subsequent iterations arrive as tracked MouseMove/MouseAuto
+        // events; the post-loop `focusItemNum` runs in the MouseUp arm.
+        //
+        // Double-click break (C++:271): if the down event has `meDoubleClick`,
+        // the loop body breaks immediately after the first iteration — no
+        // capture is needed (the hold ends at the same moment it begins). We
+        // mimic this by skipping `start_mouse_track` on double-click.
         // -------------------------------------------------------------------
         Event::MouseDown(me) => {
             let size = this.lv().state.size;
@@ -441,9 +475,162 @@ pub fn handle_event<L: ListViewer + ?Sized>(this: &mut L, ev: &mut Event, ctx: &
             let new_item = mouse.y + size.y * (mouse.x / col_width) + top_item;
             focus_item_num(this, new_item, ctx);
             // drawView() dropped (D8).
-            if me.flags.double_click && this.lv().range > new_item {
-                this.select_item(new_item, ctx);
+            if me.flags.double_click {
+                // Double-click: break immediately (no tracking). Post-loop:
+                // focusItemNum(newItem) already done above; select if in range.
+                if this.lv().range > new_item {
+                    this.select_item(new_item, ctx);
+                }
+            } else if let Some(id) = this.lv().state.id() {
+                // Non-double-click: arm the mouse-track capture (the D9/A3
+                // seam). Subsequent MouseMove/MouseAuto/MouseUp events are
+                // routed back into this handle_event via Deferred::MouseTrack,
+                // localized to view-local coords via abs_origin.
+                let abs_origin = this.lv().abs_origin;
+                this.lv_mut().track = Some(LvTrack {
+                    count: 0,
+                    old_item: new_item,
+                });
+                ctx.start_mouse_track(
+                    id,
+                    abs_origin,
+                    TrackMask {
+                        mouse_move: true,
+                        mouse_auto: true,
+                        ..Default::default()
+                    },
+                );
+            } else {
+                // Degenerate fallback: an uninserted (test-only) list has no id
+                // (ids are stamped at Group::insert), so the capture broker
+                // cannot resolve it. Position-only single-shot behavior,
+                // mimicking the pre-D9 path — no hold tracking.
             }
+            ev.clear();
+        }
+
+        // -------------------------------------------------------------------
+        // evMouseMove (tracked) — the loop body's in-view move case.
+        //
+        // C++ tlstview.cpp:229-231: if `mouseInView` → compute item from pos.
+        // Out-of-view moves do nothing (only evMouseAuto steps the focus).
+        // Guarded by `track.is_some()`.
+        // -------------------------------------------------------------------
+        Event::MouseMove(me) if this.lv().track.is_some() => {
+            let size = this.lv().state.size;
+            let num_cols = this.lv().num_cols;
+            let col_width = size.x / num_cols + 1;
+            let top_item = this.lv().top_item;
+            let mouse = me.position;
+            // mouseInView equivalent: position is view-local from the capture.
+            let in_view = mouse.x >= 0 && mouse.y >= 0 && mouse.x < size.x && mouse.y < size.y;
+            if in_view {
+                let new_item = mouse.y + size.y * (mouse.x / col_width) + top_item;
+                let old_item = this.lv().track.map(|t| t.old_item).unwrap_or(new_item);
+                if new_item != old_item {
+                    focus_item_num(this, new_item, ctx);
+                    // drawView() dropped (D8).
+                }
+                if let Some(t) = this.lv_mut().track.as_mut() {
+                    t.old_item = new_item;
+                }
+            }
+            // Out-of-view moves: no-op (C++ does nothing in the out-of-view
+            // branch for evMouseMove — only evMouseAuto steps the focus).
+            ev.clear();
+        }
+
+        // -------------------------------------------------------------------
+        // evMouseAuto (tracked) — the loop body's auto-scroll case.
+        //
+        // C++ tlstview.cpp:229-263: in-view → same as move; out-of-view →
+        // increment count, every `mouseAutosToSkip` ticks step the focused
+        // item by ±1 (single-col) or ±size.y / page (multi-col).
+        // Guarded by `track.is_some()`.
+        // -------------------------------------------------------------------
+        Event::MouseAuto(me) if this.lv().track.is_some() => {
+            let size = this.lv().state.size;
+            let num_cols = this.lv().num_cols;
+            let col_width = size.x / num_cols + 1;
+            let top_item = this.lv().top_item;
+            let focused = this.lv().focused;
+            let mouse = me.position;
+            let in_view = mouse.x >= 0 && mouse.y >= 0 && mouse.x < size.x && mouse.y < size.y;
+
+            let new_item = if in_view {
+                // In-view: same computation as MouseDown/MouseMove.
+                mouse.y + size.y * (mouse.x / col_width) + top_item
+            } else {
+                // Out-of-view: increment the auto-skip counter; every
+                // MOUSE_AUTOS_TO_SKIP ticks step the focus by the geometry
+                // rules from tlstview.cpp:233-263.
+                let t = this.lv_mut().track.as_mut().unwrap();
+                t.count += 1;
+                if t.count == MOUSE_AUTOS_TO_SKIP {
+                    t.count = 0;
+                    if num_cols == 1 {
+                        // Single-col: step by ±1 based on y.
+                        if mouse.y < 0 {
+                            focused - 1
+                        } else if mouse.y >= size.y {
+                            focused + 1
+                        } else {
+                            focused // in-band y but out-of-band x? keep focused
+                        }
+                    } else {
+                        // Multi-col: step by column (±size.y), or page edges.
+                        if mouse.x < 0 {
+                            focused - size.y
+                        } else if mouse.x >= size.x {
+                            focused + size.y
+                        } else if mouse.y < 0 {
+                            focused - focused % size.y
+                        } else if mouse.y > size.y {
+                            focused - focused % size.y + size.y - 1
+                        } else {
+                            focused
+                        }
+                    }
+                } else {
+                    // Not yet at the skip threshold: no step.
+                    focused
+                }
+            };
+
+            let old_item = this.lv().track.map(|t| t.old_item).unwrap_or(new_item);
+            if new_item != old_item {
+                focus_item_num(this, new_item, ctx);
+                // drawView() dropped (D8).
+            }
+            if let Some(t) = this.lv_mut().track.as_mut() {
+                t.old_item = new_item;
+            }
+            ev.clear();
+        }
+
+        // -------------------------------------------------------------------
+        // evMouseUp (tracked) — post-loop: focusItemNum(newItem) + clear track.
+        //
+        // C++ tlstview.cpp:274-278: `focusItemNum(newItem); drawView(); if
+        // double-click && range > newItem: selectItem(newItem); clearEvent`.
+        // We do `focusItemNum(focused)` (the last-known focused item, mirroring
+        // the C++ post-loop `newItem` which equals `focused` after the last
+        // loop iteration) then clear the track. Double-click is NOT re-checked
+        // here: this MouseUp POPS the capture (ConsumedPop), so the hold is
+        // already over before any second down can arrive — the second down of a
+        // double-click re-enters the MouseDown arm as a fresh event and fires
+        // the select path there. The C++ meDoubleClick check on the up path
+        // (tlstview.cpp:276) is semantically unreachable in rstv because
+        // MouseUp never carries double_click (a down-event-only flag).
+        // Guarded by `track.is_some()`.
+        // -------------------------------------------------------------------
+        Event::MouseUp(_) if this.lv().track.is_some() => {
+            this.lv_mut().track = None;
+            // Post-loop focusItemNum(newItem): re-focus the current focused item
+            // (clamped, v-bar synced). Faithful to C++:274 `focusItemNum(newItem)`.
+            let focused = this.lv().focused;
+            focus_item_num(this, focused, ctx);
+            // drawView() dropped (D8).
             ev.clear();
         }
 
@@ -536,7 +723,18 @@ pub fn handle_event<L: ListViewer + ?Sized>(this: &mut L, ev: &mut Event, ctx: &
 /// `<empty>` placeholder, the `│` divider, and the focused-cell cursor. The
 /// `showMarkers` block is dropped (D8/row 23). `writeLine`/`DrawBuffer` becomes
 /// direct [`DrawCtx`] writes (no `DrawBuffer` in our model).
-pub fn draw<L: ListViewer + ?Sized>(this: &L, ctx: &mut DrawCtx) {
+///
+/// Also caches `abs_origin` for the D9/A3 mouse-track capture.
+///
+/// NOTE: `this: &mut L` (not `&L`) — the `abs_origin` cache write requires
+/// mutability. Do NOT revert to `&L`: the C++ draw is logically const, but the
+/// port stores the origin here to feed [`Context::start_mouse_track`]
+/// (the Button::abs_origin pattern, recipe step 1 in docs/design/mouse-track.md).
+pub fn draw<L: ListViewer + ?Sized>(this: &mut L, ctx: &mut DrawCtx) {
+    // Cache the absolute origin for the mouse-tracking capture (D3/D9 — the
+    // MouseTrackCapture converts abs mouse coords to view-local via this value,
+    // mirroring the Button::abs_origin pattern).
+    this.lv_mut().abs_origin = ctx.origin();
     let lv = this.lv();
     let st = &lv.state.state;
     let active = st.selected && st.active;
@@ -1526,5 +1724,424 @@ mod tests {
         l.lv.state.state.selected = true;
         l.lv.state.state.active = true;
         insta::assert_snapshot!(render(&mut l, 12, 3));
+    }
+
+    // -- A3 mouse-track seam: ListViewer (D9 adoption) ------------------------
+    //
+    // These tests drive the tracking arms directly (as the pump's
+    // Deferred::MouseTrack does), verifying that the MouseDown arms capture with
+    // the view-id payload, MouseMove/MouseAuto recompute focus, MouseAuto steps
+    // out-of-view after the skip count, and MouseUp clears the track.
+
+    fn mouse_down_at(x: i32, y: i32) -> Event {
+        Event::MouseDown(crate::event::MouseEvent {
+            position: Point::new(x, y),
+            buttons: crate::event::MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+
+    fn mouse_move_at(x: i32, y: i32) -> Event {
+        Event::MouseMove(crate::event::MouseEvent {
+            position: Point::new(x, y),
+            buttons: crate::event::MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+
+    fn mouse_auto_at(x: i32, y: i32) -> Event {
+        Event::MouseAuto(crate::event::MouseEvent {
+            position: Point::new(x, y),
+            ..Default::default()
+        })
+    }
+
+    fn mouse_up_at(x: i32, y: i32) -> Event {
+        Event::MouseUp(crate::event::MouseEvent {
+            position: Point::new(x, y),
+            ..Default::default()
+        })
+    }
+
+    fn double_click_at(x: i32, y: i32) -> Event {
+        Event::MouseDown(crate::event::MouseEvent {
+            position: Point::new(x, y),
+            flags: crate::event::MouseEventFlags {
+                double_click: true,
+                ..Default::default()
+            },
+            buttons: crate::event::MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+    }
+
+    /// Helper: stamp the list with a fresh ViewId (as Group::insert would do).
+    fn give_id(l: &mut FakeList) -> ViewId {
+        let id = ViewId::next();
+        l.lv.state.id = Some(id);
+        id
+    }
+
+    /// `MouseDown` (non-double-click) on an inserted list: arms tracking with
+    /// the correct view-id payload in the PushCapture deferred.
+    #[test]
+    fn mouse_down_arms_tracking_and_pushes_capture() {
+        // 10×5 single-col list, 20 items. Click at (3, 2) → newItem = 2.
+        let mut l = FakeList::new(Rect::new(0, 0, 10, 5), 1, items(20), None, None);
+        let id = give_id(&mut l);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+
+        let mut ev = mouse_down_at(3, 2);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            l.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "MouseDown consumed");
+        assert_eq!(l.lv.focused, 2, "focus positioned to item 2");
+        assert!(l.lv.track.is_some(), "track state armed");
+        // The PushCapture deferred must name this list's id.
+        assert_eq!(deferred.len(), 1, "one PushCapture deferred");
+        assert!(
+            matches!(deferred[0], Deferred::PushCapture(_)),
+            "deferred[0] is PushCapture"
+        );
+        if let Deferred::PushCapture(ref h) = deferred[0] {
+            assert_eq!(h.view(), Some(id), "capture tracks the list's id");
+        }
+    }
+
+    /// `MouseDown` without an id (uninserted list): single-shot behavior,
+    /// no tracking, no capture — faithful fallback.
+    #[test]
+    fn mouse_down_without_id_is_single_shot() {
+        let mut l = FakeList::new(Rect::new(0, 0, 10, 5), 1, items(20), None, None);
+        // No id assigned.
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+
+        let mut ev = mouse_down_at(3, 2);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            l.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(l.lv.track.is_none(), "no track without an id");
+        assert!(deferred.is_empty(), "no capture pushed for id-less list");
+    }
+
+    /// Double-click: positions + selects immediately; no tracking armed.
+    #[test]
+    fn double_click_selects_and_does_not_arm_tracking() {
+        let mut g = Group::new(Rect::new(0, 0, 20, 10));
+        let id = g.insert(Box::new(FakeList::new(
+            Rect::new(0, 0, 10, 5),
+            1,
+            items(20),
+            None,
+            None,
+        )));
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+
+        let mut ev = double_click_at(3, 2);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            g.find_mut(id).unwrap().handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "double-click consumed");
+        // No PushCapture — the loop broke immediately on double-click.
+        assert!(
+            deferred
+                .iter()
+                .all(|d| !matches!(d, Deferred::PushCapture(_))),
+            "double-click does NOT arm tracking"
+        );
+        // selectItem was called (cmListItemSelected broadcast).
+        assert!(
+            out.iter().any(|e| matches!(e,
+                Event::Broadcast { command, .. } if *command == Command::LIST_ITEM_SELECTED
+            )),
+            "double-click selects (cmListItemSelected)"
+        );
+    }
+
+    /// `MouseMove` while tracking (in-view): recomputes item + updates focus.
+    #[test]
+    fn mouse_move_in_view_recomputes_focus() {
+        let mut l = FakeList::new(Rect::new(0, 0, 10, 5), 1, items(20), None, None);
+        give_id(&mut l);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+
+        // Arm tracking with a MouseDown at item 0.
+        let mut ev = mouse_down_at(0, 0);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            l.handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(l.lv.focused, 0);
+        deferred.clear();
+
+        // MouseMove to row 3 (item 3 in single-col, colWidth=11).
+        let mut ev = mouse_move_at(2, 3);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            l.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "MouseMove consumed");
+        assert_eq!(l.lv.focused, 3, "focus moves with the mouse");
+        assert!(l.lv.track.is_some(), "still tracking after move");
+    }
+
+    /// `MouseMove` outside the view (tracking): no-op (C++ only reacts to
+    /// evMouseAuto for out-of-view scrolling, not evMouseMove).
+    #[test]
+    fn mouse_move_out_of_view_is_noop() {
+        let mut l = FakeList::new(Rect::new(0, 0, 10, 5), 1, items(20), None, None);
+        give_id(&mut l);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+
+        let mut ev = mouse_down_at(0, 2);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            l.handle_event(&mut ev, &mut ctx);
+        }
+        let focused_after_down = l.lv.focused;
+        deferred.clear();
+
+        // Move outside (y = -1): no focus change.
+        let mut ev = mouse_move_at(0, -1);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            l.handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(
+            l.lv.focused, focused_after_down,
+            "out-of-view MouseMove does not change focus"
+        );
+    }
+
+    /// `MouseAuto` in-view (tracking): recomputes item just like MouseMove.
+    #[test]
+    fn mouse_auto_in_view_recomputes_focus() {
+        let mut l = FakeList::new(Rect::new(0, 0, 10, 5), 1, items(20), None, None);
+        give_id(&mut l);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+
+        let mut ev = mouse_down_at(0, 0);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            l.handle_event(&mut ev, &mut ctx);
+        }
+        deferred.clear();
+
+        // MouseAuto at row 4 (in-view): item 4.
+        let mut ev = mouse_auto_at(0, 4);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            l.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "MouseAuto consumed");
+        assert_eq!(l.lv.focused, 4, "in-view MouseAuto repositions focus");
+    }
+
+    /// `MouseAuto` out-of-view (single-col, tracking): skips the first 3 ticks
+    /// (count 1, 2, 3), then on the 4th tick steps the focused item by +1.
+    #[test]
+    fn mouse_auto_out_of_view_skips_then_steps_single_col() {
+        let mut l = FakeList::new(Rect::new(0, 0, 10, 5), 1, items(20), None, None);
+        give_id(&mut l);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+
+        // Focus item 2.
+        let mut ev = mouse_down_at(0, 2);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            l.handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(l.lv.focused, 2);
+        deferred.clear();
+
+        // 3 ticks below the view (y >= size.y = 5): count reaches 1, 2, 3 — no step.
+        for tick in 1..=3 {
+            let mut ev = mouse_auto_at(0, 7); // y=7 >= size.y=5
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            l.handle_event(&mut ev, &mut ctx);
+            assert_eq!(
+                l.lv.focused, 2,
+                "tick {tick}: focus stays at 2 before threshold"
+            );
+        }
+        // 4th tick: count == MOUSE_AUTOS_TO_SKIP (4) → step forward.
+        let mut ev = mouse_auto_at(0, 7);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            l.handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(l.lv.focused, 3, "4th tick steps focus by +1 (below view)");
+        // count is reset to 0: next 3 ticks should not step.
+        for tick in 1..=3 {
+            let mut ev = mouse_auto_at(0, 7);
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            l.handle_event(&mut ev, &mut ctx);
+            assert_eq!(l.lv.focused, 3, "after reset, tick {tick}: no step");
+        }
+    }
+
+    /// `MouseAuto` out-of-view above (single-col): steps backward on tick 4.
+    #[test]
+    fn mouse_auto_out_of_view_above_steps_backward() {
+        let mut l = FakeList::new(Rect::new(0, 0, 10, 5), 1, items(20), None, None);
+        give_id(&mut l);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+
+        // Focus item 5.
+        let mut ev = mouse_down_at(0, 2);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            l.handle_event(&mut ev, &mut ctx);
+        }
+        l.lv.focused = 5;
+        l.lv.track = Some(LvTrack {
+            count: 0,
+            old_item: 5,
+        });
+        deferred.clear();
+
+        // 4 ticks above (y < 0): step back by 1.
+        for _ in 1..=3 {
+            let mut ev = mouse_auto_at(0, -1);
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            l.handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(l.lv.focused, 5, "first 3 ticks: no step");
+        let mut ev = mouse_auto_at(0, -1);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            l.handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(l.lv.focused, 4, "4th tick steps focus by -1 (above view)");
+    }
+
+    /// `MouseUp` while tracking: clears track, re-focuses current item.
+    #[test]
+    fn mouse_up_clears_track_and_refocuses() {
+        let mut l = FakeList::new(Rect::new(0, 0, 10, 5), 1, items(20), None, None);
+        give_id(&mut l);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+
+        // Arm tracking.
+        let mut ev = mouse_down_at(0, 3);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            l.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(l.lv.track.is_some());
+        deferred.clear();
+
+        // MouseUp: clears track.
+        let mut ev = mouse_up_at(0, 3);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            l.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(ev.is_nothing(), "MouseUp consumed");
+        assert!(l.lv.track.is_none(), "track cleared on MouseUp");
+    }
+
+    /// Stray `MouseUp` (not tracking) falls through unconsumed — the mandatory
+    /// tracking-arm guard (MouseUp is not mask-gated in Group::wants).
+    #[test]
+    fn stray_mouse_up_falls_through() {
+        let mut l = FakeList::new(Rect::new(0, 0, 10, 5), 1, items(20), None, None);
+        give_id(&mut l);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+
+        // No tracking armed.
+        let mut ev = mouse_up_at(0, 3);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            l.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(
+            !ev.is_nothing(),
+            "stray MouseUp falls through (not consumed)"
+        );
+    }
+
+    /// Stray `MouseMove` (not tracking) falls through unconsumed.
+    #[test]
+    fn stray_mouse_move_falls_through() {
+        let mut l = FakeList::new(Rect::new(0, 0, 10, 5), 1, items(20), None, None);
+        give_id(&mut l);
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+
+        let mut ev = mouse_move_at(3, 2);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            l.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(
+            !ev.is_nothing(),
+            "stray MouseMove falls through (not consumed)"
+        );
+    }
+
+    /// `MouseAuto` out-of-view (multi-col): steps by ±size.y in the column
+    /// direction when outside column bounds.
+    #[test]
+    fn mouse_auto_multi_col_steps_by_size_y() {
+        // size 12×4, numCols 2 → colWidth = 7. size.y = 4.
+        let mut l = FakeList::new(Rect::new(0, 0, 12, 4), 2, items(40), None, None);
+        give_id(&mut l);
+        l.lv.focused = 8;
+        l.lv.track = Some(LvTrack {
+            count: 0,
+            old_item: 8,
+        });
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+
+        // 4 ticks with x >= size.x (12): should step +size.y = +4 on tick 4.
+        for _ in 1..=3 {
+            let mut ev = mouse_auto_at(13, 2); // x=13 >= size.x=12
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            l.handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(l.lv.focused, 8, "3 ticks: no step yet");
+        let mut ev = mouse_auto_at(13, 2);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            l.handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(l.lv.focused, 12, "4th tick: +size.y = +4 (right of view)");
     }
 }
