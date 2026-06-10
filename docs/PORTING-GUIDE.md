@@ -617,8 +617,10 @@ faithfully; only the wire format changes from raw bytes to typed values.
 abstract the terminal, selected at runtime. There is no test harness.
 
 **Deviation.** A small **`Backend` trait** (report size; flush changed cells;
-cursor; an associated `EventSource`; clipboard with internal-buffer fallback,
-mirroring TV's negotiated OSC 52). Two impls:
+cursor; an associated `EventSource`; clipboard as the landed `TClipboard`-order
+**fallback chain** — copy: OS-native via arboard (`os-clipboard` feature, on by
+default) → OSC 52 emit → internal buffer; paste: native → internal, no OSC 52
+read — see `docs/design/os-clipboard.md`). Two impls:
 
 - **`CrosstermBackend`** *(production)* — wraps crossterm; crossterm is a
   dependency hidden *behind* the trait.

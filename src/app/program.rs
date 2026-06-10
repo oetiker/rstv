@@ -8298,6 +8298,106 @@ mod tests {
         }
     }
 
+    // -- the clipboard chain at pump level (backlog A6) ------------------------
+    //
+    // The editor broker unit tests (widgets/editor.rs "clipboard broker") prove
+    // clipCopy/clipPaste QUEUE the right Deferred ops; these prove the pump
+    // APPLIES them against the backend — observable through the new
+    // `HeadlessHandle::clipboard`/`set_clipboard` accessors (the headless
+    // backend keeps plain internal-string semantics by design; the production
+    // chain is unit-tested in backend/clipboard.rs).
+    mod clipboard_a6 {
+        use super::*;
+        use crate::event::{Key, KeyEvent, KeyModifiers};
+        use crate::widgets::EditWindow;
+
+        /// Insert an EditWindow (its FileEditor arrives focused — proven by
+        /// `inserted_edit_window_receives_typed_characters`), clear the insert
+        /// broadcasts, and return the editor id.
+        fn editor_program() -> (Program, crate::backend::HeadlessHandle, ViewId) {
+            let (mut program, handle, _clock) = program_with_desktop(80, 25);
+            let r = program.desktop_rect();
+            let ew = EditWindow::new(r, None, 1);
+            let editor_id = ew.editor_id;
+            program.desktop_insert(Box::new(ew));
+            program.out_events.clear();
+            (program, handle, editor_id)
+        }
+
+        fn push_key(program: &mut Program, key: Key, modifiers: KeyModifiers) {
+            program
+                .out_events
+                .push_back(Event::KeyDown(KeyEvent::new(key, modifiers)));
+        }
+
+        /// cmCopy path: type text, Shift+Home (select to line start), Ctrl+Insert
+        /// (the C++ kbCtrlIns → cmCopy mapping) — the queued
+        /// `Deferred::SetClipboard` must land on the backend, visible through
+        /// `HeadlessHandle::clipboard`.
+        #[test]
+        fn copy_keystroke_reaches_backend_clipboard() {
+            let (mut program, handle, _ed) = editor_program();
+            for c in "hello".chars() {
+                push_key(&mut program, Key::Char(c), KeyModifiers::default());
+            }
+            push_key(
+                &mut program,
+                Key::Home,
+                KeyModifiers {
+                    shift: true,
+                    ..Default::default()
+                },
+            );
+            push_key(
+                &mut program,
+                Key::Insert,
+                KeyModifiers {
+                    ctrl: true,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(handle.clipboard(), None, "clipboard starts empty");
+            for _ in 0..10 {
+                program.pump_once();
+            }
+            assert_eq!(
+                handle.clipboard().as_deref(),
+                Some("hello"),
+                "Ctrl+Insert copies the selection onto the backend clipboard"
+            );
+        }
+
+        /// cmPaste path: seed the backend clipboard via the handle, Shift+Insert
+        /// (kbShiftIns → cmPaste) — the `Deferred::EditorPaste` broker must read
+        /// the backend and insert into the editor buffer.
+        #[test]
+        fn seeded_clipboard_pastes_into_editor() {
+            let (mut program, handle, editor_id) = editor_program();
+            handle.set_clipboard("pasted");
+            push_key(
+                &mut program,
+                Key::Insert,
+                KeyModifiers {
+                    shift: true,
+                    ..Default::default()
+                },
+            );
+            for _ in 0..4 {
+                program.pump_once();
+            }
+            let text = program
+                .group_mut()
+                .find_mut(editor_id)
+                .and_then(crate::widgets::editor_mut)
+                .map(|e| String::from_utf8_lossy(&e.text()).into_owned())
+                .unwrap_or_default();
+            assert_eq!(
+                text, "pasted",
+                "Shift+Insert inserts the seeded backend clipboard text"
+            );
+        }
+    }
+
     // -- the async-modal-from-a-view seam (messageBox from valid()) -----------
     //
     // Three tests for the three structurally-different valid() call sites

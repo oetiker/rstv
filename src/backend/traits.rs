@@ -48,14 +48,16 @@ pub trait Backend {
     /// Write `text` to the system clipboard.
     ///
     /// Returns `false` when the implementation fell back to an internal buffer
-    /// (i.e. the terminal has no clipboard support).  The caller can treat a
-    /// `false` return as "clipboard unavailable but the string is stored
-    /// internally and can be retrieved via `get_clipboard`".
+    /// (no native clipboard took the text).  The caller can treat a `false`
+    /// return as "clipboard unavailable but the string is stored internally
+    /// and can be retrieved via `get_clipboard`".  This is the `TClipboard`
+    /// contract (`tclipbrd.cpp:26-34`): native first, internal only on
+    /// failure.  The production impl runs the full fallback chain (native →
+    /// OSC 52 emit → internal — see `backend::clipboard`); headless is a
+    /// plain internal string by design (the D11 test fake).
     fn set_clipboard(&mut self, text: &str) -> bool;
 
-    /// Read the clipboard.
-    ///
-    /// Returns the most-recently written text, or `None` if nothing has been
-    /// written yet.
+    /// Read the clipboard: native clipboard first, else the internal buffer,
+    /// else `None` (`tclipbrd.cpp:37-44`).
     fn get_clipboard(&mut self) -> Option<String>;
 }

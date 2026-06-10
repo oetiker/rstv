@@ -15,8 +15,22 @@ categories = ["command-line-interface"]
 # and reach everything through `tv::` — the path is the namespace the old `T`
 # prefix was faking (PORTING-GUIDE D1).
 
+[features]
+# OS clipboard (arboard) is on by default — backlog A6 user directive. Turning
+# it off leaves the OSC 52 emit + internal-buffer rungs of the clipboard chain
+# (see src/backend/clipboard.rs), so minimal builds still copy on capable
+# terminals.
+default = ["os-clipboard"]
+os-clipboard = ["dep:arboard"]
+
 [dependencies]
-crossterm = "0.29.0"            # backend module: production terminal I/O behind the Backend trait (D11, row 19)
+# backend module: production terminal I/O behind the Backend trait (D11, row 19).
+# `osc52` (additive, pulls only `base64`) provides clipboard::CopyToClipboard —
+# the OSC 52 rung of the clipboard chain (backlog A6).
+crossterm = { version = "0.29.0", features = ["osc52"] }
+# backend module: native OS clipboard rung of the clipboard chain (backlog A6).
+# default-features off drops the `image` crate (we only move text).
+arboard = { version = "3.6", optional = true, default-features = false, features = ["wayland-data-control"] }
 unicode-segmentation = "1.13.2" # text module: grapheme clustering (D13, row 8)
 unicode-width = "0.2.2"         # text module: display column widths (D13, row 8)
 tvision-macros = { path = "tvision-macros", version = "0.1.0" }

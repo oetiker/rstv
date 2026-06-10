@@ -38,6 +38,7 @@ pub struct HeadlessHandle {
     buffer: Rc<RefCell<Buffer>>,
     cursor: Rc<StdCell<Option<(u16, u16)>>>,
     events: Rc<RefCell<VecDeque<Event>>>,
+    clipboard: Rc<RefCell<String>>,
 }
 
 impl HeadlessHandle {
@@ -72,6 +73,25 @@ impl HeadlessHandle {
     pub fn cursor(&self) -> Option<(u16, u16)> {
         self.cursor.get()
     }
+
+    /// The backend's clipboard text, or `None` if nothing has been written or
+    /// the stored text is empty (an empty string is indistinguishable from
+    /// never-written — mirroring `ClipboardChain::get`'s empty→`None`) —
+    /// lets tests assert what a copy path (`Deferred::SetClipboard`) stored.
+    pub fn clipboard(&self) -> Option<String> {
+        let clip = self.clipboard.borrow();
+        if clip.is_empty() {
+            None
+        } else {
+            Some(clip.clone())
+        }
+    }
+
+    /// Seed the backend clipboard — lets tests stage text for a paste path
+    /// (`Deferred::EditorPaste`) without going through `set_clipboard`.
+    pub fn set_clipboard(&self, text: &str) {
+        *self.clipboard.borrow_mut() = text.to_string();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -86,7 +106,6 @@ impl HeadlessHandle {
 pub struct HeadlessBackend {
     shared: HeadlessHandle,
     size: (u16, u16),
-    clipboard: String,
 }
 
 impl HeadlessBackend {
@@ -99,11 +118,11 @@ impl HeadlessBackend {
             buffer: Rc::new(RefCell::new(Buffer::new(width, height))),
             cursor: Rc::new(StdCell::new(None)),
             events: Rc::new(RefCell::new(VecDeque::new())),
+            clipboard: Rc::new(RefCell::new(String::new())),
         };
         let backend = HeadlessBackend {
             shared: shared.clone(),
             size: (width, height),
-            clipboard: String::new(),
         };
         (backend, shared)
     }
@@ -137,20 +156,21 @@ impl Backend for HeadlessBackend {
         self.shared.events.borrow_mut().pop_front()
     }
 
-    /// Store `text` in an internal buffer; always returns `false` (no system
-    /// clipboard in headless mode).
+    /// Store `text` in the shared internal buffer; always returns `false`.
+    ///
+    /// Headless deliberately does **not** run the production
+    /// [`ClipboardChain`](super::clipboard::ClipboardChain) — it is the test
+    /// fake (D11 determinism): no OS clipboard, no OSC 52 bytes, just a plain
+    /// string tests can read via [`HeadlessHandle::clipboard`] and seed via
+    /// [`HeadlessHandle::set_clipboard`].
     fn set_clipboard(&mut self, text: &str) -> bool {
-        self.clipboard = text.to_string();
+        *self.shared.clipboard.borrow_mut() = text.to_string();
         false // internal fallback — no real clipboard
     }
 
     /// Return the most recently stored clipboard text, or `None` if nothing
     /// has been written.
     fn get_clipboard(&mut self) -> Option<String> {
-        if self.clipboard.is_empty() {
-            None
-        } else {
-            Some(self.clipboard.clone())
-        }
+        self.shared.clipboard()
     }
 }

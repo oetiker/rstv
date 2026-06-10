@@ -16,6 +16,7 @@
 //! [`Renderer`] owns the back/front buffer pair and a boxed backend; it runs
 //! the D8 draw cycle (reset → paint → diff → draw → flush → swap).
 
+mod clipboard;
 mod crossterm_backend;
 mod headless;
 mod quantize;

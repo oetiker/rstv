@@ -30,8 +30,24 @@
 //! lifetime (a later restore on an already-restored terminal is a no-op).
 //!
 //! ## Clipboard
-//! The clipboard is implemented as an internal string buffer.  OSC 52 terminal
-//! clipboard passthrough will be added when the editor (row 66) needs it.
+//! The clipboard is the [`ClipboardChain`] (see `backend::clipboard` — the
+//! `TClipboard` shape, `tclipbrd.cpp:26-44`):
+//!
+//! - **Copy** (`set_clipboard`): OS-native via arboard (`os-clipboard`
+//!   feature, on by default) → OSC 52 escape sequence queued on the normal
+//!   output handle (delivered by the next `flush`) → internal string buffer.
+//!   Returns `true` only on the native rung (trait contract: `false` = fell
+//!   back to internal).
+//! - **Paste** (`get_clipboard`): OS-native → internal buffer → `None`.
+//!   There is no OSC 52 *read* rung — the capability probes it needs
+//!   (`termio.cpp:314-330`) require owning the input parser, which crossterm
+//!   does.
+//!
+//! **SSH story:** with no display, arboard init fails and the chain runs
+//! without its native rung — but the OSC 52 emit still reaches the *local*
+//! terminal's clipboard on copy, which is exactly what a remote TUI wants.
+//! Paste over SSH falls back to the internal buffer (copies made inside the
+//! app) or the terminal's own bracketed paste (backlog C9).
 //!
 //! ## Color depth
 //! `ColorDepth` selects which rung of the quantization ladder (row 5) to use
@@ -55,6 +71,7 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 
+use crate::backend::clipboard::ClipboardChain;
 use crate::backend::{Backend, bios_to_xterm16, rgb_to_xterm256, xterm256_to_xterm16};
 use crate::color::{Color, Style};
 use crate::event::{
@@ -97,7 +114,7 @@ pub enum ColorDepth {
 pub struct CrosstermBackend {
     out: Stdout,
     color_depth: ColorDepth,
-    clipboard: String,
+    clipboard: ClipboardChain,
 }
 
 /// Undo the terminal setup: disable mouse capture, leave the alternate screen,
@@ -228,7 +245,10 @@ impl CrosstermBackend {
         Ok(CrosstermBackend {
             out: io::stdout(),
             color_depth: depth,
-            clipboard: String::new(),
+            // Constructed after the terminal setup succeeded; arboard init
+            // failure is swallowed inside (clipboard absence must not fail
+            // backend construction).
+            clipboard: ClipboardChain::with_os_native(),
         })
     }
 }
@@ -290,20 +310,16 @@ impl Backend for CrosstermBackend {
         }
     }
 
-    /// Store `text` in an internal buffer; returns `false` (no OSC 52 yet).
-    ///
-    /// TODO: OSC 52 (D11) when the editor (row 66) needs it.
+    /// Run the copy chain (module `## Clipboard` docs): native → OSC 52 →
+    /// internal. The OSC sequence is queued on the normal output handle and
+    /// delivered by the next `flush` (every pump iteration flushes).
     fn set_clipboard(&mut self, text: &str) -> bool {
-        self.clipboard = text.to_string();
-        false // internal fallback — OSC 52 not yet implemented
+        self.clipboard.set(text, &mut self.out)
     }
 
+    /// Run the paste chain: native → internal buffer → `None`.
     fn get_clipboard(&mut self) -> Option<String> {
-        if self.clipboard.is_empty() {
-            None
-        } else {
-            Some(self.clipboard.clone())
-        }
+        self.clipboard.get()
     }
 }
 
@@ -450,8 +466,11 @@ fn translate_event(ev: crossterm::event::Event) -> Option<Event> {
             None
         }
         crossterm::event::Event::Paste(_) => {
-            // TODO(paste): bracketed paste is not modeled yet (the editor's
-            // kbPaste path is also deferred).
+            // TODO(C9): bracketed paste is not modeled yet — and we
+            // deliberately do NOT enable `EnableBracketedPaste` until this arm
+            // produces an event, because enabling it while the arm returns
+            // `None` would make terminal-paste do *nothing* (today pasted text
+            // arrives as plain keystrokes, which works minus paste semantics).
             None
         }
         crossterm::event::Event::FocusGained | crossterm::event::Event::FocusLost => {
