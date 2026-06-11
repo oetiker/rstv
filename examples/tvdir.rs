@@ -18,7 +18,7 @@ use tvision::{
     Backend, Button, ButtonFlags, Command, CrosstermBackend, Desktop, Dialog, DrawCtx, Key,
     KeyEvent, Menu, MenuBar, Node, Outline, OutlineViewer, OutlineViewerState, Program, Rect,
     Role, ScrollBar, Scroller, StaticText, StatusDef, StatusLine, SystemClock, Theme, View, ViewId,
-    Window, alt, delegate,
+    Window, alt, delegate, ov_update,
 };
 
 // ---------------------------------------------------------------------------
@@ -120,60 +120,46 @@ impl DirOutline {
         }
     }
 
-    /// Walk the DFS tree to build the filesystem path of the focused node.
+    /// Build the filesystem path of the focused node.
     fn current_path(&self) -> PathBuf {
         let foc = self.outline.ov().foc;
         let mut path = self.root_path.clone();
-        // pos 0 is the root node itself.
         if foc == 0 {
             return path;
         }
-        // Collect the path components along the focused DFS branch.
-        self.collect_path(self.outline.get_root(), foc, 1, &mut path);
+        if let Some(root) = self.outline.get_root() {
+            let mut pos = 0i32;
+            self.find_path(root.child_list.as_deref(), foc, &mut pos, &mut path);
+        }
         path
     }
 
-    fn collect_path(&self, node: Option<&Node>, target: i32, pos: i32, path: &mut PathBuf) -> i32 {
-        let Some(node) = node else { return pos };
-        if pos == target {
+    /// DFS search for the node at DFS position `target` (root's children start at 1).
+    /// Pushes path components while descending, pops on backtrack. Returns true when found.
+    fn find_path(&self, node: Option<&Node>, target: i32, pos: &mut i32, path: &mut PathBuf) -> bool {
+        let Some(node) = node else { return false };
+        *pos += 1;
+        if *pos == target {
             path.push(&node.text);
-            return -1; // sentinel: found
+            return true;
         }
-        // Visit children first (DFS pre-order).
         if node.expanded {
-            let mut child_pos = pos + 1;
-            let mut child = node.child_list.as_deref();
-            while let Some(c) = child {
-                path.push(&c.text);
-                let next_pos = self.collect_path(Some(c), target, child_pos, path);
-                if next_pos == -1 {
-                    return -1; // propagate found
-                }
-                path.pop();
-                child_pos = next_pos;
-                child = c.next.as_deref();
+            path.push(&node.text);
+            if self.find_path(node.child_list.as_deref(), target, pos, path) {
+                return true;
             }
+            path.pop();
         }
-        // Then visit next sibling.
-        self.collect_path(node.next.as_deref(), target, pos + 1 + self.subtree_size(node), path)
-    }
-
-    fn subtree_size(&self, node: &Node) -> i32 {
-        if !node.expanded {
-            return 0;
-        }
-        let mut n = 0;
-        let mut child = node.child_list.as_deref();
-        while let Some(c) = child {
-            n += 1 + self.subtree_size(c);
-            child = c.next.as_deref();
-        }
-        n
+        self.find_path(node.next.as_deref(), target, pos, path)
     }
 }
 
 #[delegate(to = outline)]
-impl View for DirOutline {}
+impl View for DirOutline {
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        Some(self)
+    }
+}
 
 impl OutlineViewer for DirOutline {
     fn ov(&self) -> &OutlineViewerState {
@@ -256,6 +242,10 @@ impl FilePane {
 
 #[delegate(to = scroller)]
 impl View for FilePane {
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        Some(self)
+    }
+
     fn draw(&mut self, ctx: &mut DrawCtx) {
         let extent = self.scroller.state().get_extent();
         let delta = self.scroller.delta;
@@ -319,7 +309,7 @@ impl DirWindow {
             window,
             outline_id,
             file_pane_id,
-            last_foc: 0,
+            last_foc: -1,
         }
     }
 }
@@ -327,6 +317,16 @@ impl DirWindow {
 #[delegate(to = window)]
 impl View for DirWindow {
     fn handle_event(&mut self, ev: &mut tvision::Event, ctx: &mut tvision::Context) {
+        // Lazy init: ov_update needs a Context, which is not available at construction.
+        if let Some(ol) = self.window
+            .child_mut(self.outline_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<DirOutline>())
+            && ol.outline.ov().limit.y == 0
+        {
+            ov_update(&mut ol.outline, ctx);
+        }
+
         self.window.handle_event(ev, ctx);
 
         // Check if the outline's focused node changed (TDirOutline::focused
