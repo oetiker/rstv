@@ -14,13 +14,12 @@
 > When a row lands: add an IMPLEMENTATION-LOG section, tick the BACKLOG row,
 > update this file.
 
-## Current state (2026-06-11, C1 committed)
+## Current state (2026-06-11, C2 committed)
 
-**HEAD = `b388492`; 1129 lib tests green; clippy + fmt clean.**
+**HEAD = `2ee829c`; 1130 lib tests green; clippy + fmt clean.**
 
-Phase A + Phase B are fully complete (all rows ✅). **Phase C is now in
-progress** — the user lifted the backlog freeze and directed the run to start at
-C1 and walk the rows in order.
+Phase A + Phase B are fully complete (all rows ✅). **Phase C is in
+progress** — C1 and C2 are done.
 
 ### Phase C progress
 - **C1 ✅ (`b388492`)** — editor find/replace dialogs + `do_search_replace`. The
@@ -32,8 +31,13 @@ C1 and walk the rows in order.
   cmSearchAgain`); the answer is stored in `Editor::pending_replace_answer` (via a
   `set_modal_answer` override) and consumed on the `cmSearchAgain` re-run.
   Two-stage reviewed. See IMPLEMENTATION-LOG.
+- **C2 ✅ (`2ee829c`)** — editor right-click context menu. The `MouseDown`
+  right-button arm now builds the 4-item `Menu` (Cut/Copy/Paste/Undo with
+  `kbShiftDel`/`kbCtrlIns`/`kbShiftIns`/`kbCtrlU`) and calls `popup_menu()` (the
+  row-52 implementation). Global position = `m.position + self.abs_origin`. No new
+  seam — `popup_menu` queues the deferred effects inline. Two-stage reviewed.
 
-**Next Phase C row = C2 (editor right-click context menu).** Walk BACKLOG.md
+**Next Phase C row = C3 (internal-clipboard editor).** Walk BACKLOG.md
 Phase C in order.
 
 ### What is on `main` from the Phase A/B backlog run (committed):

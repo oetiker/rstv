@@ -5,6 +5,24 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session addendum — C2 COMPLETE (2026-06-11)
+
+**`2ee829c`** — **C2: editor right-click context menu (`initContextMenu` + `popupMenu`).** Replaces
+the TODO stub in `Editor::handle_event`'s right-button `MouseDown` arm with the faithful port of
+`teditor2.cpp:97-107` + `teditor1.cpp:532-536`.
+
+The right-button arm now builds a 4-item `Menu` (Cut/Copy/Paste/Undo with their C++ accelerators
+`kbShiftDel`/`kbCtrlIns`/`kbShiftIns`/`kbCtrlU`), computes the global click position as
+`m.position + self.abs_origin`, and calls `popup_menu()` — the already-landed row-52 implementation
+in `menu_session.rs`. `popup_menu` queues `Deferred::OpenMenuBox` + `Deferred::SetMenuCurrent` +
+`Deferred::PushCapture`, so the popup appears after the current deferred-drain step with no new
+seam needed. The C++ `receiver` argument to `popupMenu` is intentionally dropped (documented in
+`popup_menu`'s docstring): `ctx.post(cmd)` on item selection already routes the command through
+the active routing, which is the editor's owner. `ev.clear(); return` faithfully mirrors the
+C++ `break` (standard event-consumed path in a TV `handleEvent` switch).
+
+1130 lib tests green (+ 1 new: `right_click_opens_context_menu`); clippy + fmt clean.
+
 ## Session addendum — C1 COMPLETE (2026-06-11)
 
 **`b388492`** — **C1: editor find/replace dialogs + `doSearchReplace`.** First

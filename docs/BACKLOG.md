@@ -47,7 +47,7 @@
 | row | item | notes |
 |---|---|---|
 | C1 ✅ | Find/Replace dialogs | **COMPLETE (`b388492`):** `Deferred::OpenFindDialog`/`OpenReplaceDialog` + `Context::open_*_dialog` (the OpenSaveAsDialog seam); pump drain builds the `tvedit2.cpp` dialogs verbatim (Find 38×12, Replace 40×16, both with `THistory` arrows + `CheckBoxes` options, pre-filled); `ModalCompletion::FindPick`/`ReplacePick` read text via `field_text` + options via `CheckBoxes` downcast, write back (FindPick clears, ReplacePick sets `EF_DO_REPLACE`), re-inject `cmSearchAgain`. `Editor::do_search_replace(ctx)` is faithful `doSearchReplace` with the prompt-on-replace dialog routed through `request_message_box` (answer stored in `pending_replace_answer` via `set_modal_answer`, consumed on the re-run). `CheckBoxes::as_any_mut` off the delegate skip list. |
-| C2 | Editor right-click context menu | `initContextMenu` + `popupMenu` machinery; `editor.rs:1585` |
+| C2 ✅ | Editor right-click context menu | **COMPLETE (`2ee829c`):** `MouseDown` right-button arm builds 4-item `Menu` (Cut/Copy/Paste/Undo, `kbShiftDel`/`kbCtrlIns`/`kbShiftIns`/`kbCtrlU`) and calls `popup_menu()` (row-52). Global pos = `m.position + self.abs_origin`. No new seam needed. |
 | C3 | Internal-clipboard editor | `insertFrom` branch + clipboard `EditWindow`; `editor.rs:1418,1440`; `EditWindow::close` hide-branch breadcrumb |
 | C4 | D10 dialog gather/scatter group-walk | `list_box.rs:30,159`; deferred to its first multi-field consumer |
 | C5 | cmQuit veto / saveAs modified-close inline drives | the whole-tree `validate_modal_close` analogue (HANDOVER "Editor seam leftovers") |
