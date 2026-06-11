@@ -5,6 +5,40 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## C6 COMPLETE (2026-06-11)
+
+**`386eb84` / `f3e4ba2`** — **C6: cmDosShell — backend terminal suspend/resume + SIGTSTP.**
+
+Ports `TApplication::dosShell()` (`tapplica.cpp`): suspend terminal → print shell
+message → `raise(SIGTSTP)` → resume terminal → force full redraw.
+
+**Seam additions:**
+- `Backend::suspend()` / `Backend::resume()` added to the trait with default no-op
+  bodies (HeadlessBackend gets them free). `CrosstermBackend` overrides: `suspend` calls
+  the existing `restore_terminal()` (leaves alt-screen, raw mode off); `resume`
+  re-enters alt-screen + raw mode + mouse capture (mirror of `with_color_depth`
+  setup, hooks skipped — already installed once-per-process).
+- `Renderer::invalidate_all()` clears the front (reference) buffer so the next
+  `render()` sees all cells as changed → full terminal repaint. Called after `resume`
+  (the alt-screen is blank after re-entry).
+
+**`program_handle_event` threaded with renderer:** Added `renderer: &mut Renderer`
+parameter (one call site). The `Command::DOS_SHELL` arm: `suspend → println!(shell msg)
+→ raise(SIGTSTP, cfg(all(unix,not(test)))) → resume → invalidate_all → ev.clear()`.
+The `not(test)` gate on `raise` prevents the test runner from being suspended; the
+`#[cfg(unix)]` outer condition is unchanged from the C++ POSIX path.
+
+**`libc` dep:** added to `[target.'cfg(unix)'.dependencies]` in `Cargo.toml`.
+
+**Breadcrumbs removed:** the "cmDosShell is still deferred" comment in `program.rs`
+and the deferred-bullet + struct-doc mention in `application.rs`.
+
+1 new test (`dos_shell_consumed_cleanly`): injects `Command::DOS_SHELL` on a
+HeadlessBackend, pumps once, verifies event consumed + `end_state` stays `None`.
+1144 total lib tests green; clippy + fmt clean. Two-stage reviewed (spec + quality, both ✅).
+Second commit fixed the `SAFETY` comment (was "async-signal-safe" — not the right
+Rust invariant; corrected to FFI/signal-constant justification).
+
 ## C5 COMPLETE (2026-06-11)
 
 **`85a0907` / `f304b94` / `7923ac9`** — **C5: cmQuit veto + saveAs modified-close inline drives.**

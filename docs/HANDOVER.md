@@ -14,12 +14,12 @@
 > When a row lands: add an IMPLEMENTATION-LOG section, tick the BACKLOG row,
 > update this file.
 
-## Current state (2026-06-11, C5 committed)
+## Current state (2026-06-11, C6 committed)
 
-**HEAD = `7923ac9`; 1143 lib tests green; clippy + fmt clean.**
+**HEAD = `f3e4ba2`; 1144 lib tests green; clippy + fmt clean.**
 
 Phase A + Phase B are fully complete (all rows ✅). **Phase C is in
-progress** — C1, C2, C3, C4, and C5 are done.
+progress** — C1, C2, C3, C4, C5, and C6 are done.
 
 ### Phase C progress
 - **C1 ✅ (`b388492`)** — editor find/replace dialogs + `do_search_replace`. The
@@ -56,8 +56,15 @@ progress** — C1, C2, C3, C4, and C5 are done.
   services the re-injected `cmSave`, then re-validates so the close goes through.
   `drive_save_as_inline` helper de-duplicates the two sites. `LIMITATION`
   breadcrumb removed from `FileEditor::save`. Two-stage reviewed.
+- **C6 ✅ (`386eb84`)** — cmDosShell terminal suspend/resume seam.
+  `Backend::suspend()`/`resume()` trait methods (no-op defaults; CrosstermBackend:
+  `suspend` = `restore_terminal()`, `resume` = re-enter alt-screen/raw/mouse).
+  `Renderer::invalidate_all()` clears front buffer → full repaint after resume.
+  `program_handle_event` threaded with `renderer`; `Command::DOS_SHELL` arm:
+  suspend → writeShellMsg → `raise(SIGTSTP, cfg(all(unix,not(test))))` → resume →
+  invalidate_all. `libc` dep added. Two-stage reviewed.
 
-**Next Phase C row = C6 (cmDosShell).** Walk BACKLOG.md Phase C in order.
+**Next Phase C row = C7 (help-ctx refresh / OneOf status line).** Walk BACKLOG.md Phase C in order.
 
 ### What is on `main` from the Phase A/B backlog run (committed):
 - **B1 ✅ (`680aabc`)** — button `cmCommandSetChanged` graying; `Program::new` seeds `command_set_changed: true` for initial broadcast. InputLine `can_update_commands`/`update_commands` from `handle_event` + `set_state`.

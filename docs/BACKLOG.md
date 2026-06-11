@@ -51,7 +51,7 @@
 | C3 ✅ | Internal-clipboard editor | **COMPLETE (C3 commit):** see IMPLEMENTATION-LOG. |
 | C4 ✅ | D10 dialog gather/scatter group-walk | **COMPLETE (`5f57bb7`):** `Group::gather_data`/`scatter_data`; `View::set_value_ctx` seam; `ListBox::set_value_ctx` → `focus_item_num`; macro forwarder. Walk order = `children.iter()` (C++ `last→prev` = forward). |
 | C5 ✅ | cmQuit veto / saveAs modified-close inline drives | **COMPLETE (`7923ac9`):** `valid_end` inline-drive loop (OpenMessageBox + OpenSaveAsDialog); `validate_modal_close` extended likewise; `drive_save_as_inline` helper; 4 new tests; LIMITATION comment removed. |
-| C6 | `cmDosShell` | backend terminal-suspend seam + SIGTSTP |
+| C6 ✅ | `cmDosShell` | **COMPLETE (`386eb84`):** `Backend::suspend()`/`resume()` (no-op defaults; CrosstermBackend calls `restore_terminal()`/re-enter); `Renderer::invalidate_all()`; `program_handle_event` threaded with renderer; `Command::DOS_SHELL` arm: suspend → writeShellMsg → `raise(SIGTSTP, cfg(all(unix,not(test))))` → resume → invalidate_all. `libc` dep added. |
 | C7 | help-ctx refresh / `OneOf` status line | needs `View::get_help_ctx` + TopView resolver |
 | C8 | Theme editor | consumes `color_dialog`; needs the D7 Theme extension point first |
 | C9 | kbPaste / bracketed-paste multi-char insert | `editor.rs:1628` + backend paste event (B7 lands the event; this is the editor consumer) |
