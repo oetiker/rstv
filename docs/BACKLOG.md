@@ -50,7 +50,7 @@
 | C2 ✅ | Editor right-click context menu | **COMPLETE (`2ee829c`):** `MouseDown` right-button arm builds 4-item `Menu` (Cut/Copy/Paste/Undo, `kbShiftDel`/`kbCtrlIns`/`kbShiftIns`/`kbCtrlU`) and calls `popup_menu()` (row-52). Global pos = `m.position + self.abs_origin`. No new seam needed. |
 | C3 ✅ | Internal-clipboard editor | **COMPLETE (C3 commit):** see IMPLEMENTATION-LOG. |
 | C4 ✅ | D10 dialog gather/scatter group-walk | **COMPLETE (`5f57bb7`):** `Group::gather_data`/`scatter_data`; `View::set_value_ctx` seam; `ListBox::set_value_ctx` → `focus_item_num`; macro forwarder. Walk order = `children.iter()` (C++ `last→prev` = forward). |
-| C5 | cmQuit veto / saveAs modified-close inline drives | the whole-tree `validate_modal_close` analogue (HANDOVER "Editor seam leftovers") |
+| C5 ✅ | cmQuit veto / saveAs modified-close inline drives | **COMPLETE (`7923ac9`):** `valid_end` inline-drive loop (OpenMessageBox + OpenSaveAsDialog); `validate_modal_close` extended likewise; `drive_save_as_inline` helper; 4 new tests; LIMITATION comment removed. |
 | C6 | `cmDosShell` | backend terminal-suspend seam + SIGTSTP |
 | C7 | help-ctx refresh / `OneOf` status line | needs `View::get_help_ctx` + TopView resolver |
 | C8 | Theme editor | consumes `color_dialog`; needs the D7 Theme extension point first |

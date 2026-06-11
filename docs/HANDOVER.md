@@ -14,12 +14,12 @@
 > When a row lands: add an IMPLEMENTATION-LOG section, tick the BACKLOG row,
 > update this file.
 
-## Current state (2026-06-11, C4 committed)
+## Current state (2026-06-11, C5 committed)
 
-**HEAD = `5f57bb7`; 1140 lib tests green; clippy + fmt clean.**
+**HEAD = `7923ac9`; 1143 lib tests green; clippy + fmt clean.**
 
 Phase A + Phase B are fully complete (all rows ✅). **Phase C is in
-progress** — C1, C2, C3, and C4 are done.
+progress** — C1, C2, C3, C4, and C5 are done.
 
 ### Phase C progress
 - **C1 ✅ (`b388492`)** — editor find/replace dialogs + `do_search_replace`. The
@@ -49,9 +49,15 @@ progress** — C1, C2, C3, and C4 are done.
   `View::set_value_ctx` seam (default: delegates to `set_value`) lets `ListBox`
   override to republish its v-bar via `focus_item_num`. Macro forwarder added.
   Clears the `list_box.rs` deferral TODO. Two-stage reviewed.
+- **C5 ✅ (`7923ac9`)** — cmQuit veto + saveAs modified-close inline drives.
+  `valid_end` now drives `OpenMessageBox` (and `OpenSaveAsDialog`) inline — the
+  quit prompt fires instead of silently re-spinning. `validate_modal_close`
+  extended to handle `OpenSaveAsDialog` inline: FileDialog runs, `pump_once`
+  services the re-injected `cmSave`, then re-validates so the close goes through.
+  `drive_save_as_inline` helper de-duplicates the two sites. `LIMITATION`
+  breadcrumb removed from `FileEditor::save`. Two-stage reviewed.
 
-**Next Phase C row = C5 (cmQuit veto / saveAs modified-close inline drives).** Walk
-BACKLOG.md Phase C in order.
+**Next Phase C row = C6 (cmDosShell).** Walk BACKLOG.md Phase C in order.
 
 ### What is on `main` from the Phase A/B backlog run (committed):
 - **B1 ✅ (`680aabc`)** — button `cmCommandSetChanged` graying; `Program::new` seeds `command_set_changed: true` for initial broadcast. InputLine `can_update_commands`/`update_commands` from `handle_event` + `set_state`.
@@ -127,12 +133,10 @@ This session ran the **backlog run** end to end:
 
 *(none — all paused worktrees integrated this session)*
 
-## Next — Phase C in progress (C1–C4 done)
+## Next — Phase C in progress (C1–C5 done)
 
-**Phase A + B fully ✅; Phase C in progress (C1, C2, C3, C4 ✅).** Walk BACKLOG.md
+**Phase A + B fully ✅; Phase C in progress (C1, C2, C3, C4, C5 ✅).** Walk BACKLOG.md
 Phase C in order. Remaining rows:
-- **C5** cmQuit-veto / saveAs-modified-close inline drives (the whole-tree
-  `validate_modal_close` analogue — see "Editor seam leftovers" below)
 - **C6** cmDosShell (needs a backend suspend seam + SIGTSTP)
 - **C7** help-ctx refresh / `OneOf` status line (needs `View::get_help_ctx` +
   TopView resolver) — subsumes the `init/doneHistory` + help-ctx standing
@@ -148,22 +152,18 @@ Phase C in order. Remaining rows:
 **C1 reuse note for later rows:** the find/replace prompt reused the
 `request_message_box` async-modal seam (`answer_to` + `then_command`) and the
 `Deferred::OpenXxxDialog` → `pending_modal` → `ModalCompletion::XxxPick` pattern.
-C2/C5/C9 dialogs should follow the same shape rather than inventing new seams.
+C2/C9 dialogs should follow the same shape rather than inventing new seams.
 
-## Editor seam leftovers (still open, latent — unchanged this session)
+## Editor seam leftovers (still open, latent)
 
-- **cmQuit veto:** `valid_end`'s app-quit path vetoes close of a modified
-  `FileEditor` without a prompt; fix = a whole-tree analogue of
-  `validate_modal_close`. *(Cheap interim: gate `FileEditor::valid`'s prompt
-  to `cmd == cmClose`.)*
-- **saveAs modified-close path:** `valid()` vetoes the close, then the
-  saveAs dialog opens separately (deferred fires next pump); full fix =
-  `validate_modal_close` drives `OpenSaveAsDialog` inline.
 - **`edReadError` on load** (ctor has no ctx) — breadcrumbed.
-- **`FileEditor::saveAs` itself is DONE** (`Deferred::OpenSaveAsDialog` →
+- **`FileEditor::saveAs`** is DONE (`Deferred::OpenSaveAsDialog` →
   `ModalCompletion::SaveAsPick`; accept test is `!= CANCEL` — FD_OK_BUTTON
   ends with `cmFileOpen`, not `cmOK`). The `widgets::editor_mut` hatch peels
   FileEditor/Memo to the inner `Editor` for the brokers.
+- **cmQuit veto + saveAs modified-close** — **RESOLVED in C5** (`7923ac9`).
+  `valid_end` now drives the prompt inline; `validate_modal_close` drives
+  `OpenSaveAsDialog` inline via `drive_save_as_inline`.
 
 ## Non-obvious gotchas (read before starting)
 

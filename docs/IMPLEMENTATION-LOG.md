@@ -5,6 +5,35 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## C5 COMPLETE (2026-06-11)
+
+**`85a0907` / `f304b94` / `7923ac9`** — **C5: cmQuit veto + saveAs modified-close inline drives.**
+
+Two latent editor-close bugs fixed.
+
+**Bug 1 — cmQuit veto without prompt:** `valid_end` previously dropped any
+`OpenMessageBox` deferreds queued by `group.valid(QUIT)`, silently re-spinning
+the run loop. Fixed: `valid_end` now drives `OpenMessageBox` (and `OpenSaveAsDialog`)
+**inline** — the same loop pattern as `validate_modal_close` — routing answers via
+`set_modal_answer` and re-validating until no more requests are pending.
+
+**Bug 2 — saveAs modified-close loses the close:** `validate_modal_close` only
+intercepted `OpenMessageBox`; `OpenSaveAsDialog` (queued when `save()` fires for
+an untitled file) fell through, leaving the close vetoed while the FileDialog
+opened separately. Fixed: `validate_modal_close` now also intercepts and drives
+`OpenSaveAsDialog` inline, with a `pump_once()` call after accept to drain the
+re-injected `cmSave` before re-validating.
+
+**`drive_save_as_inline` helper:** extracted to eliminate the copy-paste between
+the two sites (both `valid_end` and `validate_modal_close` call it).
+
+Removed the `LIMITATION` breadcrumb comment from `FileEditor::save` doc (and a
+dangling struct-level cross-reference that survived the first commit).
+
+3 new tests (named-file Yes/No/Cancel for `valid_end`) + 1 new test (untitled
++ Yes → FileDialog Cancel → veto) = 1143 total lib tests green; clippy + fmt clean.
+Three-commit stack, two-stage reviewed (spec + quality, both ✅).
+
 ## C4 COMPLETE (2026-06-11)
 
 **`5f57bb7`** — **C4: D10 dialog gather/scatter group-walk.**
