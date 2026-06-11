@@ -432,6 +432,30 @@ enum ModalCompletion {
         /// `ViewId` of the `CheckBoxes` child (case/words/prompt/all options).
         opts_id: ViewId,
     },
+
+    /// C8: result from the per-role color picker opened from `ThemeEditorBody`.
+    /// On `cmOK`, read the `ColorPicker`'s color() and update the
+    /// `ThemeEditorBody`'s working theme for the given role/fg. On cancel,
+    /// nothing.
+    ThemeColorPick {
+        /// `ViewId` of the `ThemeEditorBody` to update.
+        editor_id: ViewId,
+        /// `ViewId` of the `ColorPicker` child inside the color-picker dialog.
+        picker: ViewId,
+        /// The role being edited.
+        role: crate::theme::Role,
+        /// `true` = foreground, `false` = background.
+        fg: bool,
+    },
+
+    /// C8: result from the theme editor dialog. On `cmOK`, read the
+    /// `ThemeEditorBody`'s working theme and write it into the sink; the caller
+    /// installs it via `Program::set_theme`.
+    ThemeEdit {
+        /// `ViewId` of the `ThemeEditorBody` child inside the dialog.
+        editor_id: ViewId,
+        sink: std::rc::Rc<std::cell::RefCell<Option<crate::theme::Theme>>>,
+    },
 }
 
 impl Program {
@@ -1074,6 +1098,76 @@ impl Program {
         };
         self.exec_view_with_completion(Box::new(d), Some(completion), Some(picker_id), None, false);
         sink.get()
+    }
+
+    /// Install a new theme and force a full repaint (C8 theme editor).
+    pub fn set_theme(&mut self, theme: crate::theme::Theme) {
+        self.theme = theme;
+        self.renderer.invalidate_all();
+    }
+
+    /// Open the theme editor dialog (C8). On OK, installs the modified theme via
+    /// [`set_theme`](Self::set_theme). On cancel, does nothing.
+    ///
+    /// Entry point for user-minted `cmColorBackground`-equivalent commands.
+    pub fn theme_editor(&mut self) {
+        use crate::dialog::{Dialog, ThemeEditorBody};
+        use crate::widgets::{Button, ButtonFlags};
+
+        let current_theme = self.theme.clone();
+
+        // 64-wide × 24-tall dialog, centered on the desktop.
+        let mut r = Rect::new(0, 0, 64, 24);
+        let desk = self.desktop_size();
+        r.r#move((desk.x - 64) / 2, (desk.y - 24) / 2);
+        let mut d = Dialog::new(r, Some("Theme Editor".to_string()));
+
+        // ThemeEditorBody fills the content area: x=1..63, y=1..19.
+        let te_id = d.insert_child(Box::new(ThemeEditorBody::new(
+            Rect::new(1, 1, 63, 19),
+            current_theme,
+        )));
+
+        // Fg / Bg edit buttons.
+        d.insert_child(Box::new(Button::new(
+            Rect::new(2, 20, 12, 22),
+            "~F~g",
+            Command::THEME_EDIT_FG,
+            ButtonFlags::default(),
+        )));
+        d.insert_child(Box::new(Button::new(
+            Rect::new(13, 20, 23, 22),
+            "~B~g",
+            Command::THEME_EDIT_BG,
+            ButtonFlags::default(),
+        )));
+
+        // OK / Cancel buttons.
+        d.insert_child(Box::new(Button::new(
+            Rect::new(42, 20, 52, 22),
+            "O~K~",
+            Command::OK,
+            ButtonFlags {
+                default: true,
+                ..Default::default()
+            },
+        )));
+        d.insert_child(Box::new(Button::new(
+            Rect::new(53, 20, 63, 22),
+            "~C~ancel",
+            Command::CANCEL,
+            ButtonFlags::default(),
+        )));
+
+        let sink = std::rc::Rc::new(std::cell::RefCell::new(None::<crate::theme::Theme>));
+        let completion = ModalCompletion::ThemeEdit {
+            editor_id: te_id,
+            sink: sink.clone(),
+        };
+        self.exec_view_with_completion(Box::new(d), Some(completion), Some(te_id), None, false);
+        if let Some(new_theme) = sink.borrow_mut().take() {
+            self.set_theme(new_theme);
+        }
     }
 
     /// The desktop's local extent `(0,0,w,h)` — mirrors `TDeskTop::getExtent()`.
@@ -2612,6 +2706,64 @@ impl Program {
                                     Some(find_id),
                                 ));
                             }
+
+                            // -- C8: per-role color-picker seam (theme editor) --
+                            //
+                            // A ThemeEditorBody leaf cannot exec a modal inline
+                            // (holds only &mut Context, D3). It queues this; the
+                            // pump builds a 60×23 "Select Color" dialog seeded with
+                            // `current` and stashes it into pending_modal with a
+                            // ThemeColorPick completion. pump_and_drive runs it at
+                            // top level. On OK the completion downcasts the in-tree
+                            // ColorPicker and writes the chosen color back into the
+                            // ThemeEditorBody's working theme.
+                            Deferred::OpenColorDialogForRole {
+                                editor_id,
+                                role,
+                                fg,
+                                current,
+                            } => {
+                                use crate::dialog::{ColorPicker, Dialog};
+                                use crate::widgets::{Button, ButtonFlags};
+
+                                // 60 × 23 dialog, centered on the desktop.
+                                let mut r = crate::view::Rect::new(0, 0, 60, 23);
+                                let desk_size = {
+                                    let bounds = group.state().get_bounds();
+                                    crate::view::Point::new(bounds.b.x, bounds.b.y)
+                                };
+                                r.r#move((desk_size.x - 60) / 2, (desk_size.y - 23) / 2);
+                                let mut d = Dialog::new(r, Some("Select Color".to_string()));
+                                let picker_id = d.insert_child(Box::new(ColorPicker::new(
+                                    crate::view::Rect::new(2, 2, 58, 20),
+                                    current,
+                                )));
+                                d.insert_child(Box::new(Button::new(
+                                    crate::view::Rect::new(20, 20, 30, 22),
+                                    "O~K~",
+                                    Command::OK,
+                                    ButtonFlags {
+                                        default: true,
+                                        ..Default::default()
+                                    },
+                                )));
+                                d.insert_child(Box::new(Button::new(
+                                    crate::view::Rect::new(31, 20, 41, 22),
+                                    "~C~ancel",
+                                    Command::CANCEL,
+                                    ButtonFlags::default(),
+                                )));
+                                *pending_modal = Some((
+                                    Box::new(d),
+                                    ModalCompletion::ThemeColorPick {
+                                        editor_id,
+                                        picker: picker_id,
+                                        role,
+                                        fg,
+                                    },
+                                    Some(picker_id),
+                                ));
+                            }
                         }
                     }
                 }
@@ -2922,6 +3074,53 @@ fn apply_modal_completion(
                     ed.pending_title_update = true;
                     return Some(Event::Command(Command::SAVE));
                 }
+            }
+            None
+        }
+
+        // C8: per-role color picker result — downcast the in-tree ColorPicker,
+        // read color(), write it into the ThemeEditorBody's working theme.
+        ModalCompletion::ThemeColorPick {
+            editor_id,
+            picker,
+            role,
+            fg,
+        } => {
+            if result == Command::OK {
+                let color = group
+                    .find_mut(picker)
+                    .and_then(|v| v.as_any_mut())
+                    .and_then(|a| a.downcast_mut::<crate::dialog::ColorPicker>())
+                    .map(|p| p.color());
+                if let (Some(c), Some(te)) = (
+                    color,
+                    group
+                        .find_mut(editor_id)
+                        .and_then(|v| v.as_any_mut())
+                        .and_then(|a| a.downcast_mut::<crate::dialog::ThemeEditorBody>()),
+                ) {
+                    let existing = te.working_theme().style(role);
+                    let new_style = if fg {
+                        crate::color::Style::new(c, existing.bg)
+                    } else {
+                        crate::color::Style::new(existing.fg, c)
+                    };
+                    te.set_role_style(role, new_style);
+                }
+            }
+            None
+        }
+
+        // C8: theme editor dialog result — read the ThemeEditorBody's working
+        // theme and write into the sink on OK.
+        ModalCompletion::ThemeEdit { editor_id, sink } => {
+            if result == Command::OK {
+                let theme = group
+                    .find_mut(editor_id)
+                    .and_then(|v| v.as_any_mut())
+                    .and_then(|a| a.downcast_mut::<crate::dialog::ThemeEditorBody>())
+                    .map(|te| te.working_theme().clone());
+                *sink.borrow_mut() = theme;
             }
             None
         }
@@ -9626,6 +9825,87 @@ mod tests {
             program.out_events.push_back(key(Key::Esc));
             let result = program.color_dialog(Color::Default);
             assert_eq!(result, None, "Esc → cmCancel → None");
+        }
+    }
+
+    // -- C8: theme editor -------------------------------------------------------
+    mod theme_editor_c8 {
+        use super::*;
+
+        /// Cancel leaves the theme unchanged — the sink is never written when the
+        /// dialog ends with `cmCancel`.
+        #[test]
+        fn theme_editor_cancel_leaves_theme_unchanged() {
+            let (mut program, _handle, _clock) = program_with_desktop(80, 30);
+            let original_theme = program.theme.clone();
+            program
+                .out_events
+                .push_back(Event::Command(Command::CANCEL));
+            program.theme_editor();
+            assert_eq!(
+                program.theme, original_theme,
+                "cancel must not change the installed theme"
+            );
+            assert_eq!(program.capture_len(), 0, "ModalFrame popped on cancel");
+        }
+
+        /// OK with no edits installs an equal theme (the working copy was not
+        /// modified, so the result is the same as the original).
+        #[test]
+        fn theme_editor_ok_installs_equal_theme() {
+            let (mut program, _handle, _clock) = program_with_desktop(80, 30);
+            let original_theme = program.theme.clone();
+            program.out_events.push_back(Event::Command(Command::OK));
+            program.theme_editor();
+            assert_eq!(
+                program.theme, original_theme,
+                "OK with no edits yields an equivalent theme"
+            );
+            assert_eq!(program.capture_len(), 0, "ModalFrame popped on OK");
+        }
+
+        /// OK with a modified working copy installs the new theme — exercises the
+        /// `ThemeEdit` ModalCompletion path directly (without going through the
+        /// color-picker sub-modal).
+        #[test]
+        fn theme_editor_ok_installs_new_theme() {
+            use crate::color::{Color, Style};
+            use crate::dialog::ThemeEditorBody;
+            use crate::theme::{Role, Theme};
+
+            let original = Theme::classic_blue();
+            let mut modified = original.clone();
+            modified.set_style(
+                Role::Background,
+                Style::new(Color::Bios(0xF), Color::Bios(0x0)),
+            );
+            assert_ne!(modified, original, "test setup: modified theme must differ");
+
+            // Build the ThemeEdit completion manually, wiring a ThemeEditorBody
+            // that already holds the modified working theme.
+            let te = ThemeEditorBody::new(
+                crate::view::Rect::new(1, 1, 63, 19),
+                modified.clone(),
+            );
+
+            // Insert the body into a temporary Group so find_mut works;
+            // insert() assigns and returns the ViewId.
+            let mut group = crate::view::Group::new(crate::view::Rect::new(0, 0, 64, 24));
+            let te_id = group.insert(Box::new(te));
+
+            let sink = std::rc::Rc::new(std::cell::RefCell::new(None::<Theme>));
+            let completion = ModalCompletion::ThemeEdit {
+                editor_id: te_id,
+                sink: sink.clone(),
+            };
+            apply_modal_completion(completion, Command::OK, &mut group, te_id);
+
+            let result = sink.borrow_mut().take();
+            assert_eq!(
+                result,
+                Some(modified),
+                "ThemeEdit OK must write the modified working theme into the sink"
+            );
         }
     }
 

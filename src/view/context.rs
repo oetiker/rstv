@@ -510,6 +510,26 @@ pub enum Deferred {
         editor_id: ViewId,
     },
 
+    // -- C8: the per-role color-picker seam (theme editor, D3/D9) -----------
+    /// Request the pump to open a [`ColorPicker`](crate::dialog::ColorPicker)
+    /// dialog for a specific theme role component. A
+    /// [`ThemeEditorBody`](crate::dialog::ThemeEditorBody) leaf holds only
+    /// `&mut Context` and cannot exec the dialog inline; it requests it here.
+    /// The pump builds a 60×23 "Select Color" dialog and sets `pending_modal`
+    /// with a `ThemeColorPick { editor_id, picker, role, fg }` completion,
+    /// which `pump_and_drive` runs at top level. On OK the completion updates
+    /// the `ThemeEditorBody`'s working theme.
+    OpenColorDialogForRole {
+        /// `ViewId` of the `ThemeEditorBody` to update on completion.
+        editor_id: crate::view::ViewId,
+        /// The role whose style is being edited.
+        role: crate::theme::Role,
+        /// `true` = editing foreground color; `false` = editing background color.
+        fg: bool,
+        /// Current color to seed the picker with.
+        current: crate::color::Color,
+    },
+
     // -- A3: the mouse hold-tracking router (D9 MouseTrackCapture seam) -------
     /// **Deliver a localized mouse event to the tracked view** while a mouse
     /// button is held. Posted only by
@@ -1366,6 +1386,27 @@ impl<'a> Context<'a> {
     /// `cmSave`.
     pub fn request_save_as_dialog(&mut self, editor_id: ViewId) {
         self.deferred.push(Deferred::OpenSaveAsDialog { editor_id });
+    }
+
+    /// Queue [`Deferred::OpenColorDialogForRole`] for the theme editor's per-role
+    /// color picker — **deferred**. Called from
+    /// [`ThemeEditorBody::handle_event`](crate::dialog::ThemeEditorBody). The pump
+    /// builds a "Select Color" dialog seeded with `current` and stashes it into
+    /// `pending_modal` with a `ThemeColorPick` completion; on OK the completion
+    /// updates the `ThemeEditorBody`'s working theme for `role`/`fg`.
+    pub fn open_color_dialog_for_role(
+        &mut self,
+        editor_id: ViewId,
+        role: crate::theme::Role,
+        fg: bool,
+        current: crate::color::Color,
+    ) {
+        self.deferred.push(Deferred::OpenColorDialogForRole {
+            editor_id,
+            role,
+            fg,
+            current,
+        });
     }
 
     /// Request the Find dialog be opened for `editor_id` — deferred

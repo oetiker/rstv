@@ -41,6 +41,7 @@ mod colorpick;
 mod dialog;
 mod filedlg;
 mod msgbox;
+mod theme_editor;
 
 pub use colorpick::{ColorPicker, Tab};
 pub use dialog::Dialog;
@@ -52,3 +53,4 @@ pub use filedlg::{
 };
 pub use msgbox::{MessageBoxButtons, MessageBoxKind};
 pub(crate) use msgbox::{build_input_box, build_message_box};
+pub(crate) use theme_editor::ThemeEditorBody;

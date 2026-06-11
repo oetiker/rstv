@@ -243,6 +243,14 @@ impl Command {
     /// `TOutlineViewer::selected` overrides (the base does nothing). Faithfully
     /// payload-less in rstv.
     pub const OUTLINE_ITEM_SELECTED: Command = Command("tv.outline_item_selected");
+
+    // --- Theme editor commands (C8) ---
+    /// Open the foreground color picker for the selected theme role
+    /// (`ThemeEditorBody` Fg button / `f` hotkey). rstv-native.
+    pub const THEME_EDIT_FG: Command = Command("tv.theme_edit_fg");
+    /// Open the background color picker for the selected theme role
+    /// (`ThemeEditorBody` Bg button / `b` hotkey). rstv-native.
+    pub const THEME_EDIT_BG: Command = Command("tv.theme_edit_bg");
 }
 
 /// A set of commands. Faithful to `TCommandSet` (`views.h`, `tcmdset.cpp`);
