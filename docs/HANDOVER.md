@@ -14,12 +14,12 @@
 > When a row lands: add an IMPLEMENTATION-LOG section, tick the BACKLOG row,
 > update this file.
 
-## Current state (2026-06-11, C8 committed)
+## Current state (2026-06-11, C9 committed)
 
-**HEAD = `f38c8d3`; 1152 lib tests green; clippy + fmt clean.**
+**HEAD = `95e0f47`; 1154 lib tests green; clippy + fmt clean.**
 
-Phase A + Phase B are fully complete (all rows ✅). **Phase C is in
-progress** — C1, C2, C3, C4, C5, C6, C7, and C8 are done.
+Phase A + Phase B are fully complete (all rows ✅). **Phase C is complete** —
+all C1–C9 rows are done.
 
 ### Phase C progress
 - **C1 ✅ (`b388492`)** — editor find/replace dialogs + `do_search_replace`. The
@@ -84,8 +84,14 @@ progress** — C1, C2, C3, C4, C5, C6, C7, and C8 are done.
   `src/dialog/theme_editor.rs`): scrollable list of all 75 roles with fg/bg swatches
   + "AaBb" preview; arrow/PgUp/PgDn/Home/End navigation; F/B hotkeys +
   `cmThemeEditFg`/`cmThemeEditBg` commands. Two-stage reviewed.
+- **C9 ✅ (`95e0f47`)** — bracketed-paste. `Event::Paste(String)` variant (removes
+  `Copy` from `Event`; 3 full-copy sites get `.clone()`; all existing `match *ev`
+  arms bind Copy fields and compile unchanged). `EnableBracketedPaste` wired at
+  setup/resume; `DisableBracketedPaste` at restore. `crossterm::event::Event::Paste`
+  translated to `Event::Paste`. `HeadlessHandle::push_paste`. Editor `Event::Paste`
+  arm: `mem::take` + `ev.clear()` + `insert_text`. Two-stage reviewed.
 
-**Next Phase C row = C9 (kbPaste / bracketed-paste).** Walk BACKLOG.md Phase C in order.
+**Phase C is now complete (all C1–C9 ✅).** Walk BACKLOG.md for any remaining rows.
 
 ### What is on `main` from the Phase A/B backlog run (committed):
 - **B1 ✅ (`680aabc`)** — button `cmCommandSetChanged` graying; `Program::new` seeds `command_set_changed: true` for initial broadcast. InputLine `can_update_commands`/`update_commands` from `handle_event` + `set_state`.
@@ -161,12 +167,10 @@ This session ran the **backlog run** end to end:
 
 *(none — all paused worktrees integrated this session)*
 
-## Next — Phase C in progress (C1–C7 done)
+## Next — Phase C complete; check BACKLOG.md for any remaining rows
 
-**Phase A + B fully ✅; Phase C in progress (C1–C8 ✅).** Walk BACKLOG.md
-Phase C in order. Remaining rows:
-- **C9** kbPaste / bracketed-paste multi-char insert (`editor.rs` paste branch +
-  the backend paste event; B7 landed the event, this is the editor consumer)
+**Phase A + B + C fully ✅ (all C1–C9 done).** Check BACKLOG.md for any new
+backlog rows added since Phase C started, or begin planning the next phase.
 
 **Standing deferrals** (fold into history-subsystem port):
 `init/doneHistory`.

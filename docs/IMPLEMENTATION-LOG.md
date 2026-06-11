@@ -5,6 +5,46 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## C9 COMPLETE (2026-06-11)
+
+**`95e0f47`** — **C9: bracketed-paste — `Event::Paste` + editor consumer.**
+
+The C++ `kbPaste` flag on `evKeyDown` events (set by `TEventQueue::getKeyOrPasteEvent`
+when ≥`minPasteEventCount` consecutive text events arrive) is replaced by a first-class
+`Event::Paste(String)` variant. Crossterm delivers the whole pasted string at once, making
+the C++ grapheme-by-grapheme loop unnecessary.
+
+**`Event::Paste(String)` variant (`src/event/mod.rs`):**
+- `Copy` removed from `Event`'s derive (String is not Copy); `Clone` kept.
+- Three full-copy sites updated to `.clone()`: `capture.rs:315`, `group.rs:720`, `group.rs:1231`.
+- One `run(*ev, ...)` call in `menu_session.rs` → `run(ev.clone(), ...)`.
+- All existing `match *ev { ... }` arms bind only Copy types (KeyEvent, MouseEvent,
+  Command, TimerId, Option\<ViewId\>) — these compile unchanged; only the new Paste arm
+  needs the `ref`-avoidance trick (`mem::take`).
+
+**Backend wiring (`src/backend/crossterm_backend.rs`):**
+- `EnableBracketedPaste` added to `with_color_depth` setup (alongside `EnableMouseCapture`).
+- `DisableBracketedPaste` added to `restore_terminal()` (alongside `DisableMouseCapture`).
+- `EnableBracketedPaste` added to `resume()` (alongside `EnableMouseCapture`).
+- `crossterm::event::Event::Paste(text)` → `Some(Event::Paste(text))` in `translate_event`
+  (replaces the old `// TODO(C9) ... None` arm).
+
+**Headless test helper (`src/backend/headless.rs`):**
+- `HeadlessHandle::push_paste(text: impl Into<String>)` — queues `Event::Paste`.
+
+**Editor consumer (`src/widgets/editor.rs`):**
+- `Event::Paste` arm in `handle_event`: `std::mem::take(text)` extracts the String without
+  cloning; `ev.clear()` marks the event consumed; `self.insert_text(text.as_bytes(), false, ctx)`
+  inserts the bytes (faithful to C++ `insertText(buf, length, False)`).
+- `TODO(row 66)` comment removed.
+
+**Tests (two new, `src/app/program.rs`):**
+- `bracketed_paste_inserts_into_editor` — verifies `"hello world"` round-trips via push_paste
+  → pump → editor buffer.
+- `bracketed_paste_with_newlines` — verifies `"line1\nline2"` preserves the newline.
+
+1152 → **1154 tests**. Two-stage reviewed.
+
 ## C8 COMPLETE (2026-06-11)
 
 **`f38c8d3`** — **C8: theme editor + D7 extension point.**
