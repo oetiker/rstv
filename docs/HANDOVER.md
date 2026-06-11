@@ -14,12 +14,25 @@
 > When a row lands: add an IMPLEMENTATION-LOG section, tick the BACKLOG row,
 > update this file.
 
-## Current state (2026-06-11, C9 committed)
+## Current state (2026-06-11, latent-edge-notes cleanup committed)
 
-**HEAD = `95e0f47`; 1154 lib tests green; clippy + fmt clean.**
+**HEAD = `c4848d1`; 1157 lib tests green; clippy + fmt clean.**
 
-Phase A + Phase B are fully complete (all rows ✅). **Phase C is complete** —
-all C1–C9 rows are done.
+Phase A + Phase B + Phase C are fully complete (all rows ✅).
+Post-backlog latent edge notes resolved this session:
+- **`fexpand`**: `std::path::absolute` replaces `canonicalize` in `FileEditor::new`.
+- **`efBackupFiles`**: backup-rename (`foo.txt~`) implemented in `FileEditor::save_file`.
+- **`edReadError`**: deferred-error seam (`pending_load_error`) shows read failure
+  via `request_message_box` on first `handle_event`.
+- **`initHistory`/`doneHistory`**: stale TODOs retired from `application.rs` (moot —
+  thread-local Vec auto-inits/drops; row 54 deviation documented in `history.rs`).
+
+Remaining latent edge notes (not worth fixing now):
+- `input_line.rs:334` auto-fill clamp — blocked on auto-fill validator
+- `editor.rs:952` setBufSize shrink — memory-only, no correctness impact
+- `editor.rs:2238` charScan.scanCode — already correct behaviour
+- `editor.rs:963` OOM path — Rust structural limitation (Vec infallible)
+- `menu_session.rs:1159` TMenuPopup Ctrl+letter — dead under capture-stack model
 
 ### Phase C progress
 - **C1 ✅ (`b388492`)** — editor find/replace dialogs + `do_search_replace`. The
@@ -167,10 +180,10 @@ This session ran the **backlog run** end to end:
 
 *(none — all paused worktrees integrated this session)*
 
-## Next — Phase C complete; check BACKLOG.md for any remaining rows
+## Next — all phases and latent notes addressed; plan the next phase
 
-**Phase A + B + C fully ✅ (all C1–C9 done).** Check BACKLOG.md for any new
-backlog rows added since Phase C started, or begin planning the next phase.
+**Phase A + B + C fully ✅; latent edge notes resolved (see above).**
+The backlog is exhausted. Begin planning the next feature phase.
 
 **Standing deferrals:** none — `init/doneHistory` resolved (moot: thread-local
 Vec auto-inits/auto-drops; stale TODOs removed from `application.rs`).
