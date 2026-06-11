@@ -5,6 +5,49 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## tvdemo example (2026-06-12)
+
+**`feat(examples): port tvdemo from C++ tvision`**
+
+Faithful Rust port of the magiblot/tvision `tvdemo` example as
+`examples/tvdemo.rs` (1476 lines). Follows the same patterns as `tvdir` and
+`tvedit`.
+
+**Components ported:**
+- `PuzzleView` / `PuzzleWindow` — 4×4 sliding tile puzzle (XorShift scramble,
+  arrow-key + mouse, move counter, win detection)
+- `AsciiTable` / `AsciiReport` / `AsciiWindow` — 32×8 ASCII chart with
+  keyboard/mouse cursor; info pane shows Char/Decimal/Hex
+- `CalendarView` / `CalendarWindow` — month calendar (Zeller's congruence,
+  arrow/+/- + mouse ▲▼ navigation, today highlighted, cyan palette)
+- `CalcDisplay` / `Calculator` — 4-function calculator dialog; 20 broadcast
+  buttons mapped to key chars via CALC_BUTTON command
+- `EventViewer` — `Terminal`-backed window; event strings shared via
+  `Rc<RefCell<VecDeque<String>>>` with the app; responds to
+  `CMD_FND_EV_VIEW` broadcast
+- `FileViewer` / `FileWindow` — scroller-delegate file viewer with h/v
+  scrollbars; limit initialized on first `handle_event`
+- `DemoBackground` / `change_background` — `Background` with
+  `Rc<RefCell<char>>` pattern; changed via `Program::input_box`
+- `ChBackground` — dialog variant for inline pattern editing
+- `TVDemo` — 4-menu app (System/File/Windows/Options), status line with F-key
+  hints, `run_app` closure dispatches all commands
+
+**Skipped (with comments):**
+- ClockView/HeapView (require inserting into the root Group, not exposed
+  publicly by Program)
+- Mouse dialog (`TEventQueue::mouseReverse`/`doubleDelay` not in rstv API)
+- Color dialog rows 81–87 (dropped under D7; replaced by `CMD_COLORS` →
+  `prog.theme_editor()`)
+- Desktop save/restore (D12 — TStreamable dropped)
+- Help file (out of scope per PORT-ORDER)
+- Video mode toggle (DOS-only)
+
+No library changes needed (Frame::set_flags was already pub; window methods
+accessed via downcast).
+
+---
+
 ## C9 COMPLETE (2026-06-11)
 
 **`95e0f47`** — **C9: bracketed-paste — `Event::Paste` + editor consumer.**
