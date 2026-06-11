@@ -54,7 +54,7 @@ use crate::command::Command;
 use crate::data::FieldValue;
 use crate::event::{Event, Key, MouseWheel, ctrl_to_arrow};
 use crate::theme::Role;
-use crate::view::{Context, DrawCtx, GrowMode, Options, Point, Rect, View, ViewState};
+use crate::view::{Context, DrawCtx, GrowMode, Point, Rect, View, ViewState};
 
 // ---------------------------------------------------------------------------
 // Scrollbar part codes — ports the `sb*` enum in `views.h`
@@ -178,11 +178,10 @@ impl ScrollBar {
             };
         }
 
-        // The scrollbar is selectable (it handles arrow keys when focused).
-        state.options = Options {
-            selectable: true,
-            ..Default::default()
-        };
+        // Not selectable — faithful to C++ TScrollBar (options = 0). Mouse events
+        // are delivered directly; keyboard events reach it only via post_process
+        // (ofPostProcess / sbHandleKeyboard), set by standard_scroll_bar when
+        // ScrollBarOptions::handle_keyboard is true.
 
         ScrollBar {
             state,

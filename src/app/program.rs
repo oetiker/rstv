@@ -6584,6 +6584,120 @@ mod tests {
         );
     }
 
+    /// End-to-end editor scroll wiring through a real `EditWindow` in the desktop:
+    ///
+    /// 1. Cursor moves update the **indicator** (`TIndicator::setValue` reached via
+    ///    the `IndicatorSetValue` broker — regresses the missing `Indicator::as_any_mut`
+    ///    that left the indicator frozen at "1:1").
+    /// 2. Dragging the **vertical scrollbar** scrolls the editor's `delta`
+    ///    (`cmScrollBarChanged` from the dragged bar must reach the editor through
+    ///    its own `MouseTrackCapture` hold — regresses the swallowed broadcast that
+    ///    left scrollbar-drag dead).
+    #[test]
+    fn editwindow_indicator_updates_and_scrollbar_drag_scrolls() {
+        use crate::widgets::{EditWindow, Indicator, editor_mut};
+
+        let (mut program, _h, _c) = program_with_desktop(100, 30);
+
+        // A 40-line buffer (taller than the ~27-row editor viewport, so there is
+        // real vertical scroll range).
+        let mut text = String::new();
+        for i in 1..=40 {
+            text.push_str(&format!("line {i:02} content\n"));
+        }
+        let path = std::env::temp_dir().join("rstv_editwindow_scroll_test.txt");
+        std::fs::write(&path, &text).unwrap();
+
+        let r = program.desktop_rect();
+        let win = EditWindow::new(r, Some(path.clone()), 1);
+        let editor_id = win.editor_id;
+        let ind_id = win.indicator_id;
+        let vbar_id = win.v_scroll_bar_id;
+        program.desktop_insert(Box::new(win));
+        for _ in 0..3 {
+            program.pump_once();
+        }
+
+        let editor_delta = |program: &mut Program| {
+            program
+                .group_mut()
+                .find_mut(editor_id)
+                .and_then(editor_mut)
+                .map(|e| e.delta())
+                .expect("editor resolves")
+        };
+        let indicator_loc = |program: &mut Program| {
+            program
+                .group_mut()
+                .find_mut(ind_id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<Indicator>())
+                .map(|i| i.location)
+                .expect("indicator resolves + downcasts")
+        };
+
+        // -- (1) Cursor moves update the indicator. --------------------------
+        // Before the fix the indicator was frozen at (0,0) ("1:1") because
+        // `Indicator` lacked `as_any_mut`, so the `IndicatorSetValue` broker's
+        // downcast always yielded `None`. It must now track the cursor row.
+        assert_eq!(indicator_loc(&mut program), Point::new(0, 0), "starts at 1:1");
+        for _ in 0..5 {
+            program
+                .out_events
+                .push_back(Event::KeyDown(KeyEvent::from(Key::Down)));
+            program.pump_once();
+        }
+        let loc = indicator_loc(&mut program);
+        assert!(
+            loc.y > 0,
+            "after several Down keys the indicator must track the cursor row, not stay frozen at 1:1 (got {loc:?})"
+        );
+        // And it must match the editor's own cursor row.
+        let cur_row = program
+            .group_mut()
+            .find_mut(editor_id)
+            .and_then(editor_mut)
+            .map(|e| e.cur_pos())
+            .expect("editor resolves");
+        assert_eq!(
+            loc, cur_row,
+            "indicator location mirrors the editor cursor position"
+        );
+
+        // -- (2) Dragging the v-bar scrolls the editor. ----------------------
+        assert_eq!(editor_delta(&mut program).y, 0, "not scrolled yet");
+        let vb = program
+            .group_mut()
+            .descendant_global_bounds(vbar_id, Point::new(0, 0))
+            .expect("v-bar absolute bounds");
+        // Click low in the trough (just above the down-arrow) → thumb-jump down.
+        let cx = vb.a.x;
+        let cy = vb.b.y - 2;
+        program.out_events.push_back(Event::MouseDown(MouseEvent {
+            position: Point::new(cx, cy),
+            buttons: MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
+        for _ in 0..4 {
+            program.pump_once();
+        }
+        assert!(
+            editor_delta(&mut program).y > 0,
+            "dragging the scrollbar must scroll the editor (delta.y advanced past 0)"
+        );
+        // Release the hold.
+        program.out_events.push_back(Event::MouseUp(MouseEvent {
+            position: Point::new(cx, cy),
+            ..Default::default()
+        }));
+        program.pump_once();
+
+        let _ = std::fs::remove_file(&path);
+    }
+
     /// Write broker (#3): `Scroller::set_limit` queues `ScrollBarSetParams`, and the
     /// pump applies them — setting each bar's range/page while PRESERVING its value
     /// and arrow step.

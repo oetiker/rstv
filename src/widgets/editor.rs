@@ -551,6 +551,12 @@ impl Editor {
         self.delta
     }
 
+    /// The cursor's logical position (`curPos`, zero-based row/col). Inspection
+    /// hook for tests asserting indicator/cursor wiring.
+    pub fn cur_pos(&self) -> Point {
+        self.cur_pos
+    }
+
     /// Whether the buffer has unsaved changes (`modified`).
     pub fn modified(&self) -> bool {
         self.modified

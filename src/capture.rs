@@ -169,9 +169,21 @@ impl CaptureHandler for MouseTrackCapture {
                 ctx.request_mouse_track(self.view, Event::MouseUp(localize(m, self.origin)));
                 CaptureFlow::ConsumedPop
             }
-            // Everything else (unmasked mouse classes, keys, commands,
-            // broadcasts) is discarded until `evMouseUp` — the hold is modal
-            // (the C++ loop spins past events outside `mask | evMouseUp`).
+            // Broadcasts pass THROUGH to normal routing (like `ModalFrame`). In
+            // C++ a hold loop's `mouseEvent`/`getEvent` only ever pulls *queued
+            // input* events; a `message(owner, evBroadcast, …)` notification is a
+            // SYNCHRONOUS side-channel that bypasses the queue entirely, so the
+            // hold loop never sees one to discard. rstv realizes that side-channel
+            // as a queued `Event::Broadcast`, so to stay faithful the hold must let
+            // it pass — otherwise a `cmScrollBarChanged` emitted by the very bar
+            // being dragged (its own `setValue` → `scrollDraw`) is swallowed and
+            // the editor/scroller never scrolls. (The bug this fixes: dragging a
+            // scrollbar did not move the associated text.)
+            Event::Broadcast { .. } => CaptureFlow::Pass,
+            // Everything else (unmasked mouse classes, keys, commands, timers) is
+            // discarded until `evMouseUp` — the hold is modal (the C++ loop spins
+            // past events outside `mask | evMouseUp`; idle/timer work does not run
+            // inside a hold loop).
             _ => CaptureFlow::Consumed,
         }
     }
@@ -696,6 +708,31 @@ mod tests {
         let (consumed, deferred) = play(&mut stack, wheel_down);
         assert!(consumed);
         assert!(deferred.is_empty());
+    }
+
+    /// A `Broadcast` during the hold PASSES THROUGH (not consumed) so normal
+    /// routing delivers it to the tree — faithful to C++, where a `message()`
+    /// broadcast is a synchronous side-channel the hold loop's `getEvent` never
+    /// sees. This is what lets a scrollbar being dragged notify the editor/scroller
+    /// (its `setValue` → `scrollDraw` `cmScrollBarChanged`) so the text scrolls.
+    #[test]
+    fn track_broadcast_passes_through() {
+        let (mut stack, _id) = track_stack(TrackMask {
+            mouse_move: true,
+            mouse_auto: true,
+            wheel: true,
+        });
+        let bcast = Event::Broadcast {
+            command: Command::COMMAND_SET_CHANGED,
+            source: None,
+        };
+        let (consumed, deferred) = play(&mut stack, bcast);
+        assert!(
+            !consumed,
+            "broadcast passes through the hold (C++ message() bypasses the loop)"
+        );
+        assert!(deferred.is_empty(), "the tracker forwards nothing for a broadcast");
+        assert_eq!(stack.len(), 1, "tracker stays on the stack until MouseUp");
     }
 
     /// A `KeyDown` during the hold vanishes: consumed, nothing forwarded
