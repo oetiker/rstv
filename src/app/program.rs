@@ -358,6 +358,14 @@ pub struct Program {
     /// [`run_app`](Self::run_app) between pump cycles — the slot for application-level
     /// command handling, analogous to `TApplication::handleEvent` in C++ tvision.
     app_commands: VecDeque<Command>,
+    /// The registered internal-clipboard editor ID — mirrors `TEditor::clipboard`
+    /// (a process-global static in C++). `None` = use the OS clipboard (A6 path).
+    /// Set via `Deferred::RegisterClipboardEditor` in the pump drain.
+    clipboard_editor_id: Option<ViewId>,
+    /// Whether the current clipboard editor has a non-empty selection. Refreshed
+    /// after `ClipboardEditorReceive` and passed to the `Context` clipboard snapshot
+    /// so `update_commands` can gate paste correctly without a live tree borrow.
+    clipboard_has_selection: bool,
 }
 
 /// What to do with a view-triggered modal's result, run AFTER the modal loop ends
@@ -550,6 +558,8 @@ impl Program {
             command_set_changed: true, // first idle pump broadcasts cmCommandSetChanged so startup-disabled buttons self-gray
             pending_modal: None,
             app_commands: VecDeque::new(),
+            clipboard_editor_id: None,
+            clipboard_has_selection: false,
         }
     }
 
@@ -1437,6 +1447,8 @@ impl Program {
             command_set_changed,
             pending_modal,
             app_commands,
+            clipboard_editor_id,
+            clipboard_has_selection,
         } = self;
 
         // 1. Resize check — the D9 realization of setScreenMode/cmScreenChanged.
@@ -1462,6 +1474,7 @@ impl Program {
         {
             let mut ctx = Context::new(out_events, timers, now, deferred);
             ctx.set_disabled_commands(disabled_commands.clone());
+            ctx.set_clipboard_snapshot(*clipboard_editor_id, *clipboard_has_selection);
             group.settle_currency(&mut ctx);
         }
 
@@ -1560,6 +1573,7 @@ impl Program {
                         }
                         let mut ctx = Context::new(out_events, timers, now, deferred);
                         ctx.set_disabled_commands(disabled_commands.clone());
+                        ctx.set_clipboard_snapshot(*clipboard_editor_id, *clipboard_has_selection);
                         v.handle_event(&mut ev, &mut ctx);
                     }
                 }
@@ -1592,6 +1606,7 @@ impl Program {
                         // an owned clone, so no aliasing with the deferred-apply
                         // arms that mutate the live set below.
                         ctx.set_disabled_commands(disabled_commands.clone());
+                        ctx.set_clipboard_snapshot(*clipboard_editor_id, *clipboard_has_selection);
                         // Outside-modal redirect: while a ModalFrame is the top capture,
                         // deliver outside-bounds positional events directly to the modal
                         // view (localized to its bounds) so the view decides — HistoryWindow
@@ -1678,6 +1693,7 @@ impl Program {
                     // ctx.command_enabled sees this pass's pre-apply state
                     // (snapshot semantics; next pump sees the change).
                     ctx.set_disabled_commands(disabled_commands.clone());
+                    ctx.set_clipboard_snapshot(*clipboard_editor_id, *clipboard_has_selection);
                     for effect in effects {
                         match effect {
                             Deferred::PushCapture(h) => captures.push(h),
@@ -2027,6 +2043,74 @@ impl Program {
                                         .and_then(|a| a.downcast_mut::<crate::widgets::InputLine>())
                                 {
                                     il.paste_text(&t);
+                                }
+                            }
+                            // -- C3: the internal-clipboard TEditor broker -----
+                            //
+                            // Three variants: register, receive (copy into
+                            // clipboard editor), and paste (copy out to dest
+                            // editor). All touch the view-tree family.
+
+                            // Register an internal-clipboard editor
+                            // (`TEditor::clipboard = editor`).
+                            // Store the ID, mark the editor is_clipboard=true,
+                            // and set the EditWindow title to "Clipboard".
+                            Deferred::RegisterClipboardEditor {
+                                editor_id,
+                                window_id,
+                            } => {
+                                *clipboard_editor_id = Some(editor_id);
+                                // Mark the editor as the clipboard (is_clipboard = true).
+                                if let Some(fe) = group
+                                    .find_mut(editor_id)
+                                    .and_then(|v| v.as_any_mut())
+                                    .and_then(|a| a.downcast_mut::<crate::widgets::FileEditor>())
+                                {
+                                    fe.editor.is_clipboard = true;
+                                }
+                                // Set the hosting EditWindow's title to "Clipboard".
+                                if let Some(ew) = group
+                                    .find_mut(window_id)
+                                    .and_then(|v| v.as_any_mut())
+                                    .and_then(|a| a.downcast_mut::<crate::widgets::EditWindow>())
+                                {
+                                    ew.window.set_title(Some("Clipboard".to_string()));
+                                }
+                            }
+                            // C++: `clipboard->insertFrom(source)` from clipCopy().
+                            // Insert source bytes into the clipboard editor.
+                            // The clipboard editor selects the inserted content
+                            // (is_clipboard=true → select_text=true in insert_from).
+                            Deferred::ClipboardEditorReceive { clipboard_id, data } => {
+                                // Use editor_mut (same as EditorPaste) to handle both
+                                // FileEditor and plain Editor clipboard registrations.
+                                if let Some(ed) = group
+                                    .find_mut(clipboard_id)
+                                    .and_then(crate::widgets::editor_mut)
+                                {
+                                    ed.insert_from(&data, &mut ctx);
+                                    // Refresh the has_selection snapshot after insert.
+                                    *clipboard_has_selection = ed.has_selection();
+                                }
+                            }
+                            // C++: `insertFrom(clipboard)` from clipPaste().
+                            // Step 1: read clipboard editor's selection bytes
+                            // (clone to free the borrow).
+                            // Step 2: insert into dest editor.
+                            Deferred::ClipboardEditorPaste {
+                                dest_id,
+                                clipboard_id,
+                            } => {
+                                let data: Option<Vec<u8>> = group
+                                    .find_mut(clipboard_id)
+                                    .and_then(|v| v.as_any_mut())
+                                    .and_then(|a| a.downcast_mut::<crate::widgets::FileEditor>())
+                                    .map(|fe| fe.editor.selection_bytes());
+                                if let Some(d) = data
+                                    && let Some(ed) =
+                                        group.find_mut(dest_id).and_then(crate::widgets::editor_mut)
+                                {
+                                    ed.insert_from(&d, &mut ctx);
                                 }
                             }
                             // -- row 77: cmFileFocused payload broker -------

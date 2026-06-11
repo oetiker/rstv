@@ -390,6 +390,10 @@ pub struct Editor {
     /// TFileEditor mode: setBufSize grows the buffer, and updateCommands enables
     /// cmSave/cmSaveAs. False for base Editor / Memo (fixed buffer).
     file_editor: bool,
+    /// Whether this editor IS the internal clipboard editor
+    /// (`TEditor::isClipboard()` = `clipboard == this`).
+    /// Set by the pump drain when `Deferred::RegisterClipboardEditor` is processed.
+    pub(crate) is_clipboard: bool,
     /// `modified` — the buffer has unsaved changes.
     modified: bool,
     /// `selecting` — a persistent selection is in progress (`startSelect`).
@@ -485,6 +489,7 @@ impl Editor {
             is_valid: buf_size != 0,
             can_undo: true,
             file_editor: false,
+            is_clipboard: false,
             modified: false,
             selecting: false,
             overwrite: false,
@@ -846,7 +851,7 @@ impl Editor {
     // -- selection / cursor (teditor2.cpp) ----------------------------------
 
     /// `hasSelection()`.
-    fn has_selection(&self) -> bool {
+    pub(crate) fn has_selection(&self) -> bool {
         self.sel_start != self.sel_end
     }
 
@@ -1173,9 +1178,12 @@ impl Editor {
         }
         self.limit.y += lines - sel_lines;
         self.delta.y = 0.max(self.delta.y.min(self.limit.y - self.state.size.y));
-        // isClipboard() == false → modified = true (the static clipboard editor is
-        // null in this row, so we are never the clipboard).
-        self.modified = true;
+        // C++: `if (isClipboard() == False) modified = True;`
+        // The clipboard editor itself stays unmodified (it is not a "file" —
+        // modified tracking is for the save guard).
+        if !self.is_clipboard {
+            self.modified = true;
+        }
         // setBufSize(bufLen + delCount) — no-op for the base.
         if sel_lines == 0 && lines == 0 {
             self.update(UF_LINE);
@@ -1193,6 +1201,31 @@ impl Editor {
     /// `deleteSelect()` — delete the current selection.
     fn delete_select(&mut self) {
         self.insert_buffer(&[], 0, 0, self.can_undo, false);
+    }
+
+    /// `TEditor::insertFrom(editor)` — insert another editor's selection bytes
+    /// into self. `select_text = self.is_clipboard` (the clipboard editor selects
+    /// the inserted content; a normal destination editor does not).
+    ///
+    /// Called by the pump's `ClipboardEditorReceive` (dest = clipboard editor,
+    /// `is_clipboard = true` → `select_text = true`) and `ClipboardEditorPaste`
+    /// (dest = normal editor, `is_clipboard = false` → `select_text = false`).
+    /// After the insert the caller must call `flush_if_unlocked` to publish
+    /// updated scrollbar params.
+    pub(crate) fn insert_from(&mut self, data: &[u8], ctx: &mut Context) -> bool {
+        let res = self.insert_buffer(data, 0, data.len(), self.can_undo, self.is_clipboard);
+        self.flush_if_unlocked(ctx);
+        res
+    }
+
+    /// Extract the current selection as a byte vec (for the pump clipboard broker,
+    /// C3). The selection bytes are always physically contiguous in the gap buffer
+    /// (`curPtr` is at `selStart` or `selEnd`, so the gap never sits inside the
+    /// selection).
+    pub(crate) fn selection_bytes(&self) -> Vec<u8> {
+        let len = self.sel_end - self.sel_start;
+        let start = self.buf_ptr(self.sel_start);
+        self.buffer[start..start + len].to_vec()
     }
 
     /// `deleteRange(startPtr, endPtr, delSelect)` — delete a range, honoring an
@@ -1451,13 +1484,17 @@ impl Editor {
         use crate::command::Command;
         let has_undo = self.del_count != 0 || self.ins_count != 0;
         self.set_cmd_state(Command::UNDO, has_undo, ctx);
-        // isClipboard() == false (the static clipboard is null in this row).
-        let has_sel = self.has_selection();
-        self.set_cmd_state(Command::CUT, has_sel, ctx);
-        self.set_cmd_state(Command::COPY, has_sel, ctx);
-        // clipboard == 0 → paste always enabled.
-        self.set_cmd_state(Command::PASTE, true, ctx);
-        self.set_cmd_state(Command::CLEAR, has_sel, ctx);
+        // C++: `if (isClipboard() == False)` — the clipboard editor does not
+        // update cut/copy/paste (it is not a user-editable file editor).
+        if !self.is_clipboard {
+            let has_sel = self.has_selection();
+            self.set_cmd_state(Command::CUT, has_sel, ctx);
+            self.set_cmd_state(Command::COPY, has_sel, ctx);
+            // C++: `clipboard == 0 || clipboard->hasSelection()`
+            let paste_ok = ctx.clipboard_editor_id().is_none() || ctx.clipboard_has_selection();
+            self.set_cmd_state(Command::PASTE, paste_ok, ctx);
+        }
+        self.set_cmd_state(Command::CLEAR, self.has_selection(), ctx);
         self.set_cmd_state(Command::FIND, true, ctx);
         self.set_cmd_state(Command::REPLACE, true, ctx);
         self.set_cmd_state(Command::SEARCH_AGAIN, true, ctx);
@@ -1477,19 +1514,33 @@ impl Editor {
 
     // -- clipboard (teditor1.cpp; D11 system-clipboard path) ----------------
 
-    /// `clipCopy()` — copy the selection to the system clipboard.
+    /// `clipCopy()` — copy the selection to the internal clipboard (C3) or
+    /// system clipboard (A6).
     fn clip_copy(&mut self, ctx: &mut Context) -> bool {
-        // TODO(row 69): internal-clipboard TEditor branch (insertFrom) — null in
-        // row 66, system-clipboard path only.
-        let len = self.sel_end - self.sel_start;
-        let start = self.buf_ptr(self.sel_start);
-        // The selection is always physically contiguous (curPtr is always at
-        // selStart or selEnd, so the gap never sits inside the selection).
-        let text = String::from_utf8_lossy(&self.buffer[start..start + len]).into_owned();
-        ctx.set_clipboard(text);
-        self.selecting = false;
-        self.update(UF_UPDATE);
-        true
+        // C++: `if (clipboard != this)` — the clipboard editor cannot copy from itself.
+        if ctx.clipboard_editor_id() == self.state.id() && self.state.id().is_some() {
+            return false;
+        }
+        if let Some(clipboard_id) = ctx.clipboard_editor_id() {
+            // Internal clipboard: snapshot selection bytes → ClipboardEditorReceive.
+            // C++: `clipboard->insertFrom(this)` — copy FROM self INTO clipboard editor.
+            let data = self.selection_bytes();
+            ctx.clipboard_editor_receive(clipboard_id, data);
+            self.selecting = false;
+            self.update(UF_UPDATE);
+            true
+        } else {
+            // System clipboard path (A6).
+            let len = self.sel_end - self.sel_start;
+            let start = self.buf_ptr(self.sel_start);
+            // The selection is always physically contiguous (curPtr is always at
+            // selStart or selEnd, so the gap never sits inside the selection).
+            let text = String::from_utf8_lossy(&self.buffer[start..start + len]).into_owned();
+            ctx.set_clipboard(text);
+            self.selecting = false;
+            self.update(UF_UPDATE);
+            true
+        }
     }
 
     /// `clipCut()` — copy then delete.
@@ -1499,12 +1550,19 @@ impl Editor {
         }
     }
 
-    /// `clipPaste()` — request the system-clipboard text be inserted (deferred).
+    /// `clipPaste()` — paste from the internal clipboard (C3) or system clipboard (A6).
     fn clip_paste(&mut self, ctx: &mut Context) {
-        // TODO(row 69): internal-clipboard TEditor branch (insertFrom) — null in
-        // row 66, system-clipboard path only.
-        if let Some(id) = self.state.id() {
-            ctx.editor_paste(id);
+        if let Some(clipboard_id) = ctx.clipboard_editor_id() {
+            // Internal clipboard: ClipboardEditorPaste broker reads clipboard's
+            // selection and inserts into self. C++: `insertFrom(clipboard)`.
+            if let Some(id) = self.state.id() {
+                ctx.clipboard_editor_paste(id, clipboard_id);
+            }
+        } else {
+            // System clipboard path (A6).
+            if let Some(id) = self.state.id() {
+                ctx.editor_paste(id);
+            }
         }
     }
 
@@ -2880,6 +2938,17 @@ impl View for EditWindow {
     fn handle_event(&mut self, ev: &mut crate::event::Event, ctx: &mut crate::view::Context) {
         use crate::command::Command;
         use crate::event::Event;
+        // C++ `TEditWindow::close()`: hide instead of close when hosting the
+        // clipboard editor. `if (editor->isClipboard() == True) hide();`
+        if let Event::Command(ref cmd) = *ev
+            && *cmd == Command::CLOSE
+            && ctx.clipboard_editor_id() == Some(self.editor_id)
+            && let Some(id) = crate::view::View::state(self).id()
+        {
+            ctx.request_set_visible(id, false);
+            ev.clear();
+            return;
+        }
         self.window.handle_event(ev, ctx);
         if let Event::Broadcast { command, .. } = ev
             && *command == Command::UPDATE_TITLE
@@ -4864,5 +4933,139 @@ mod tests {
             d.draw(&mut dc);
         });
         insta::assert_snapshot!(screen.snapshot());
+    }
+
+    // -- C3: internal-clipboard tests ----------------------------------------
+
+    /// `insert_from` inserts another editor's bytes into self (non-clipboard dest).
+    #[test]
+    fn insert_from_copies_bytes() {
+        let mut a = ed();
+        insert(&mut a, "hello");
+        // Select the "hello" content.
+        a.set_select(0, 5, false);
+        let data = a.selection_bytes();
+        assert_eq!(data, b"hello");
+
+        let mut b = ed();
+        let mut cx = Cx::new();
+        {
+            let mut ctx = cx.ctx();
+            let ok = b.insert_from(&data, &mut ctx);
+            assert!(ok);
+        }
+        assert_eq!(text(&b), "hello");
+    }
+
+    /// When `is_clipboard = true`, `insert_from` selects the inserted content.
+    #[test]
+    fn clipboard_editor_receive_selects_inserted_text() {
+        let mut e = ed();
+        e.is_clipboard = true;
+        let mut cx = Cx::new();
+        {
+            let mut ctx = cx.ctx();
+            e.insert_from(b"world", &mut ctx);
+        }
+        assert!(
+            e.has_selection(),
+            "clipboard editor selects after insert_from"
+        );
+        assert_eq!(e.selection_bytes(), b"world");
+    }
+
+    /// `clip_copy` with an internal clipboard queues `ClipboardEditorReceive`, not `SetClipboard`.
+    #[test]
+    fn clip_copy_internal_routes_to_deferred_receive() {
+        use crate::view::ViewId;
+        // Mint a fake clipboard editor id.
+        let fake_clipboard_id = ViewId::next();
+        let mut e = ed();
+        insert(&mut e, "hello");
+        e.set_select(0, 5, false);
+        let mut cx = Cx::new();
+        {
+            let mut ctx = cx.ctx();
+            ctx.set_clipboard_snapshot(Some(fake_clipboard_id), false);
+            assert!(e.clip_copy(&mut ctx));
+        }
+        assert!(
+            cx.deferred.iter().any(|d| matches!(
+                d,
+                Deferred::ClipboardEditorReceive { clipboard_id, data }
+                if *clipboard_id == fake_clipboard_id && data == b"hello"
+            )),
+            "clip_copy with internal clipboard queues ClipboardEditorReceive"
+        );
+        assert!(
+            !cx.deferred
+                .iter()
+                .any(|d| matches!(d, Deferred::SetClipboard(..))),
+            "clip_copy with internal clipboard must NOT queue SetClipboard"
+        );
+    }
+
+    /// `clip_paste` with an internal clipboard queues `ClipboardEditorPaste`, not `EditorPaste`.
+    #[test]
+    fn clip_paste_internal_routes_to_deferred_paste() {
+        use crate::view::ViewId;
+        let fake_clipboard_id = ViewId::next();
+        // The editor must have an id to be addressable.
+        let mut group = Group::new(Rect::new(0, 0, 40, 10));
+        let id = group.insert(Box::new(ed()));
+        let mut cx = Cx::new();
+        {
+            let mut ctx = cx.ctx();
+            ctx.set_clipboard_snapshot(Some(fake_clipboard_id), true);
+            let v = group.find_mut(id).unwrap();
+            let e = v.as_any_mut().unwrap().downcast_mut::<Editor>().unwrap();
+            e.clip_paste(&mut ctx);
+        }
+        assert!(
+            cx.deferred.iter().any(|d| matches!(
+                d,
+                Deferred::ClipboardEditorPaste { dest_id, clipboard_id }
+                if *dest_id == id && *clipboard_id == fake_clipboard_id
+            )),
+            "clip_paste with internal clipboard queues ClipboardEditorPaste"
+        );
+        assert!(
+            !cx.deferred
+                .iter()
+                .any(|d| matches!(d, Deferred::EditorPaste(..))),
+            "clip_paste with internal clipboard must NOT queue EditorPaste"
+        );
+    }
+
+    /// The clipboard editor skips cut/copy/paste commands in `update_commands`.
+    #[test]
+    fn update_commands_clipboard_editor_skips_cut_copy_paste() {
+        let mut e = ed();
+        e.is_clipboard = true;
+        // Give it a selection (so it WOULD enable CUT/COPY/CLEAR if it weren't a clipboard).
+        e.state.state.active = true;
+        insert(&mut e, "abc");
+        e.set_select(0, 3, false);
+        let mut cx = Cx::new();
+        {
+            let mut ctx = cx.ctx();
+            e.update_commands(&mut ctx);
+        }
+        // CUT and COPY should NOT appear in deferred (skipped for clipboard editor).
+        assert!(
+            !cx.deferred.iter().any(|d| matches!(
+                d,
+                Deferred::EnableCommand(c) if *c == Command::CUT || *c == Command::COPY || *c == Command::PASTE
+            )),
+            "clipboard editor must not enable CUT, COPY, or PASTE"
+        );
+        // CLEAR should still be enabled (has_selection AND active).
+        assert!(
+            cx.deferred.iter().any(|d| matches!(
+                d,
+                Deferred::EnableCommand(c) if *c == Command::CLEAR
+            )),
+            "CLEAR should be enabled for active clipboard editor with selection"
+        );
     }
 }

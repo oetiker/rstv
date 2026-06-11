@@ -5,6 +5,31 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Session addendum — C3 COMPLETE (2026-06-11)
+
+**`HEAD`** — **C3: internal-clipboard editor (`insertFrom` branch + clipboard `EditWindow`).**
+
+The C++ `TEditor::clipboard` static is a pointer to an editor instance used as an internal cut-buffer; when set, copy/paste routes through that editor instead of the OS clipboard. This row wires the Rust equivalent.
+
+**What landed:**
+
+- `Editor::is_clipboard: bool` — marks the editor that IS the clipboard. Initialized `false`; set `true` by the pump drain when `RegisterClipboardEditor` is processed.
+- `Editor::insert_from(&[u8], ctx)` — core op: `insert_buffer(data, 0, len, can_undo, is_clipboard)`. `select_text = is_clipboard` faithfully mirrors C++: the clipboard editor selects the inserted bytes (so subsequent pastes use the selection); a normal dest editor does not.
+- `Editor::selection_bytes()` — extracts the current selection from the gap-buffer (contiguous because the gap is always at `sel_start` or `sel_end`). Used by the pump broker.
+- `insert_buffer()` modified guard: `if !is_clipboard { self.modified = true }` — the clipboard editor does not track dirty state.
+- `clip_copy()` dual-path: clipboard-editor branch snapshots selection bytes + queues `Deferred::ClipboardEditorReceive`; OS path unchanged. Guard: `clipboard != this` (the clipboard editor cannot copy from itself).
+- `clip_paste()` dual-path: clipboard-editor branch queues `Deferred::ClipboardEditorPaste`; OS path unchanged.
+- `update_commands()` faithful to C++: when `is_clipboard`, skip CUT/COPY/PASTE; PASTE gate = `clipboard_editor_id.is_none() || clipboard_has_selection`.
+- Three new `Deferred` variants: `RegisterClipboardEditor { editor_id, window_id }`, `ClipboardEditorReceive { clipboard_id, data }`, `ClipboardEditorPaste { dest_id, clipboard_id }`.
+- `Context` clipboard snapshots: `clipboard_editor_id: Option<ViewId>` + `clipboard_has_selection: bool` (same pattern as `disabled_commands`); `set_clipboard_snapshot` refreshed at all four `Context` construction sites in `pump_once`.
+- `Program::clipboard_editor_id` + `clipboard_has_selection` backing fields.
+- Three pump drain arms: `RegisterClipboardEditor` marks editor + sets window title "Clipboard"; `ClipboardEditorReceive` calls `editor_mut`-based `insert_from` + refreshes snapshot; `ClipboardEditorPaste` reads clipboard `selection_bytes`, then inserts into dest via `editor_mut`.
+- `EditWindow::handle_event` intercepts `cmClose` when `ctx.clipboard_editor_id() == Some(self.editor_id)` → `request_set_visible(id, false)` + clear event (the clipboard window hides instead of closing).
+
+**API for callers:** `ctx.register_clipboard_editor(editor_id, window_id)` — deferred; safe to call from any `handle_event`.
+
+1135 lib tests green (+ 5 new); clippy + fmt clean. Two-stage reviewed.
+
 ## Session addendum — C2 COMPLETE (2026-06-11)
 
 **`2ee829c`** — **C2: editor right-click context menu (`initContextMenu` + `popupMenu`).** Replaces

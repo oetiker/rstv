@@ -14,12 +14,12 @@
 > When a row lands: add an IMPLEMENTATION-LOG section, tick the BACKLOG row,
 > update this file.
 
-## Current state (2026-06-11, C2 committed)
+## Current state (2026-06-11, C3 committed)
 
-**HEAD = `2ee829c`; 1130 lib tests green; clippy + fmt clean.**
+**HEAD = pending commit; 1135 lib tests green; clippy + fmt clean.**
 
 Phase A + Phase B are fully complete (all rows ✅). **Phase C is in
-progress** — C1 and C2 are done.
+progress** — C1, C2, and C3 are done.
 
 ### Phase C progress
 - **C1 ✅ (`b388492`)** — editor find/replace dialogs + `do_search_replace`. The
@@ -36,8 +36,16 @@ progress** — C1 and C2 are done.
   `kbShiftDel`/`kbCtrlIns`/`kbShiftIns`/`kbCtrlU`) and calls `popup_menu()` (the
   row-52 implementation). Global position = `m.position + self.abs_origin`. No new
   seam — `popup_menu` queues the deferred effects inline. Two-stage reviewed.
+- **C3 ✅** — internal-clipboard editor (`insertFrom` branch + clipboard
+  `EditWindow`). `Editor::is_clipboard` field + `insert_from` method +
+  `selection_bytes` helper. `clip_copy`/`clip_paste` dual-path (internal vs OS).
+  `update_commands` faithful guard (skip CUT/COPY/PASTE for clipboard editor; PASTE
+  gated on `clipboard_has_selection` snapshot). Three new `Deferred` variants +
+  `Context` snapshot fields + three pump drain arms. `EditWindow::handle_event`
+  hides instead of closing when hosting the clipboard editor. Caller API:
+  `ctx.register_clipboard_editor(editor_id, window_id)`. Two-stage reviewed.
 
-**Next Phase C row = C3 (internal-clipboard editor).** Walk BACKLOG.md
+**Next Phase C row = C4 (D10 dialog gather/scatter group-walk).** Walk BACKLOG.md
 Phase C in order.
 
 ### What is on `main` from the Phase A/B backlog run (committed):
@@ -114,13 +122,10 @@ This session ran the **backlog run** end to end:
 
 *(none — all paused worktrees integrated this session)*
 
-## Next — Phase C in progress (C1 done, C2 next)
+## Next — Phase C in progress (C1–C3 done)
 
-**Phase A + B fully ✅; Phase C started this session (C1 ✅).** Walk BACKLOG.md
+**Phase A + B fully ✅; Phase C in progress (C1, C2, C3 ✅).** Walk BACKLOG.md
 Phase C in order. Remaining rows:
-- **C2** editor right-click context menu (`initContextMenu` + `popupMenu`;
-  `editor.rs` has the breadcrumb in the `MouseDown` arm)
-- **C3** internal-clipboard editor (`insertFrom` branch + clipboard `EditWindow`)
 - **C4** D10 dialog gather/scatter group-walk (deferred to its first multi-field
   consumer — the find/replace completions deliberately do **not** use it; they
   read children by id, so C4 is still open)

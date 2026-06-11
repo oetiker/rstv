@@ -208,6 +208,49 @@ pub enum Deferred {
     /// the insertion-order drain stays order-equivalent.
     UpdateMenu(ViewId),
 
+    // -- C3: the internal-clipboard TEditor broker (D3) -----------------------
+    //
+    // All three variants touch the **view-tree** family (same as `ChangeBounds` /
+    // `SetState` / `Close` / `FocusById`), so the insertion-order drain stays
+    // order-equivalent: no single dispatch co-queues two ops on the same clipboard
+    // editor in a conflicting order. They exist because a leaf editor holds only
+    // `&mut Context` (D3) and so cannot read or mutate the clipboard editor (a
+    // sibling / other window's child) inline; the pump — which owns the whole
+    // tree — is the cross-view broker.
+    /// **Register an internal-clipboard editor** (`TEditor::clipboard = editor`).
+    /// The pump stores the ID on `Program::clipboard_editor_id`, marks the editor
+    /// `is_clipboard = true`, and sets the hosting `EditWindow`'s title to
+    /// "Clipboard". Touches the **view-tree** family + `clipboard_editor_id`
+    /// (loop state), so the insertion-order drain stays order-equivalent.
+    RegisterClipboardEditor {
+        /// The editor to register as the internal clipboard.
+        editor_id: ViewId,
+        /// The `EditWindow` whose title to set to "Clipboard".
+        window_id: ViewId,
+    },
+    /// **Copy source bytes into the clipboard editor**
+    /// (`clipboard->insertFrom(source)` from `clipCopy()`). The pump finds the
+    /// clipboard editor and calls `insert_from(&data)` (which calls `insert_buffer`
+    /// with `select_text = is_clipboard`, i.e. `true` for the clipboard editor).
+    /// Touches the **view-tree** family.
+    ClipboardEditorReceive {
+        /// The clipboard editor that receives the data.
+        clipboard_id: ViewId,
+        /// The raw bytes to insert (the source editor's selection snapshot).
+        data: Vec<u8>,
+    },
+    /// **Paste the clipboard editor's selection into the destination editor**
+    /// (`insertFrom(clipboard)` from `clipPaste()`). The pump reads the clipboard
+    /// editor's selection bytes (step 1), then calls `insert_from(&data)` on the
+    /// dest editor (step 2, two separate `find_mut` calls). Touches the
+    /// **view-tree** family.
+    ClipboardEditorPaste {
+        /// The destination editor to paste into.
+        dest_id: ViewId,
+        /// The clipboard editor whose selection to read.
+        clipboard_id: ViewId,
+    },
+
     // -- rows 50-52: the TMenuView modal layer (MenuSession, D3/D9) ------------
     /// **Open a menu box** — the deferred realization of `execute()`'s submenu
     /// open (`tmnuview.cpp:382`, `topMenu()->newSubView(r, current->subMenu)` →
@@ -880,6 +923,19 @@ pub struct Context<'a> {
     /// everything enabled. Snapshot semantics: an enable/disable deferred in the
     /// SAME dispatch becomes visible on the next pump.
     disabled_commands: CommandSet,
+    /// Snapshot of the registered internal-clipboard editor ID (C3) — `None` when
+    /// no internal clipboard is wired (= use OS clipboard). Refreshed once per
+    /// `pump_once` pass via [`set_clipboard_snapshot`](Self::set_clipboard_snapshot).
+    /// Mirrors `TEditor::clipboard` (a process-global static in C++). Snapshot
+    /// semantics: a `RegisterClipboardEditor` deferred in the SAME dispatch
+    /// becomes visible on the next pump.
+    clipboard_editor_id: Option<ViewId>,
+    /// Whether the clipboard editor currently has a non-empty selection (snapshot).
+    /// Drives the `update_commands` paste-enabled logic:
+    /// `clipboard == 0 || clipboard->hasSelection()` from C++. `false` when no
+    /// internal clipboard is registered (snapshot default = OS clipboard = paste
+    /// always enabled via the `clipboard_editor_id.is_none()` branch).
+    clipboard_has_selection: bool,
 }
 
 impl<'a> Context<'a> {
@@ -898,6 +954,8 @@ impl<'a> Context<'a> {
             owner_size: Point::default(),
             phase: Phase::Focused,
             disabled_commands: CommandSet::new(),
+            clipboard_editor_id: None,
+            clipboard_has_selection: false,
         }
     }
 
@@ -919,6 +977,60 @@ impl<'a> Context<'a> {
     /// `&CommandSet` accessor would have.
     pub fn command_enabled(&self, cmd: Command) -> bool {
         !self.disabled_commands.has(cmd)
+    }
+
+    /// The registered internal-clipboard editor ID (from the pump snapshot, C3).
+    /// `None` = no internal clipboard wired → use OS clipboard (A6 path).
+    pub fn clipboard_editor_id(&self) -> Option<ViewId> {
+        self.clipboard_editor_id
+    }
+
+    /// Whether the clipboard editor has a non-empty selection (from the pump
+    /// snapshot, C3). Drives the paste-enabled logic in `update_commands`:
+    /// `clipboard == 0 || clipboard->hasSelection()`.
+    pub fn clipboard_has_selection(&self) -> bool {
+        self.clipboard_has_selection
+    }
+
+    /// Refresh the clipboard snapshot. Called by the pump once per `pump_once`
+    /// pass with the live `clipboard_editor_id` + `clipboard_has_selection`;
+    /// default-constructed contexts (tests, ctor plumbing) keep `None`/`false`
+    /// (= OS clipboard, paste always enabled).
+    pub fn set_clipboard_snapshot(&mut self, editor_id: Option<ViewId>, has_selection: bool) {
+        self.clipboard_editor_id = editor_id;
+        self.clipboard_has_selection = has_selection;
+    }
+
+    /// Register `editor_id` as the process-wide internal clipboard editor —
+    /// **deferred** ([`Deferred::RegisterClipboardEditor`]). The pump stores the
+    /// ID, marks the editor `is_clipboard = true`, and sets the `EditWindow`'s
+    /// title to "Clipboard".
+    pub fn register_clipboard_editor(&mut self, editor_id: ViewId, window_id: ViewId) {
+        self.deferred.push(Deferred::RegisterClipboardEditor {
+            editor_id,
+            window_id,
+        });
+    }
+
+    /// Copy `data` into the clipboard editor — **deferred**
+    /// ([`Deferred::ClipboardEditorReceive`]). `TEditor::clipCopy`'s
+    /// `clipboard->insertFrom(this)` path: the pump finds the clipboard editor
+    /// and calls `insert_from(&data)` (select_text = true because
+    /// `is_clipboard = true`).
+    pub fn clipboard_editor_receive(&mut self, clipboard_id: ViewId, data: Vec<u8>) {
+        self.deferred
+            .push(Deferred::ClipboardEditorReceive { clipboard_id, data });
+    }
+
+    /// Paste from the clipboard editor into `dest_id` — **deferred**
+    /// ([`Deferred::ClipboardEditorPaste`]). `TEditor::clipPaste`'s
+    /// `insertFrom(clipboard)` path: the pump reads the clipboard editor's
+    /// selection bytes, then calls `insert_from(&data)` on the dest editor.
+    pub fn clipboard_editor_paste(&mut self, dest_id: ViewId, clipboard_id: ViewId) {
+        self.deferred.push(Deferred::ClipboardEditorPaste {
+            dest_id,
+            clipboard_id,
+        });
     }
 
     /// Post a targeted command (`Event::Command`) into the loop's queue.
