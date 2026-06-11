@@ -808,37 +808,7 @@ impl Program {
                         }
                     }
                     Deferred::OpenSaveAsDialog { editor_id } => {
-                        use crate::dialog::{FD_OK_BUTTON, FileDialog};
-                        let initial = self
-                            .group
-                            .find_mut(editor_id)
-                            .and_then(|v| v.as_any_mut())
-                            .and_then(|a| a.downcast_mut::<crate::widgets::FileEditor>())
-                            .and_then(|fe| {
-                                fe.file_name
-                                    .as_ref()
-                                    .map(|p| p.to_string_lossy().into_owned())
-                            });
-                        let mut fd =
-                            FileDialog::new("*.*", "Save file as", "~N~ame", FD_OK_BUTTON, 101);
-                        if let Some(name) = initial {
-                            crate::view::View::set_value(
-                                &mut fd,
-                                crate::data::FieldValue::Text(name),
-                            );
-                        }
-                        let (result, _) = self.exec_view_with_completion(
-                            Box::new(fd),
-                            Some(ModalCompletion::SaveAsPick { editor_id }),
-                            None,
-                            None,
-                            false,
-                        );
-                        if result != Command::CANCEL {
-                            // SaveAsPick sets file_name and re-injects cmSave into
-                            // out_events. Drain it now so save_file runs before the
-                            // re-validate pass sees modified=false.
-                            self.pump_once();
+                        if self.drive_save_as_inline(editor_id) {
                             revalidate = true;
                         }
                     }
@@ -1487,37 +1457,7 @@ impl Program {
                         }
                     }
                     Deferred::OpenSaveAsDialog { editor_id } => {
-                        use crate::dialog::{FD_OK_BUTTON, FileDialog};
-                        let initial = self
-                            .group
-                            .find_mut(editor_id)
-                            .and_then(|v| v.as_any_mut())
-                            .and_then(|a| a.downcast_mut::<crate::widgets::FileEditor>())
-                            .and_then(|fe| {
-                                fe.file_name
-                                    .as_ref()
-                                    .map(|p| p.to_string_lossy().into_owned())
-                            });
-                        let mut fd =
-                            FileDialog::new("*.*", "Save file as", "~N~ame", FD_OK_BUTTON, 101);
-                        if let Some(name) = initial {
-                            crate::view::View::set_value(
-                                &mut fd,
-                                crate::data::FieldValue::Text(name),
-                            );
-                        }
-                        let (result, _) = self.exec_view_with_completion(
-                            Box::new(fd),
-                            Some(ModalCompletion::SaveAsPick { editor_id }),
-                            None,
-                            None,
-                            false,
-                        );
-                        if result != Command::CANCEL {
-                            // SaveAsPick sets file_name and re-injects cmSave into
-                            // out_events. Drain it now so save_file runs before the
-                            // re-validate pass sees modified=false.
-                            self.pump_once();
+                        if self.drive_save_as_inline(editor_id) {
                             revalidate = true;
                         }
                     }
@@ -1527,6 +1467,53 @@ impl Program {
             if !revalidate {
                 return valid;
             }
+        }
+    }
+
+    /// Drive a `SaveAs` [`FileDialog`](crate::dialog::FileDialog) for `editor_id`
+    /// inline (we hold `&mut self` between pump iterations).
+    ///
+    /// Used by both [`valid_end`](Self::valid_end) and
+    /// [`validate_modal_close`](Self::validate_modal_close) when a `valid()` call
+    /// queues [`Deferred::OpenSaveAsDialog`]. Builds the C++ `edSaveAs` dialog,
+    /// pre-fills the input with the editor's current filename, runs it via
+    /// [`exec_view_with_completion`](Self::exec_view_with_completion) with
+    /// [`ModalCompletion::SaveAsPick`], and calls [`pump_once`](Self::pump_once)
+    /// to service the re-injected `cmSave` on accept.
+    ///
+    /// Returns `true` if the dialog was accepted (revalidation needed), `false`
+    /// on Cancel (no revalidation).
+    fn drive_save_as_inline(&mut self, editor_id: ViewId) -> bool {
+        use crate::dialog::{FD_OK_BUTTON, FileDialog};
+        let initial = self
+            .group
+            .find_mut(editor_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<crate::widgets::FileEditor>())
+            .and_then(|fe| {
+                fe.file_name
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned())
+            });
+        let mut fd = FileDialog::new("*.*", "Save file as", "~N~ame", FD_OK_BUTTON, 101);
+        if let Some(name) = initial {
+            crate::view::View::set_value(&mut fd, crate::data::FieldValue::Text(name));
+        }
+        let (result, _) = self.exec_view_with_completion(
+            Box::new(fd),
+            Some(ModalCompletion::SaveAsPick { editor_id }),
+            None,
+            None,
+            false,
+        );
+        if result != Command::CANCEL {
+            // SaveAsPick sets file_name on the editor and re-injects cmSave into
+            // out_events. Drain it now so save_file runs before the re-validate
+            // pass sees modified=false.
+            self.pump_once();
+            true
+        } else {
+            false
         }
     }
 
@@ -10137,6 +10124,36 @@ mod tests {
             assert!(valid, "Yes → save succeeds → allow quit");
             assert!(path.exists(), "Yes → file written to disk");
             let _ = std::fs::remove_file(&path);
+        }
+
+        /// valid_end with an untitled modified editor: drives "Save untitled file?"
+        /// inline, user picks Yes → triggers OpenSaveAsDialog inline → user Cancels
+        /// the FileDialog → close is vetoed → valid_end returns false.
+        ///
+        /// This exercises the OpenSaveAsDialog arm of valid_end (the most novel C5
+        /// branch). The happy-path (Yes + save) is covered by
+        /// `validate_modal_close`'s existing SaveAs tests.
+        #[test]
+        fn valid_end_quit_yes_untitled_cancel_saveas_vetoes_quit() {
+            let (mut program, _h, _c) = program_with_desktop(80, 25);
+            let (_win_id, _ed) = modified_edit_window(&mut program, None); // untitled
+
+            // cmYes answers "Save untitled file?" → save() → OpenSaveAsDialog inline.
+            // cmCancel answers the FileDialog → drive_save_as_inline returns false
+            // → revalidate stays false → valid_end returns false (veto).
+            program.out_events.push_back(Event::Command(Command::YES));
+            program
+                .out_events
+                .push_back(Event::Command(Command::CANCEL));
+            let valid = program.valid_end(Command::QUIT);
+            assert!(!valid, "Cancel on SaveAs → veto quit");
+            assert!(
+                !program
+                    .deferred
+                    .iter()
+                    .any(|d| matches!(d, Deferred::OpenSaveAsDialog { .. })),
+                "no OpenSaveAsDialog leaks after inline drive"
+            );
         }
     }
 }
