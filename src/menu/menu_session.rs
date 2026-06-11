@@ -956,7 +956,7 @@ impl CaptureHandler for MenuSession {
             | Event::MouseDown(_)
             | Event::MouseUp(_)
             | Event::MouseMove(_)
-            | Event::Command(Command::MENU) => self.run(*ev, ctx),
+            | Event::Command(Command::MENU) => self.run(ev.clone(), ctx),
             // A non-cmMenu command → doReturn (close the whole menu). C++
             // execute()'s tail re-posts the command (`putEvent(e)` when
             // `e.what == evCommand`, tmnuview.cpp:403-405) so it still reaches the

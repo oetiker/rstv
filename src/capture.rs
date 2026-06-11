@@ -312,7 +312,7 @@ mod tests {
 
     impl CaptureHandler for Recorder {
         fn handle(&mut self, ev: &mut Event, _ctx: &mut Context) -> CaptureFlow {
-            self.log.borrow_mut().push(*ev);
+            self.log.borrow_mut().push(ev.clone());
             (self.flow)()
         }
     }

@@ -3319,7 +3319,7 @@ mod tests {
             ctx.fill(ext, self.ch, Style::new(Color::Bios(0xF), Color::Bios(0x1)));
         }
         fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
-            self.log.borrow_mut().push(*ev);
+            self.log.borrow_mut().push(ev.clone());
             if let Some(action) = self.action.as_mut() {
                 action(ctx);
             }
@@ -3337,7 +3337,7 @@ mod tests {
     }
     impl CaptureHandler for RecordingCapture {
         fn handle(&mut self, ev: &mut Event, _ctx: &mut Context) -> CaptureFlow {
-            self.log.borrow_mut().push(*ev);
+            self.log.borrow_mut().push(ev.clone());
             CaptureFlow::Pass
         }
     }
@@ -9883,10 +9883,7 @@ mod tests {
 
             // Build the ThemeEdit completion manually, wiring a ThemeEditorBody
             // that already holds the modified working theme.
-            let te = ThemeEditorBody::new(
-                crate::view::Rect::new(1, 1, 63, 19),
-                modified.clone(),
-            );
+            let te = ThemeEditorBody::new(crate::view::Rect::new(1, 1, 63, 19), modified.clone());
 
             // Insert the body into a temporary Group so find_mut works;
             // insert() assigns and returns the ViewId.
@@ -10006,6 +10003,63 @@ mod tests {
                 text, "pasted",
                 "Shift+Insert inserts the seeded backend clipboard text"
             );
+        }
+    }
+
+    // -- C9: bracketed-paste ------------------------------------------------------
+    //
+    // Proves that `Event::Paste` is routed to the focused editor and inserts
+    // multi-char / multi-line text into the buffer (porting kbPaste /
+    // setPasteText / getPasteEvent from tevent.cpp).
+    mod bracketed_paste_c9 {
+        use super::*;
+        use crate::widgets::EditWindow;
+
+        fn editor_program() -> (Program, crate::backend::HeadlessHandle, ViewId) {
+            let (mut program, handle, _clock) = program_with_desktop(80, 25);
+            let r = program.desktop_rect();
+            let ew = EditWindow::new(r, None, 1);
+            let editor_id = ew.editor_id;
+            program.desktop_insert(Box::new(ew));
+            program.out_events.clear();
+            (program, handle, editor_id)
+        }
+
+        /// C9: `Event::Paste` inserts multi-char text into the focused editor.
+        #[test]
+        fn bracketed_paste_inserts_into_editor() {
+            let (mut program, handle, editor_id) = editor_program();
+            handle.push_paste("hello world");
+            for _ in 0..4 {
+                program.pump_once();
+            }
+            let text = program
+                .group_mut()
+                .find_mut(editor_id)
+                .and_then(crate::widgets::editor_mut)
+                .map(|e| String::from_utf8_lossy(&e.text()).into_owned())
+                .unwrap_or_default();
+            assert_eq!(
+                text, "hello world",
+                "bracketed paste inserts multi-char text"
+            );
+        }
+
+        /// C9: multi-line paste inserts newlines faithfully.
+        #[test]
+        fn bracketed_paste_with_newlines() {
+            let (mut program, handle, editor_id) = editor_program();
+            handle.push_paste("line1\nline2");
+            for _ in 0..4 {
+                program.pump_once();
+            }
+            let text = program
+                .group_mut()
+                .find_mut(editor_id)
+                .and_then(crate::widgets::editor_mut)
+                .map(|e| String::from_utf8_lossy(&e.text()).into_owned())
+                .unwrap_or_default();
+            assert_eq!(text, "line1\nline2", "bracketed paste preserves newlines");
         }
     }
 

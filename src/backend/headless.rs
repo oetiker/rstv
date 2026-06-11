@@ -64,6 +64,12 @@ impl HeadlessHandle {
         self.push_event(Event::KeyDown(KeyEvent::new(key, modifiers)));
     }
 
+    /// Queue a bracketed-paste event (C9).  Equivalent to the terminal delivering
+    /// an `EnableBracketedPaste`-wrapped paste sequence.
+    pub fn push_paste(&self, text: impl Into<String>) {
+        self.push_event(Event::Paste(text.into()));
+    }
+
     /// Borrow the current screen buffer (for assertions beyond the snapshot).
     pub fn buffer(&self) -> std::cell::Ref<'_, Buffer> {
         self.buffer.borrow()

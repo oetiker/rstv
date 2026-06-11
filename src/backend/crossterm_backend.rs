@@ -63,8 +63,8 @@ use std::time::Duration;
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
     event::{
-        self, DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEventKind,
-        KeyModifiers as CKeyModifiers, MouseEventKind,
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        KeyCode, KeyEventKind, KeyModifiers as CKeyModifiers, MouseEventKind,
     },
     execute, queue,
     style::{Attribute, Color as CColor, Colors, Print, ResetColor, SetAttribute, SetColors},
@@ -121,7 +121,12 @@ pub struct CrosstermBackend {
 /// disable raw mode.  Best-effort and idempotent — safe to call more than once
 /// (`Drop`, the panic hook, and the signal thread may each run it).
 fn restore_terminal() {
-    let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
+    let _ = execute!(
+        io::stdout(),
+        DisableBracketedPaste,
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    );
     let _ = disable_raw_mode();
 }
 
@@ -229,7 +234,12 @@ impl CrosstermBackend {
     /// terminal out from under the still-live instance).
     pub fn with_color_depth(depth: ColorDepth) -> io::Result<Self> {
         enable_raw_mode()?;
-        if let Err(e) = execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture) {
+        if let Err(e) = execute!(
+            io::stdout(),
+            EnterAlternateScreen,
+            EnableMouseCapture,
+            EnableBracketedPaste
+        ) {
             // Full restore, not just disable_raw_mode(): on the Windows-<10
             // WinAPI fallback crossterm executes the two commands one by one,
             // so EnterAlternateScreen may have succeeded before
@@ -330,7 +340,12 @@ impl Backend for CrosstermBackend {
         // Best-effort re-setup — mirror the setup in with_color_depth but skip
         // hook installation (already done once-per-process in the constructor).
         let _ = enable_raw_mode();
-        let _ = execute!(self.out, EnterAlternateScreen, EnableMouseCapture);
+        let _ = execute!(
+            self.out,
+            EnterAlternateScreen,
+            EnableMouseCapture,
+            EnableBracketedPaste
+        );
     }
 }
 
@@ -463,7 +478,7 @@ fn map_attributes(style: Style) -> Vec<Attribute> {
 
 /// Translate a `crossterm::event::Event` to our `Event`.
 ///
-/// Returns `None` for event types we don't model yet (resize, paste, focus).
+/// Returns `None` for event types we don't model yet (resize, focus).
 fn translate_event(ev: crossterm::event::Event) -> Option<Event> {
     match ev {
         crossterm::event::Event::Key(k) => translate_key(k),
@@ -476,14 +491,7 @@ fn translate_event(ev: crossterm::event::Event) -> Option<Event> {
             // deliberately no `Event::Resize` variant (avoids enum churn).
             None
         }
-        crossterm::event::Event::Paste(_) => {
-            // TODO(C9): bracketed paste is not modeled yet — and we
-            // deliberately do NOT enable `EnableBracketedPaste` until this arm
-            // produces an event, because enabling it while the arm returns
-            // `None` would make terminal-paste do *nothing* (today pasted text
-            // arrives as plain keystrokes, which works minus paste semantics).
-            None
-        }
+        crossterm::event::Event::Paste(text) => Some(Event::Paste(text)),
         crossterm::event::Event::FocusGained | crossterm::event::Event::FocusLost => {
             // TODO(focus-events): not modeled yet.
             None

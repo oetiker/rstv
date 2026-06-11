@@ -2082,8 +2082,6 @@ impl View for Editor {
                 };
                 if insertable {
                     self.lock();
-                    // TODO(row 66): kbPaste / textLength / bracketed-paste multi-char
-                    // not in the event model yet — single-char insert only.
                     if self.overwrite
                         && !self.has_selection()
                         && self.cur_ptr != self.line_end(self.cur_ptr)
@@ -2104,6 +2102,11 @@ impl View for Editor {
                 } else {
                     return;
                 }
+            }
+            Event::Paste(text) => {
+                let text = std::mem::take(text);
+                ev.clear();
+                self.insert_text(text.as_bytes(), false, ctx);
             }
             Event::Command(cmd) => {
                 let cmd = *cmd;

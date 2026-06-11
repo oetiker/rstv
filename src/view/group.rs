@@ -717,7 +717,7 @@ impl Group {
             return;
         }
         let origin = s.origin;
-        let mut local = *ev;
+        let mut local = ev.clone();
         if let Some(p) = mouse_pos_mut(&mut local) {
             *p -= origin;
         }
@@ -1068,7 +1068,7 @@ impl Group {
             // is exactly the phase the OUTER group set for the section this
             // nested group is being delivered in — so "a child reads its
             // immediate owner's phase" holds. Leaf views never write the field.
-            Event::KeyDown(_) | Event::Command(_) => {
+            Event::KeyDown(_) | Event::Command(_) | Event::Paste(_) => {
                 let saved_phase = ctx.phase();
                 // phPreProcess: forEach top→bottom, ofPreProcess children only.
                 ctx.set_phase(Phase::PreProcess);
@@ -1228,7 +1228,7 @@ mod tests {
             ctx.fill(ext, self.ch, Style::new(Color::Bios(0xF), Color::Bios(0x1)));
         }
         fn handle_event(&mut self, ev: &mut Event, _ctx: &mut Context) {
-            self.log.borrow_mut().push(*ev);
+            self.log.borrow_mut().push(ev.clone());
             // Consume key/command/mouse so we can observe "reached me". Broadcasts
             // are passed through (TV convention: multiple views react to one), so
             // they reach every child.
@@ -1501,18 +1501,18 @@ mod tests {
         with_ctx(&mut out, &mut timers, |ctx| {
             group.set_current(Some(id_b), SelectMode::Normal, ctx)
         });
-        let events: Vec<Event> = out.iter().copied().collect();
+        let events: Vec<Event> = out.iter().cloned().collect();
         assert!(
             events.iter().any(|e| matches!(
                 e,
-                Event::Broadcast { command, .. } if *command == Command::RELEASED_FOCUS
+                Event::Broadcast { command, .. } if command == &Command::RELEASED_FOCUS
             )),
             "A releases focus"
         );
         assert!(
             events.iter().any(|e| matches!(
                 e,
-                Event::Broadcast { command, .. } if *command == Command::RECEIVED_FOCUS
+                Event::Broadcast { command, .. } if command == &Command::RECEIVED_FOCUS
             )),
             "B receives focus"
         );

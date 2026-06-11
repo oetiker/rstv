@@ -38,7 +38,7 @@ use crate::view::{Point, ViewId};
 /// `clearEvent` equivalent). The `evMouseWheel` class has no variant here:
 /// wheel direction rides on the [`MouseEvent::wheel`] field of the mouse
 /// variants, faithful to the C++ `MouseEventType::wheel`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
     /// `evMouseDown` — a mouse button was pressed.
     MouseDown(MouseEvent),
@@ -77,6 +77,11 @@ pub enum Event {
     /// `evNothing`, or an event that a handler has consumed via
     /// [`Event::clear`].
     Nothing,
+    /// Terminal bracketed-paste — the whole pasted string as delivered by the
+    /// terminal. Replaces the C++ `kbPaste`-flagged `evKeyDown` stream (tevent.cpp
+    /// `setPasteText`/`getPasteEvent`). Routed identically to `evKeyDown` —
+    /// delivered only to the focused view, not broadcast.
+    Paste(String),
 }
 
 impl Event {
@@ -191,6 +196,7 @@ mod tests {
             source: None,
         };
         let _ = Event::Nothing;
+        let _ = Event::Paste("hi".to_string());
     }
 
     #[test]
