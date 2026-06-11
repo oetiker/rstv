@@ -20,14 +20,13 @@
 //! arrives when that control wires its `value`/`set_value` (deferred — no consumer
 //! reads it yet).
 //!
-//! ## Deferred: the dialog gather/scatter group-walk
+//! ## Dialog gather/scatter group-walk (C4, landed)
 //!
-//! C++ `TGroup::getData`/`setData` walk the children in order, concatenating
-//! each control's bytes into one record. No data dialog consumes that ordered
-//! walk yet (the first will be `inputBox` / the Batch-E data dialogs), so it is
-//! **not built here**: the ordered child-walk over `value`/`set_value` lands
-//! with its first consumer (inputBox / Batch E). Until then a control's value is
-//! read/written individually through the trait pair.
+//! `Group::gather_data()` walks children in C++ `getData` order (see
+//! `src/view/group.rs` for the ring-mapping rationale) and returns
+//! `Vec<Option<FieldValue>>`. `Group::scatter_data(values, ctx)` distributes
+//! values back in the same order via `View::set_value_ctx` (the context-aware
+//! setter that `ListBox` overrides to republish its v-bar).
 
 /// The typed unit of dialog data transfer (D10) — the successor to the untyped
 /// `getData`/`setData` `void*` record.

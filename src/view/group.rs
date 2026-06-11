@@ -49,6 +49,7 @@
 //!   `resetCursor` (hardware cursor) → row 31.
 
 use crate::command::Command;
+use crate::data::FieldValue;
 use crate::event::Event;
 use crate::view::context::{Context, DrawCtx};
 use crate::view::geometry::{Point, Rect};
@@ -191,6 +192,36 @@ impl Group {
     pub fn child_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
         let i = self.index_of(id)?;
         Some(self.children[i].view.as_mut())
+    }
+
+    // -- gather / scatter (D10) ---------------------------------------------
+
+    /// `TGroup::getData` (D10 gather) — collect each child's typed value in C++
+    /// data-walk order (`last → prev → ...` = `children` forward). Returns one
+    /// `Option<FieldValue>` per child; `None` means that child carries no
+    /// transferable value.
+    ///
+    /// C++ walk: starts at `last` (`children[0]`) and walks `prev()` to
+    /// `children[n-1]`, which maps to `children.iter()` in rstv (opposite of the
+    /// `forEach` top→bottom `children.iter().rev()` used in event delivery).
+    pub fn gather_data(&self) -> Vec<Option<FieldValue>> {
+        self.children.iter().map(|c| c.view.value()).collect()
+    }
+
+    /// `TGroup::setData` (D10 scatter) — distribute typed values back to children
+    /// in the same C++ data-walk order as [`gather_data`](Self::gather_data).
+    /// Calls [`set_value_ctx`](View::set_value_ctx) so views that need deferred
+    /// bar updates (e.g. `ListBox`) receive the `Context`.
+    ///
+    /// `values` shorter than the children list: remaining children are left
+    /// untouched. Extra values beyond the children count are silently ignored.
+    /// `None` entries skip the corresponding child.
+    pub fn scatter_data(&mut self, values: &[Option<FieldValue>], ctx: &mut Context) {
+        for (child, val) in self.children.iter_mut().zip(values.iter()) {
+            if let Some(v) = val.clone() {
+                child.view.set_value_ctx(v, ctx);
+            }
+        }
     }
 
     // -- insert / remove ----------------------------------------------------
@@ -2703,5 +2734,123 @@ mod tests {
         assert_eq!(group.current(), Some(id2), "current unchanged");
 
         let _ = id1;
+    }
+
+    // -- gather_data / scatter_data ------------------------------------------
+
+    #[test]
+    fn gather_data_returns_values_in_forward_child_order() {
+        use crate::data::FieldValue;
+        use crate::widgets::InputLine;
+
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut group = Group::new(Rect::new(0, 0, 40, 10));
+
+        group.insert(Box::new(InputLine::new(
+            Rect::new(0, 0, 10, 1),
+            20,
+            None,
+            crate::widgets::LimitMode::MaxBytes,
+        )));
+        group.insert(Box::new(InputLine::new(
+            Rect::new(0, 2, 10, 3),
+            20,
+            None,
+            crate::widgets::LimitMode::MaxBytes,
+        )));
+
+        // Set text via scatter_data: children[0] gets "alpha", children[1] "beta".
+        let initial = vec![
+            Some(FieldValue::Text("alpha".to_string())),
+            Some(FieldValue::Text("beta".to_string())),
+        ];
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.scatter_data(&initial, ctx);
+        });
+
+        let vals = group.gather_data();
+        assert_eq!(vals.len(), 2);
+        assert_eq!(vals[0], Some(FieldValue::Text("alpha".to_string())));
+        assert_eq!(vals[1], Some(FieldValue::Text("beta".to_string())));
+    }
+
+    #[test]
+    fn scatter_data_round_trips_with_gather() {
+        use crate::data::FieldValue;
+        use crate::widgets::InputLine;
+
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut group = Group::new(Rect::new(0, 0, 40, 10));
+
+        group.insert(Box::new(InputLine::new(
+            Rect::new(0, 0, 10, 1),
+            20,
+            None,
+            crate::widgets::LimitMode::MaxBytes,
+        )));
+        group.insert(Box::new(InputLine::new(
+            Rect::new(0, 2, 10, 3),
+            20,
+            None,
+            crate::widgets::LimitMode::MaxBytes,
+        )));
+
+        // Scatter initial values.
+        let initial = vec![
+            Some(FieldValue::Text("foo".to_string())),
+            Some(FieldValue::Text("bar".to_string())),
+        ];
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.scatter_data(&initial, ctx);
+        });
+
+        // Gather and verify round-trip.
+        let gathered = group.gather_data();
+        assert_eq!(gathered[0], Some(FieldValue::Text("foo".to_string())));
+        assert_eq!(gathered[1], Some(FieldValue::Text("bar".to_string())));
+    }
+
+    #[test]
+    fn scatter_data_skips_none_entries() {
+        use crate::data::FieldValue;
+        use crate::widgets::InputLine;
+
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut group = Group::new(Rect::new(0, 0, 40, 10));
+
+        group.insert(Box::new(InputLine::new(
+            Rect::new(0, 0, 10, 1),
+            20,
+            None,
+            crate::widgets::LimitMode::MaxBytes,
+        )));
+        group.insert(Box::new(InputLine::new(
+            Rect::new(0, 2, 10, 3),
+            20,
+            None,
+            crate::widgets::LimitMode::MaxBytes,
+        )));
+
+        // Set both, then scatter with None for the first child.
+        let initial = vec![
+            Some(FieldValue::Text("first".to_string())),
+            Some(FieldValue::Text("second".to_string())),
+        ];
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.scatter_data(&initial, ctx);
+        });
+
+        // Scatter again with None for child[0] — it should be unchanged.
+        let partial = vec![None, Some(FieldValue::Text("updated".to_string()))];
+        with_ctx(&mut out, &mut timers, |ctx| {
+            group.scatter_data(&partial, ctx);
+        });
+
+        let gathered = group.gather_data();
+        assert_eq!(gathered[0], Some(FieldValue::Text("first".to_string())));
+        assert_eq!(gathered[1], Some(FieldValue::Text("updated".to_string())));
     }
 }

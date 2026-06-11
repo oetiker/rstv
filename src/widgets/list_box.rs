@@ -20,14 +20,10 @@
 //! scrollbar thumb unsized. Both require a `Context`, so they cannot run in the
 //! ctor.
 //!
-//! ## `set_value` deferral
+//! ## `set_value` / `set_value_ctx`
 //!
-//! `set_value` (the scatter half of `getData`/`setData`) is **deferred**: it
-//! needs a `Context` (to republish the v-bar via `new_list`/`focus_item`) that
-//! the `Context`-free `View::set_value` signature does not provide. It lands
-//! with the dialog **gather/scatter group-walk** consumer (inputBox / Batch E),
-//! which must itself solve threading a `Context` into scatter.
-//! `TODO(set_value: dialog gather/scatter)`.
+//! `set_value_ctx` is the C4 context-aware scatter; it calls
+//! `list_viewer::focus_item_num`.
 //!
 //! ## Drops / deferrals (faithful, breadcrumbed)
 //!
@@ -160,13 +156,23 @@ impl View for ListBox {
     /// `TListBox::getData` (selection half) — the focused item index as a typed
     /// `FieldValue::Int`. The collection is configuration (`new_list` manages
     /// it), NOT part of the transferable value; no `List` variant is added (D10:
-    /// `FieldValue` grows per consumer, and there is no gather/scatter consumer
-    /// yet). `TODO(set_value: dialog gather/scatter)`.
+    /// `FieldValue` grows per consumer).
     fn value(&self) -> Option<FieldValue> {
         Some(FieldValue::Int(self.lv.focused))
     }
-    // set_value: NOT overridden — the default no-op is intentional.
-    // See the module doc for the deferral rationale.
+
+    /// `TListBox::setData` scatter (D10) — set the focused item and republish the
+    /// v-bar. The item list is **not** transferred (it is configuration, managed
+    /// via [`new_list`](Self::new_list), not dialog data).
+    ///
+    /// Faithful: C++ `setData` calls `focusItem(p->selection)`. We call
+    /// `focus_item_num` (the range-clamped variant) in case the range changed
+    /// between gather and scatter.
+    fn set_value_ctx(&mut self, v: FieldValue, ctx: &mut Context) {
+        if let FieldValue::Int(idx) = v {
+            list_viewer::focus_item_num(self, idx, ctx);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -934,5 +940,49 @@ mod tests {
         assert_eq!(slb.get_text(1), "Banana", "sorted: Banana second");
         assert_eq!(slb.get_text(2), "Zebra", "sorted: Zebra third");
         assert_eq!(slb.search_pos(), -1, "new_list resets search_pos");
+    }
+
+    // -- set_value_ctx -------------------------------------------------------
+
+    #[test]
+    fn set_value_ctx_focuses_the_item() {
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred = Vec::new();
+        let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+
+        let mut lb = ListBox::new(Rect::new(0, 0, 10, 5), 1, None, None);
+        lb.new_list(
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            &mut ctx,
+        );
+
+        // Focus item 2 via set_value_ctx.
+        lb.set_value_ctx(FieldValue::Int(2), &mut ctx);
+
+        // value() returns the focused index.
+        assert_eq!(lb.value(), Some(FieldValue::Int(2)));
+    }
+
+    #[test]
+    fn set_value_ctx_ignores_non_int_variant() {
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred = Vec::new();
+        let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+
+        let mut lb = ListBox::new(Rect::new(0, 0, 10, 5), 1, None, None);
+        lb.new_list(vec!["a".to_string(), "b".to_string()], &mut ctx);
+        // Focus item 1 first.
+        lb.set_value_ctx(FieldValue::Int(1), &mut ctx);
+        assert_eq!(lb.value(), Some(FieldValue::Int(1)));
+
+        // Passing a Text variant should be ignored (no panic, focus unchanged).
+        lb.set_value_ctx(FieldValue::Text("ignored".to_string()), &mut ctx);
+        assert_eq!(
+            lb.value(),
+            Some(FieldValue::Int(1)),
+            "focus unchanged after Text variant"
+        );
     }
 }

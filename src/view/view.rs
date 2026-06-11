@@ -708,6 +708,16 @@ pub trait View {
     /// override. A control ignores a `FieldValue` variant it does not understand.
     fn set_value(&mut self, _v: FieldValue) {}
 
+    /// `TView::setData` (context-aware scatter half, D10) — scatter a typed
+    /// [`FieldValue`] into this control with a `Context`. Default: calls
+    /// [`set_value`](Self::set_value) (the context-free setter). Override when
+    /// scatter needs deferred publishing (e.g. [`ListBox`](crate::widgets::ListBox)
+    /// republishes its v-bar via `focus_item`).
+    fn set_value_ctx(&mut self, v: FieldValue, ctx: &mut Context) {
+        let _ = ctx;
+        self.set_value(v);
+    }
+
     /// `TView::awaken` — called after a view tree is loaded/created so the view
     /// can finish initializing. Base is a no-op.
     fn awaken(&mut self) {}
