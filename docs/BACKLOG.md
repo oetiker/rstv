@@ -48,8 +48,8 @@
 |---|---|---|
 | C1 ✅ | Find/Replace dialogs | **COMPLETE (`b388492`):** `Deferred::OpenFindDialog`/`OpenReplaceDialog` + `Context::open_*_dialog` (the OpenSaveAsDialog seam); pump drain builds the `tvedit2.cpp` dialogs verbatim (Find 38×12, Replace 40×16, both with `THistory` arrows + `CheckBoxes` options, pre-filled); `ModalCompletion::FindPick`/`ReplacePick` read text via `field_text` + options via `CheckBoxes` downcast, write back (FindPick clears, ReplacePick sets `EF_DO_REPLACE`), re-inject `cmSearchAgain`. `Editor::do_search_replace(ctx)` is faithful `doSearchReplace` with the prompt-on-replace dialog routed through `request_message_box` (answer stored in `pending_replace_answer` via `set_modal_answer`, consumed on the re-run). `CheckBoxes::as_any_mut` off the delegate skip list. |
 | C2 ✅ | Editor right-click context menu | **COMPLETE (`2ee829c`):** `MouseDown` right-button arm builds 4-item `Menu` (Cut/Copy/Paste/Undo, `kbShiftDel`/`kbCtrlIns`/`kbShiftIns`/`kbCtrlU`) and calls `popup_menu()` (row-52). Global pos = `m.position + self.abs_origin`. No new seam needed. |
-| C3 | Internal-clipboard editor | `insertFrom` branch + clipboard `EditWindow`; `editor.rs:1418,1440`; `EditWindow::close` hide-branch breadcrumb |
-| C4 | D10 dialog gather/scatter group-walk | `list_box.rs:30,159`; deferred to its first multi-field consumer |
+| C3 ✅ | Internal-clipboard editor | **COMPLETE (C3 commit):** see IMPLEMENTATION-LOG. |
+| C4 ✅ | D10 dialog gather/scatter group-walk | **COMPLETE (`5f57bb7`):** `Group::gather_data`/`scatter_data`; `View::set_value_ctx` seam; `ListBox::set_value_ctx` → `focus_item_num`; macro forwarder. Walk order = `children.iter()` (C++ `last→prev` = forward). |
 | C5 | cmQuit veto / saveAs modified-close inline drives | the whole-tree `validate_modal_close` analogue (HANDOVER "Editor seam leftovers") |
 | C6 | `cmDosShell` | backend terminal-suspend seam + SIGTSTP |
 | C7 | help-ctx refresh / `OneOf` status line | needs `View::get_help_ctx` + TopView resolver |

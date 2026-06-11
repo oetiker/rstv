@@ -5,6 +5,28 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## C4 COMPLETE (2026-06-11)
+
+**`5f57bb7`** — **C4: D10 dialog gather/scatter group-walk.**
+
+`TGroup::getData`/`setData` land as `Group::gather_data()` / `scatter_data()`.
+
+**Walk order:** C++ `getData` starts at `last` (= `children[0]` in rstv's Vec) and
+walks `prev()`, which maps to `children.iter()` (forward, 0→n-1) — the **opposite** of
+the `forEach` top→bottom `.iter().rev()` used in event delivery. Both methods documented
+in `group.rs` with the ring-mapping rationale.
+
+**`set_value_ctx` seam:** `View` gets `set_value_ctx(&mut self, v: FieldValue, ctx: &mut Context)`
+(default: delegates to `set_value`). This threads a `Context` into scatter so
+controls that need deferred publishing can override it. `ListBox` overrides it to call
+`list_viewer::focus_item_num` (range-clamped), republishing the v-bar. Resolves the
+longstanding `TODO(set_value: dialog gather/scatter)` in `list_box.rs`.
+
+**Macro forwarder:** `tvision-macros/src/specs.rs` gains the `set_value_ctx` entry.
+
+5 new tests (3 in `group.rs`, 2 in `list_box.rs`). 1140 total lib tests green; clippy + fmt clean.
+Two-stage reviewed (spec + quality, both ✅).
+
 ## Session addendum — C3 COMPLETE (2026-06-11)
 
 **`HEAD`** — **C3: internal-clipboard editor (`insertFrom` branch + clipboard `EditWindow`).**

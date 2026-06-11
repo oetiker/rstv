@@ -14,12 +14,12 @@
 > When a row lands: add an IMPLEMENTATION-LOG section, tick the BACKLOG row,
 > update this file.
 
-## Current state (2026-06-11, C3 committed)
+## Current state (2026-06-11, C4 committed)
 
-**HEAD = pending commit; 1135 lib tests green; clippy + fmt clean.**
+**HEAD = `5f57bb7`; 1140 lib tests green; clippy + fmt clean.**
 
 Phase A + Phase B are fully complete (all rows ✅). **Phase C is in
-progress** — C1, C2, and C3 are done.
+progress** — C1, C2, C3, and C4 are done.
 
 ### Phase C progress
 - **C1 ✅ (`b388492`)** — editor find/replace dialogs + `do_search_replace`. The
@@ -44,9 +44,14 @@ progress** — C1, C2, and C3 are done.
   `Context` snapshot fields + three pump drain arms. `EditWindow::handle_event`
   hides instead of closing when hosting the clipboard editor. Caller API:
   `ctx.register_clipboard_editor(editor_id, window_id)`. Two-stage reviewed.
+- **C4 ✅ (`5f57bb7`)** — D10 gather/scatter group-walk. `Group::gather_data()` /
+  `scatter_data()` walk `children.iter()` (forward = C++ `last→prev`). New
+  `View::set_value_ctx` seam (default: delegates to `set_value`) lets `ListBox`
+  override to republish its v-bar via `focus_item_num`. Macro forwarder added.
+  Clears the `list_box.rs` deferral TODO. Two-stage reviewed.
 
-**Next Phase C row = C4 (D10 dialog gather/scatter group-walk).** Walk BACKLOG.md
-Phase C in order.
+**Next Phase C row = C5 (cmQuit veto / saveAs modified-close inline drives).** Walk
+BACKLOG.md Phase C in order.
 
 ### What is on `main` from the Phase A/B backlog run (committed):
 - **B1 ✅ (`680aabc`)** — button `cmCommandSetChanged` graying; `Program::new` seeds `command_set_changed: true` for initial broadcast. InputLine `can_update_commands`/`update_commands` from `handle_event` + `set_state`.
@@ -122,13 +127,10 @@ This session ran the **backlog run** end to end:
 
 *(none — all paused worktrees integrated this session)*
 
-## Next — Phase C in progress (C1–C3 done)
+## Next — Phase C in progress (C1–C4 done)
 
-**Phase A + B fully ✅; Phase C in progress (C1, C2, C3 ✅).** Walk BACKLOG.md
+**Phase A + B fully ✅; Phase C in progress (C1, C2, C3, C4 ✅).** Walk BACKLOG.md
 Phase C in order. Remaining rows:
-- **C4** D10 dialog gather/scatter group-walk (deferred to its first multi-field
-  consumer — the find/replace completions deliberately do **not** use it; they
-  read children by id, so C4 is still open)
 - **C5** cmQuit-veto / saveAs-modified-close inline drives (the whole-tree
   `validate_modal_close` analogue — see "Editor seam leftovers" below)
 - **C6** cmDosShell (needs a backend suspend seam + SIGTSTP)
