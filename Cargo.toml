@@ -38,6 +38,7 @@ regex-automata = { version = "0.4", default-features = false, features = ["std",
 
 [target.'cfg(unix)'.dependencies]
 signal-hook = "0.4.4" # backend module: restore the terminal on SIGINT/SIGTERM/SIGHUP (B7 RAII lifecycle)
+libc = "0.2"          # backend module: raise(SIGTSTP) for cmDosShell (C6)
 
 [dev-dependencies]
 insta = "1.47.2"      # snapshot tests: golden-file verification (D11, row 19)

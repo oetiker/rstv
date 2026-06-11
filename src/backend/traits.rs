@@ -60,4 +60,12 @@ pub trait Backend {
     /// Read the clipboard: native clipboard first, else the internal buffer,
     /// else `None` (`tclipbrd.cpp:37-44`).
     fn get_clipboard(&mut self) -> Option<String>;
+
+    /// Suspend the terminal: leave alt-screen, restore normal terminal mode.
+    /// Called before raising SIGTSTP. No-op for non-terminal backends.
+    fn suspend(&mut self) {}
+
+    /// Resume the terminal: re-enter alt-screen, raw mode, and mouse capture.
+    /// Called after the process is foregrounded. No-op for non-terminal backends.
+    fn resume(&mut self) {}
 }

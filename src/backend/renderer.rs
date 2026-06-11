@@ -102,4 +102,14 @@ impl Renderer {
         self.buffers[0].resize(width, height);
         self.buffers[1].resize(width, height);
     }
+
+    /// Force a full terminal repaint on the next [`render`](Self::render) call.
+    ///
+    /// Clears the front (reference) buffer so the next diff sees every cell as
+    /// changed. Call after [`Backend::resume`] — the terminal's alt-screen is
+    /// blank, so a full repaint is required.
+    pub fn invalidate_all(&mut self) {
+        let front = 1 - self.current;
+        self.buffers[front].reset();
+    }
 }

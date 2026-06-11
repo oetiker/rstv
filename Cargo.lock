@@ -805,6 +805,7 @@ dependencies = [
  "arboard",
  "crossterm",
  "insta",
+ "libc",
  "regex-automata",
  "signal-hook 0.4.4",
  "tvision-macros",

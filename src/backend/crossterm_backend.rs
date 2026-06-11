@@ -321,6 +321,17 @@ impl Backend for CrosstermBackend {
     fn get_clipboard(&mut self) -> Option<String> {
         self.clipboard.get()
     }
+
+    fn suspend(&mut self) {
+        restore_terminal(); // idempotent teardown (already used in Drop)
+    }
+
+    fn resume(&mut self) {
+        // Best-effort re-setup — mirror the setup in with_color_depth but skip
+        // hook installation (already done once-per-process in the constructor).
+        let _ = enable_raw_mode();
+        let _ = execute!(self.out, EnterAlternateScreen, EnableMouseCapture);
+    }
 }
 
 // ---------------------------------------------------------------------------

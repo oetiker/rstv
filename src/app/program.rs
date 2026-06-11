@@ -1758,6 +1758,7 @@ impl Program {
                                     &mut ctx,
                                     end_state,
                                     app_commands,
+                                    renderer,
                                 );
                             }
                         }
@@ -2930,6 +2931,7 @@ fn program_handle_event(
     ctx: &mut Context,
     end_state: &mut Option<Command>,
     app_commands: &mut VecDeque<Command>,
+    renderer: &mut Renderer,
 ) {
     // TODO(Phase 4: modal isolation): when menus + multiple windows + a modal
     // coexist, program-level interception (this Alt-N block + the cmQuit catch
@@ -2992,8 +2994,7 @@ fn program_handle_event(
     //   case cmCascade: deskTop->cascade( getTileRect() ); clearEvent(); break;
     // getTileRect() == the desktop child's local extent; computed inline via two
     // find_mut calls (the first borrow ends when `r` becomes an owned Rect), mirroring
-    // the Alt-N block's borrow style. cmDosShell is still deferred (needs a backend
-    // suspend seam).
+    // the Alt-N block's borrow style.
     if let Event::Command(cmd) = *ev
         && (cmd == Command::TILE || cmd == Command::CASCADE)
         && let Some(id) = desktop
@@ -3007,6 +3008,27 @@ fn program_handle_event(
             }
         }
         ev.clear(); // clearEvent after handling.
+    }
+
+    // cmDosShell — suspend the terminal, raise SIGTSTP, resume (TApplication::dosShell,
+    // tapplica.cpp: suspend() -> writeShellMsg() -> raise(SIGTSTP) -> resume() -> redraw()).
+    if let Event::Command(cmd) = *ev
+        && cmd == Command::DOS_SHELL
+    {
+        renderer.backend_mut().suspend();
+        println!("The application has been stopped. You can return by entering 'fg'.");
+        #[cfg(all(unix, not(test)))]
+        {
+            extern crate libc;
+            // SAFETY: raise() is async-signal-safe; call suspends this process until
+            // SIGCONT (user 'fg').
+            unsafe {
+                libc::raise(libc::SIGTSTP);
+            }
+        }
+        renderer.backend_mut().resume();
+        renderer.invalidate_all();
+        ev.clear();
     }
 
     // Any command that nobody cleared is available for application-level handling

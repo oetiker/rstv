@@ -7,16 +7,15 @@
 //! (`TAppInit`) and teardown, and calls `initHistory`/`doneHistory` for the
 //! history list.
 //!
-//! At this row all three commands are **deferred** — their prerequisites do not
-//! exist yet. This module is therefore intentionally thin: one `get_tile_rect`
-//! helper (the only real body) + breadcrumbed stubs + forwarding delegations.
+//! At this row `tile`/`cascade` remain **deferred** — `Desktop::tile`/`cascade`
+//! geometry is not ported yet. `dosShell` is implemented (row C6) in
+//! `program_handle_event`. This module is thin: one `get_tile_rect` helper
+//! (the only real body) + forwarding delegations.
 //!
 //! ## Deferred (no dead stubs, breadcrumbed)
 //! * `tile`/`cascade`: `TDeskTop::tile`/`cascade` geometry (`mostEqualDivisors`/
 //!   `calcTileRect`/`doCascade`, `tdesktop.cpp`) is not ported. Lands when
 //!   `Desktop::tile`/`cascade` exist + a menu emits `Command::TILE`/`Command::CASCADE`.
-//! * `dosShell`: needs a backend terminal suspend/resume seam + `SIGTSTP`
-//!   (`CrosstermBackend` owns setup/teardown since B7, but no suspend/resume).
 //! * `TAppInit` subsystem init: subsumed by the [`Backend`](crate::backend::Backend)
 //!   + [`Renderer`](crate::backend::Renderer) construction path in our model.
 //! * `initHistory`/`doneHistory`: the history list subsystem is not ported yet.
@@ -30,7 +29,7 @@ use crate::view::{Rect, View, ViewId};
 
 /// `TApplication` — a thin D2 embed-and-delegate wrapper over [`Program`] (row 32).
 ///
-/// `Application` will add (Phase 4) `tile`/`cascade`/`dosShell` — see module docs.
+/// `Application` will add (Phase 4) `tile`/`cascade` — see module docs.
 /// Currently it provides [`Application::get_tile_rect`] and forwards all other
 /// behavior verbatim to the embedded [`Program`].
 ///
@@ -166,6 +165,7 @@ mod tests {
     use super::*;
     use crate::backend::HeadlessBackend;
     use crate::desktop::Desktop;
+    use crate::event::Event;
     use crate::timer::ManualClock;
     use std::rc::Rc;
 
@@ -265,5 +265,30 @@ mod tests {
             !app.command_enabled(Command::CLOSE),
             "disable_command forwarded: cmClose disabled again"
         );
+    }
+
+    /// `Event::Command(Command::DOS_SHELL)` is consumed cleanly — no crash,
+    /// `end_state` stays `None`. HeadlessBackend::suspend/resume are no-ops;
+    /// `raise(SIGTSTP)` is `#[cfg(all(unix, not(test)))]`-gated (no suspension).
+    #[test]
+    fn dos_shell_consumed_cleanly() {
+        let (backend, handle) = HeadlessBackend::new(80, 25);
+        let theme = Theme::classic_blue();
+        let clock = Rc::new(ManualClock::new(0));
+        let mut app = Application::new(
+            Box::new(backend),
+            Box::new(clock),
+            theme,
+            |r| {
+                Some(Box::new(Desktop::new(r, |r2| {
+                    Some(Desktop::init_background(r2))
+                })))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        handle.push_event(Event::Command(Command::DOS_SHELL));
+        app.pump_once();
+        assert_eq!(app.end_state(), None, "DOS_SHELL must not set end_state");
     }
 }
