@@ -63,7 +63,6 @@
 //!
 //! * Find/Replace **dialogs** (`editorDialog`, `find`/`replace`/prompt) — needs
 //!   dialog views not yet built. [`Editor::search`] is fully ported + unit-tested.
-//! * Right-click **context menu** (`initContextMenu`/`popupMenu`).
 //! * Internal-clipboard **TEditor branch** (`insertFrom`) — row 69.
 //! * `TStreamable` (D12).
 
@@ -1824,7 +1823,60 @@ impl View for Editor {
                     return;
                 }
                 if m.buttons.right {
-                    // TODO(row 66 context menu): initContextMenu + popupMenu.
+                    use crate::event::{Key, KeyEvent, KeyModifiers};
+                    use crate::menu::{Menu, popup_menu};
+                    let global = m.position + self.abs_origin;
+                    let menu = Menu::builder()
+                        .command_key(
+                            "Cu~t~",
+                            Command::CUT,
+                            KeyEvent::new(
+                                Key::Delete,
+                                KeyModifiers {
+                                    shift: true,
+                                    ..Default::default()
+                                },
+                            ),
+                            "Shift-Del",
+                        )
+                        .command_key(
+                            "~C~opy",
+                            Command::COPY,
+                            KeyEvent::new(
+                                Key::Insert,
+                                KeyModifiers {
+                                    ctrl: true,
+                                    ..Default::default()
+                                },
+                            ),
+                            "Ctrl-Ins",
+                        )
+                        .command_key(
+                            "~P~aste",
+                            Command::PASTE,
+                            KeyEvent::new(
+                                Key::Insert,
+                                KeyModifiers {
+                                    shift: true,
+                                    ..Default::default()
+                                },
+                            ),
+                            "Shift-Ins",
+                        )
+                        .command_key(
+                            "~U~ndo",
+                            Command::UNDO,
+                            KeyEvent::new(
+                                Key::Char('u'),
+                                KeyModifiers {
+                                    ctrl: true,
+                                    ..Default::default()
+                                },
+                            ),
+                            "Ctrl-U",
+                        )
+                        .build();
+                    popup_menu(global, menu, ctx.owner_size(), ctx);
                     ev.clear();
                     return;
                 }

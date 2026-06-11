@@ -9375,6 +9375,51 @@ mod tests {
         }
     }
 
+    // -- C2: editor right-click context menu -------------------------------------
+    //
+    // Proves that a right-click MouseDown on the editor opens a 4-item popup
+    // menu session (Cut / Copy / Paste / Undo), wiring `initContextMenu` +
+    // `popupMenu` (teditor2.cpp:97-107, teditor1.cpp:532-536).
+    mod context_menu_c2 {
+        use super::*;
+        use crate::event::{Event, MouseButtons, MouseEvent};
+        use crate::widgets::EditWindow;
+
+        fn right_click_editor(program: &mut Program, x: i32, y: i32) {
+            program.out_events.push_back(Event::MouseDown(MouseEvent {
+                position: Point::new(x, y),
+                buttons: MouseButtons {
+                    right: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }));
+            program.pump_once();
+        }
+
+        /// Right-clicking the editor opens a 4-item context menu popup.
+        /// Verifies the capture stack grows by 1 (the popup session is armed).
+        #[test]
+        fn right_click_opens_context_menu() {
+            let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+            let r = program.desktop_rect();
+            let ew = EditWindow::new(r, None, 1);
+            program.desktop_insert(Box::new(ew));
+            program.out_events.clear();
+
+            let baseline = program.capture_len();
+            // The EditWindow has a 1-cell frame; editor content starts at
+            // (r.a.x+1, r.a.y+1). Click inside the editor area.
+            right_click_editor(&mut program, r.a.x + 2, r.a.y + 2);
+
+            assert_eq!(
+                program.capture_len(),
+                baseline + 1,
+                "right-click opens exactly one popup menu session on the capture stack"
+            );
+        }
+    }
+
     // -- B1/B3: InputLine clipboard at pump level --------------------------------
     //
     // Proves that the Deferred::SetClipboard / Deferred::InputLinePaste brokers
