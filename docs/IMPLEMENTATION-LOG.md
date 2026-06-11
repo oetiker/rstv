@@ -5,6 +5,49 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## C8 COMPLETE (2026-06-11)
+
+**`f38c8d3`** — **C8: theme editor + D7 extension point.**
+
+rstv-native replacement for the dropped C++ `TColorDialog` cluster (rows 81–87).
+C++ edits a flat `TPalette::data[index]`; rstv uses an immutable role-based `Theme`
+(D7), so the editor works on a **working copy** and installs the result via
+`Program::set_theme` on OK.
+
+**D7 extension point (theme.rs):**
+- `Theme::set_style(&mut self, role, style)` — mutable style override on a theme instance.
+- `Role::name(self) -> &'static str` — short display label (≤16 chars) for all 75 roles.
+- `pub(crate) const ALL: [Role; ROLE_COUNT]` / `ROLE_COUNT` promoted to `pub(crate)` so
+  `ThemeEditorBody` can enumerate all roles without duplicating the list.
+
+**Async-modal seam (same shape as C1 OpenFindDialog):**
+- `Deferred::OpenColorDialogForRole { editor_id, role, fg, current }` — queued by
+  `ThemeEditorBody::handle_event` when the user presses F/B or fires `THEME_EDIT_FG`/`BG`.
+- Pump drain arm (in `pump_once`): builds a 60×23 "Select Color" dialog (same geometry as
+  `Program::color_dialog`) and sets `pending_modal = ThemeColorPick { editor_id, picker, role, fg }`.
+  `pump_and_drive` runs it as a nested modal.
+- `ModalCompletion::ThemeColorPick` in `apply_modal_completion`: reads `ColorPicker::color()`,
+  downcasts `ThemeEditorBody` by `editor_id`, calls `set_role_style(role, new_style)`.
+- `ModalCompletion::ThemeEdit` in `apply_modal_completion`: on OK reads `working_theme()`
+  from `ThemeEditorBody` and writes to an `Rc<RefCell<Option<Theme>>>` sink. (`RefCell`
+  because `Theme` is not `Copy`.)
+
+**`Program` additions:**
+- `set_theme(&mut self, theme)` — `self.theme = theme; self.renderer.invalidate_all()`.
+- `theme_editor(&mut self)` — 64×24 "Theme Editor" dialog; `ThemeEditorBody` child +
+  Fg/Bg + OK/Cancel buttons; on OK calls `set_theme(sink.borrow_mut().take().unwrap())`.
+- `Command::THEME_EDIT_FG` / `THEME_EDIT_BG` added to `src/command.rs`.
+
+**`ThemeEditorBody` (`src/dialog/theme_editor.rs`, new):**
+Standalone view (no embedded window/dialog; no `#[delegate]` macro). Draws a
+header row + scrollable list of all 75 roles (1 per row): cursor indicator, 16-char
+name, 3-cell fg swatch (solid blocks in role's fg color), 3-cell bg swatch (spaces
+on role's bg), 4-char "AaBb" preview in role's style. Navigation: ↑↓/PgUp/PgDn/
+Home/End; header click ignored (y > 0 guard); selected row highlighted with
+`Role::Focused` style. Downcast via `as_any_mut → Some(self)`.
+
+1145 → 1152 lib tests (+7). Two-stage reviewed.
+
 ## C7 COMPLETE (2026-06-11)
 
 **`8c9bf85` / `20871fd`** — **C7: help-ctx refresh / OneOf status line.**

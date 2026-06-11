@@ -14,12 +14,12 @@
 > When a row lands: add an IMPLEMENTATION-LOG section, tick the BACKLOG row,
 > update this file.
 
-## Current state (2026-06-11, C7 committed)
+## Current state (2026-06-11, C8 committed)
 
-**HEAD = `20871fd`; 1145 lib tests green; clippy + fmt clean.**
+**HEAD = `f38c8d3`; 1152 lib tests green; clippy + fmt clean.**
 
 Phase A + Phase B are fully complete (all rows ✅). **Phase C is in
-progress** — C1, C2, C3, C4, C5, C6, and C7 are done.
+progress** — C1, C2, C3, C4, C5, C6, C7, and C8 are done.
 
 ### Phase C progress
 - **C1 ✅ (`b388492`)** — editor find/replace dialogs + `do_search_replace`. The
@@ -72,8 +72,20 @@ progress** — C1, C2, C3, C4, C5, C6, and C7 are done.
   (which is now idempotent — early-return guard mirrors C++'s `if(helpCtx!=h)`).
   OneOf status defs switch automatically when a modal dialog with a matching
   `helpCtx` is the top view. Two-stage reviewed.
+- **C8 ✅ (`f38c8d3`)** — theme editor + D7 extension point. `Theme::set_style` /
+  `Role::name` / `pub(crate) const ALL/ROLE_COUNT` (minimal D7 runtime-mutation
+  API). `Deferred::OpenColorDialogForRole { editor_id, role, fg, current }` +
+  `Context::open_color_dialog_for_role` — same async-modal seam as C1. Two new
+  `ModalCompletion` variants: `ThemeColorPick` (per-role color picker result routes
+  back to `ThemeEditorBody` via downcast) and `ThemeEdit` (reads working theme on
+  OK, writes to `Rc<RefCell<Option<Theme>>>` sink). `Program::set_theme` (install +
+  `invalidate_all`). `Program::theme_editor()` — 64×24 modal with `ThemeEditorBody`
+  inner widget + Fg/Bg/OK/Cancel buttons. `ThemeEditorBody` (new
+  `src/dialog/theme_editor.rs`): scrollable list of all 75 roles with fg/bg swatches
+  + "AaBb" preview; arrow/PgUp/PgDn/Home/End navigation; F/B hotkeys +
+  `cmThemeEditFg`/`cmThemeEditBg` commands. Two-stage reviewed.
 
-**Next Phase C row = C8 (theme editor).** Walk BACKLOG.md Phase C in order.
+**Next Phase C row = C9 (kbPaste / bracketed-paste).** Walk BACKLOG.md Phase C in order.
 
 ### What is on `main` from the Phase A/B backlog run (committed):
 - **B1 ✅ (`680aabc`)** — button `cmCommandSetChanged` graying; `Program::new` seeds `command_set_changed: true` for initial broadcast. InputLine `can_update_commands`/`update_commands` from `handle_event` + `set_state`.
@@ -151,10 +163,8 @@ This session ran the **backlog run** end to end:
 
 ## Next — Phase C in progress (C1–C7 done)
 
-**Phase A + B fully ✅; Phase C in progress (C1–C7 ✅).** Walk BACKLOG.md
+**Phase A + B fully ✅; Phase C in progress (C1–C8 ✅).** Walk BACKLOG.md
 Phase C in order. Remaining rows:
-- **C8** theme editor (needs the D7 extension point; `Program::color_dialog` is
-  the ready entry point)
 - **C9** kbPaste / bracketed-paste multi-char insert (`editor.rs` paste branch +
   the backend paste event; B7 landed the event, this is the editor consumer)
 
