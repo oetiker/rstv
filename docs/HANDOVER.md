@@ -172,8 +172,8 @@ This session ran the **backlog run** end to end:
 **Phase A + B + C fully ✅ (all C1–C9 done).** Check BACKLOG.md for any new
 backlog rows added since Phase C started, or begin planning the next phase.
 
-**Standing deferrals** (fold into history-subsystem port):
-`init/doneHistory`.
+**Standing deferrals:** none — `init/doneHistory` resolved (moot: thread-local
+Vec auto-inits/auto-drops; stale TODOs removed from `application.rs`).
 
 **C1 reuse note for later rows:** the find/replace prompt reused the
 `request_message_box` async-modal seam (`answer_to` + `then_command`) and the

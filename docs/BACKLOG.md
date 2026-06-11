@@ -63,3 +63,7 @@ infallible) · `:1766` charScan.scanCode · `:2125` fexpand nuance · `:2170`
 efBackupFiles · `edReadError` on load (ctor has no ctx) ·
 `menu_session.rs:1159` TMenuPopup Ctrl+letter (dead under the capture-stack
 model, documented).
+
+`initHistory`/`doneHistory` — **resolved**: moot because the store uses a
+`thread_local! Vec` that auto-initializes/auto-drops (row 54 deviation). The
+stale `TODO(history)` comments in `application.rs` were removed.

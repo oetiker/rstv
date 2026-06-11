@@ -105,8 +105,7 @@ pub(crate) const EF_PROMPT_ON_REPLACE: u16 = 0x0004;
 pub(crate) const EF_REPLACE_ALL: u16 = 0x0008;
 /// `efDoReplace` — the operation is a replace, not a find.
 pub(crate) const EF_DO_REPLACE: u16 = 0x0010;
-/// `efBackupFiles` — write a backup file on save (file editor; deferred).
-#[allow(dead_code)]
+/// `efBackupFiles` — rename existing file to `<name>~` before saving.
 pub(crate) const EF_BACKUP_FILES: u16 = 0x0100;
 
 /// `maxLineLength` — the fixed `limit.x` content width (editors.h).
@@ -2542,13 +2541,17 @@ impl View for Memo {
 /// (refreshing the hosting [`EditWindow`]'s frame title).
 ///
 /// Deferred (forced by not-yet-ported substrate):
-/// * `edReadError` on **load** — `load_file` is only called from the ctor, which
-///   has no `Context` and no inserted view, so it cannot request a modal; kept
-///   `is_valid = false` with no box. `edCreateError`/`edWriteError` are MERGED:
+/// * `edReadError` on **load** — stored as `pending_load_error` in `load_file` and
+///   shown via `request_message_box` on the first `handle_event` call (the ctor has
+///   no `Context`; this is the established deferred-ctor-work pattern). `edCreateError`/`edWriteError` are MERGED:
 ///   `std::fs::write` does not separate create-vs-write failure, so both emit the
 ///   single "Error writing file …" box (documented in `save_file`). `edOutOfMemory`
 ///   has no analogue (the buffer grows fallibly via the OS).
-/// * `efBackupFiles` backup-rename in `saveFile` — deferred (flag defaults off).
+/// * `efBackupFiles` backup-rename in `saveFile` — **implemented** (flag
+///   defaults off). DEVIATION from C++: instead of replacing the extension with
+///   `.bak` (`fnmerge(…, backupExt)`) we append `~` to the full filename
+///   (`foo.txt` → `foo.txt~`, `Makefile` → `Makefile~`), following the Unix
+///   convention (user-directed, see D-rules).
 /// * `shutDown` cmSave/cmSaveAs disable-on-close — no rstv `shut_down` View
 ///   analogue exists; dropped.
 /// * `isClipboard()→*fileName = EOS` reset after saveAs — the internal-clipboard
@@ -2571,6 +2574,11 @@ pub struct FileEditor {
     /// `message(owner, evBroadcast, cmUpdateTitle, 0)` — but deferred to the
     /// re-injected `cmSave` so the broadcast fires from a full `ctx`.
     pub pending_title_update: bool,
+    /// Error message from `load_file` to display on the first `handle_event` call.
+    /// Set when a real I/O error (not NotFound) occurs during `load_file`, which is
+    /// called from the ctor and has no `Context`. Shown via `request_message_box`
+    /// on the first `handle_event` (the established deferred-ctor-work pattern).
+    pending_load_error: Option<String>,
 }
 
 impl FileEditor {
@@ -2589,11 +2597,14 @@ impl FileEditor {
             file_name: None,
             pending_save_answer: None,
             pending_title_update: false,
+            pending_load_error: None,
         };
         if let Some(path) = file_name {
-            // C++ fexpand canonicalizes; best-effort here (canonicalize fails for a
-            // not-yet-existing path — keep the path as given in that case).
-            // TODO(row 68 fexpand): full path-expansion nuance deferred.
+            // C++ fexpand: make absolute relative to CWD, resolve . and .., but do
+            // NOT require the path to exist. std::path::absolute matches this
+            // contract (stable since Rust 1.79); fall back to the original path if
+            // the CWD cannot be determined (the only failure mode).
+            let path = std::path::absolute(&path).unwrap_or(path);
             fe.file_name = Some(path);
             if fe.editor.is_valid {
                 fe.editor.is_valid = fe.load_file();
@@ -2604,7 +2615,7 @@ impl FileEditor {
 
     /// `TFileEditor::loadFile` — read the whole file into the buffer.
     /// Missing/unopenable file ⇒ empty buffer, success (C++ returns True).
-    /// A real read error ⇒ false (C++ shows edReadError, deferred here).
+    /// A real read error ⇒ false; stores `pending_load_error` for display on first `handle_event`.
     pub fn load_file(&mut self) -> bool {
         let Some(path) = self.file_name.clone() else {
             self.editor.set_buf_len(0);
@@ -2621,11 +2632,13 @@ impl FileEditor {
                 self.editor.set_buf_len(0); // can't open ⇒ empty, valid (C++ True)
                 true
             }
-            Err(_) => {
-                // edReadError box stays DEFERRED (no async-modal-from-view here):
-                // load_file is only called from the ctor (`FileEditor::new`), which
-                // has no `Context` and no inserted view, so it cannot request a
-                // modal. Keep is_valid=false with no box (the caller reflects it).
+            Err(e) => {
+                // edReadError: store for display on first handle_event (ctor has no ctx).
+                // Faithful to C++ ("Error reading file %s."); OS detail omitted
+                // because the dialog sizer doesn't handle embedded newlines.
+                let _ = e;
+                let msg = format!("Error reading file {}.", path.display());
+                self.pending_load_error = Some(msg);
                 false
             }
         }
@@ -2638,7 +2651,19 @@ impl FileEditor {
         let Some(path) = self.file_name.clone() else {
             return false;
         };
-        // TODO(row 68 efBackupFiles): backup-rename deferred (flag defaults off).
+        // efBackupFiles: rename existing file to <name>~ before writing the new
+        // content. DEVIATION from C++ (which uses ".bak"): append "~" to the
+        // full filename following the Unix convention (user-directed).
+        // No filename component: silently skip (matches C++ fnsplit/fnmerge no-op).
+        if (self.editor.editor_flags() & EF_BACKUP_FILES) != 0
+            && let Some(name) = path.file_name()
+        {
+            let mut bname = name.to_os_string();
+            bname.push("~");
+            let backup = path.with_file_name(bname);
+            let _ = std::fs::remove_file(&backup); // Windows: rename fails if dest exists
+            let _ = std::fs::rename(&path, &backup); // ignore — original may not exist (first save)
+        }
         // The logical text = front [0..curPtr] then tail [curPtr+gapLen..][..bufLen-curPtr].
         // Use the editor's text() helper (gap-skipping) — equivalent and simpler.
         let bytes = self.editor.text();
@@ -2706,6 +2731,15 @@ impl View for FileEditor {
     fn handle_event(&mut self, ev: &mut crate::event::Event, ctx: &mut Context) {
         use crate::command::Command;
         use crate::event::Event;
+        if let Some(msg) = self.pending_load_error.take() {
+            ctx.request_message_box(
+                msg,
+                crate::dialog::MessageBoxKind::Error,
+                crate::dialog::MessageBoxButtons::ok(),
+                None,
+                None,
+            );
+        }
         self.editor.handle_event(ev, ctx);
         // cmSaveAs (C++ `case cmSaveAs: saveAs();`): always open the FileDialog to
         // pick a (possibly new) name, regardless of whether the buffer is titled.
@@ -3934,6 +3968,66 @@ mod tests {
         assert!(fe.editor.text().is_empty(), "missing file ⇒ empty buffer");
     }
 
+    /// Unreadable file (exists, mode 0o000) ⇒ is_valid=false, pending_load_error stored,
+    /// and `handle_event` queues an `OpenMessageBox` on the first call.
+    #[cfg(unix)]
+    #[test]
+    fn file_editor_load_unreadable_queues_error_box() {
+        use std::fs::Permissions;
+        use std::os::unix::fs::PermissionsExt;
+        use crate::view::Deferred;
+
+        // Root bypasses DAC permission checks — mode 0o000 still opens for root.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+
+        let path = tmp_path("unreadable");
+        let _ = std::fs::remove_file(&path);
+        std::fs::File::create(&path).expect("create temp file");
+        std::fs::set_permissions(&path, Permissions::from_mode(0o000))
+            .expect("set mode 0o000");
+
+        let mut fe = FileEditor::new(
+            Rect::new(0, 0, 40, 10),
+            None,
+            None,
+            None,
+            Some(path.clone()),
+        );
+
+        // Restore permissions so cleanup can proceed regardless of outcome.
+        let _ = std::fs::set_permissions(&path, Permissions::from_mode(0o600));
+        let _ = std::fs::remove_file(&path);
+
+        assert!(!fe.editor.is_valid, "unreadable file ⇒ is_valid=false");
+        assert!(
+            fe.pending_load_error.is_some(),
+            "pending_load_error populated after load failure"
+        );
+
+        // First handle_event must flush the error as an OpenMessageBox.
+        let mut cx = Cx::new();
+        let mut ev = crate::event::Event::Nothing;
+        {
+            let mut ctx = cx.ctx();
+            fe.handle_event(&mut ev, &mut ctx);
+        }
+        assert!(
+            fe.pending_load_error.is_none(),
+            "pending_load_error consumed after handle_event"
+        );
+        assert!(
+            cx.deferred.iter().any(|d| matches!(
+                d,
+                Deferred::OpenMessageBox { kind, buttons, .. }
+                    if *kind == crate::dialog::MessageBoxKind::Error
+                    && *buttons == crate::dialog::MessageBoxButtons::ok()
+            )),
+            "handle_event queued an OpenMessageBox(Error) for the read failure"
+        );
+    }
+
     /// save_file round-trip: an untitled buffer, given a filename, writes to disk
     /// and clears `modified`.
     #[test]
@@ -3953,6 +4047,77 @@ mod tests {
         assert_eq!(on_disk, fe.editor.text(), "disk bytes equal editor text");
         assert!(!fe.editor.modified(), "modified cleared after save");
 
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// EF_BACKUP_FILES: when the flag is set, save_file renames the existing file
+    /// to `<name>~` before writing the new content, using the Unix `~` convention.
+    #[test]
+    fn backup_file_created_on_save_with_ef_backup_files() {
+        let path = tmp_path("backup_test");
+        let backup = {
+            let mut s = path.as_os_str().to_os_string();
+            s.push("~");
+            std::path::PathBuf::from(s)
+        };
+        // Ensure clean state.
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&backup);
+
+        // Write original content so there is something to back up.
+        let original = b"original content\n";
+        std::fs::write(&path, original).unwrap();
+
+        // Build a FileEditor with EF_BACKUP_FILES enabled.
+        let mut fe = FileEditor::new(
+            Rect::new(0, 0, 40, 10),
+            None,
+            None,
+            None,
+            Some(path.clone()),
+        );
+        assert!(fe.editor.is_valid, "loaded editor is valid");
+        fe.editor.set_editor_flags(EF_BACKUP_FILES);
+
+        // Replace content via insert and save.
+        fe.editor.set_buf_len(0); // clear the buffer
+        insert(&mut fe.editor, "new content\n");
+        let mut cx = Cx::new();
+        assert!(fe.save_file(&mut cx.ctx()), "save_file succeeds");
+
+        // The backup must contain the original bytes.
+        let backed_up = std::fs::read(&backup).expect("backup file must exist");
+        assert_eq!(backed_up, original, "backup holds the original content");
+
+        // The main file must contain the new content.
+        let on_disk = std::fs::read(&path).unwrap();
+        assert_eq!(on_disk, fe.editor.text(), "saved file holds the new content");
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&backup);
+    }
+
+    /// Without EF_BACKUP_FILES the backup file must NOT be created.
+    #[test]
+    fn no_backup_without_ef_backup_files() {
+        let path = tmp_path("no_backup_test");
+        let backup = {
+            let mut s = path.as_os_str().to_os_string();
+            s.push("~");
+            std::path::PathBuf::from(s)
+        };
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&backup);
+
+        std::fs::write(&path, b"original\n").unwrap();
+
+        let mut fe = FileEditor::new(Rect::new(0, 0, 40, 10), None, None, None, Some(path.clone()));
+        assert!(fe.editor.is_valid);
+        // flag NOT set — default editor_flags = 0
+        let mut cx = Cx::new();
+        fe.save_file(&mut cx.ctx());
+
+        assert!(!backup.exists(), "backup must not be created when EF_BACKUP_FILES is off");
         let _ = std::fs::remove_file(&path);
     }
 

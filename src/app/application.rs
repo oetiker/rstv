@@ -18,7 +18,8 @@
 //!   `Desktop::tile`/`cascade` exist + a menu emits `Command::TILE`/`Command::CASCADE`.
 //! * `TAppInit` subsystem init: subsumed by the [`Backend`](crate::backend::Backend)
 //!   + [`Renderer`](crate::backend::Renderer) construction path in our model.
-//! * `initHistory`/`doneHistory`: the history list subsystem is not ported yet.
+//! * `initHistory`/`doneHistory`: moot — the history store uses a `thread_local!`
+//!   `Vec` that auto-initializes and auto-drops (row 54 deviation, see `history.rs`).
 
 use crate::app::Program;
 use crate::backend::Backend;
@@ -41,10 +42,10 @@ use crate::view::{Rect, View, ViewId};
 /// TApplication::TApplication()
 ///     : TProgInit(initStatusLine, initMenuBar, initDeskTop)
 /// { initHistory(); }
-/// // TODO(history): ~TApplication calls doneHistory().
+/// // ~TApplication calls doneHistory().
 /// ```
-// TODO(history): ~TApplication calls doneHistory() — no Drop impl needed until
-// the history subsystem is ported.
+/// `initHistory`/`doneHistory` are moot in rstv — the store is a `thread_local!`
+/// `Vec` that auto-initializes and auto-drops (row 54, see `history.rs`).
 pub struct Application {
     /// The embedded program (D2). `Application` forwards every public operation
     /// through this field — see the forwarding methods below.
@@ -58,9 +59,6 @@ impl Application {
     /// `create_status_line`, and `create_menu_bar` to [`Program::new`] unchanged.
     /// `TAppInit` (hardware/mouse/screen subsystem init) is subsumed by our backend
     /// construction path; no equivalent is needed here.
-    ///
-    // TODO(history): TApplication ctor calls initHistory() — the history list
-    // subsystem is not ported yet.
     pub fn new(
         backend: Box<dyn Backend>,
         clock: Box<dyn Clock>,
