@@ -1,6 +1,9 @@
 //! Filesystem locations the doc build needs, resolved relative to the
 //! workspace root and honoring `CARGO_TARGET_DIR`.
 
+// Functions are stubs consumed by later tasks (build, screens, serve).
+#![allow(dead_code)]
+
 use std::path::{Path, PathBuf};
 
 /// Workspace root = the directory two levels up from this file's crate
