@@ -110,6 +110,7 @@ pub use event::{
 };
 pub use frame::Frame;
 pub use help::HelpCtx;
+pub use keymap::{KeyStroke, Keymap, Resolve};
 pub use menu::{
     Menu, MenuBar, MenuBox, MenuBuilder, MenuItem, MenuView, MenuViewState, alt, popup_menu,
 };

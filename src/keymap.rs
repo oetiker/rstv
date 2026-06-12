@@ -126,26 +126,207 @@ fn parse_key(name: &str) -> Result<Key, String> {
     })
 }
 
-// Placeholders needed by later tasks — will be filled in.
+/// The outcome of resolving a keystroke against a keymap.
 pub enum Resolve {
+    /// A fully-resolved command.
     Command(Command),
+    /// This stroke begins a known two-stroke chord; caller should hold it.
     Prefix,
+    /// No binding — caller treats the key as insertable text or lets it bubble.
     None,
 }
+
+/// A `Chord → Command` table plus the set of strokes that begin a 2-chord.
 #[derive(Clone, Default)]
 pub struct Keymap {
     bindings: HashMap<Chord, Command>,
     prefixes: HashSet<KeyStroke>,
 }
+
 impl Keymap {
+    /// An empty keymap.
     pub fn new() -> Self {
         Keymap::default()
     }
+
+    /// Bind a chord string to a command (panics on a malformed chord — presets
+    /// and app code use compile-time-constant strings).
+    pub fn bind(&mut self, chord: &str, cmd: Command) -> &mut Self {
+        let c = parse_chord(chord).unwrap_or_else(|e| panic!("bad chord {chord:?}: {e}"));
+        if c.0.len() >= 2 {
+            self.prefixes.insert(c.0[0]);
+        }
+        self.bindings.insert(c, cmd);
+        self
+    }
+
+    /// Remove a binding if present.
+    pub fn unbind(&mut self, chord: &str) -> &mut Self {
+        if let Ok(c) = parse_chord(chord) {
+            self.bindings.remove(&c);
+            // Recompute the prefix set from the remaining 2-chords.
+            self.prefixes = self
+                .bindings
+                .keys()
+                .filter(|k| k.0.len() >= 2)
+                .map(|k| k.0[0])
+                .collect();
+        }
+        self
+    }
+
+    /// Resolve `stroke`, combined with an optional `pending` prefix stroke.
+    pub fn resolve(&self, pending: Option<KeyStroke>, stroke: KeyStroke) -> Resolve {
+        let chord = match pending {
+            Some(p) => Chord(vec![p, stroke]),
+            None => Chord(vec![stroke]),
+        };
+        if let Some(&cmd) = self.bindings.get(&chord) {
+            return Resolve::Command(cmd);
+        }
+        if pending.is_none() && self.prefixes.contains(&stroke) {
+            return Resolve::Prefix;
+        }
+        Resolve::None
+    }
+
+    /// Faithful default: transcription of the C++ editor `firstKeys`/`quickKeys`/
+    /// `blockKeys` tables, plus plain `backspace → BACK_SPACE` (the bug fix).
+    pub fn word_star() -> Self {
+        let mut k = Keymap::new();
+        // firstKeys — Ctrl-letter diamond.
+        k.bind("ctrl+a", Command::SELECT_ALL)
+            .bind("ctrl+c", Command::PAGE_DOWN)
+            .bind("ctrl+d", Command::CHAR_RIGHT)
+            .bind("ctrl+e", Command::LINE_UP)
+            .bind("ctrl+f", Command::WORD_RIGHT)
+            .bind("ctrl+g", Command::DEL_CHAR)
+            .bind("ctrl+h", Command::BACK_SPACE)
+            .bind("ctrl+l", Command::SEARCH_AGAIN)
+            .bind("ctrl+m", Command::NEW_LINE)
+            .bind("ctrl+o", Command::INDENT_MODE)
+            .bind("ctrl+p", Command::ENCODING)
+            .bind("ctrl+r", Command::PAGE_UP)
+            .bind("ctrl+s", Command::CHAR_LEFT)
+            .bind("ctrl+t", Command::DEL_WORD)
+            .bind("ctrl+u", Command::UNDO)
+            .bind("ctrl+v", Command::INS_MODE)
+            .bind("ctrl+x", Command::LINE_DOWN)
+            .bind("ctrl+y", Command::DEL_LINE);
+        // firstKeys — named keys (shift folded away on pad keys by normalization).
+        k.bind("left", Command::CHAR_LEFT)
+            .bind("right", Command::CHAR_RIGHT)
+            .bind("backspace", Command::BACK_SPACE) // the fix (was unbound → no-op)
+            .bind("alt+backspace", Command::DEL_WORD_LEFT)
+            .bind("ctrl+backspace", Command::DEL_WORD_LEFT)
+            .bind("ctrl+delete", Command::DEL_WORD)
+            .bind("ctrl+left", Command::WORD_LEFT)
+            .bind("ctrl+right", Command::WORD_RIGHT)
+            .bind("home", Command::LINE_START)
+            .bind("end", Command::LINE_END)
+            .bind("up", Command::LINE_UP)
+            .bind("down", Command::LINE_DOWN)
+            .bind("pageup", Command::PAGE_UP)
+            .bind("pagedown", Command::PAGE_DOWN)
+            .bind("ctrl+home", Command::TEXT_START)
+            .bind("ctrl+end", Command::TEXT_END)
+            .bind("insert", Command::INS_MODE)
+            .bind("delete", Command::DEL_CHAR)
+            .bind("shift+insert", Command::PASTE)
+            .bind("shift+delete", Command::CUT)
+            .bind("ctrl+insert", Command::COPY)
+            .bind("enter", Command::NEW_LINE);
+        // quickKeys (Ctrl-Q prefix).
+        k.bind("ctrl+q a", Command::REPLACE)
+            .bind("ctrl+q c", Command::TEXT_END)
+            .bind("ctrl+q d", Command::LINE_END)
+            .bind("ctrl+q f", Command::FIND)
+            .bind("ctrl+q h", Command::DEL_START)
+            .bind("ctrl+q r", Command::TEXT_START)
+            .bind("ctrl+q s", Command::LINE_START)
+            .bind("ctrl+q y", Command::DEL_END);
+        // blockKeys (Ctrl-K prefix).
+        k.bind("ctrl+k b", Command::START_SELECT)
+            .bind("ctrl+k c", Command::PASTE)
+            .bind("ctrl+k h", Command::HIDE_SELECT)
+            .bind("ctrl+k k", Command::COPY)
+            .bind("ctrl+k y", Command::CUT);
+        k
+    }
+
+    /// CUA / "Office" preset — modern muscle memory across editor and fields.
+    pub fn cua() -> Self {
+        let mut k = Keymap::new();
+        k.bind("ctrl+c", Command::COPY)
+            .bind("ctrl+x", Command::CUT)
+            .bind("ctrl+v", Command::PASTE)
+            .bind("ctrl+z", Command::UNDO)
+            .bind("ctrl+a", Command::SELECT_ALL)
+            .bind("ctrl+f", Command::FIND)
+            .bind("backspace", Command::BACK_SPACE)
+            .bind("delete", Command::DEL_CHAR)
+            .bind("ctrl+backspace", Command::DEL_WORD_LEFT)
+            .bind("ctrl+delete", Command::DEL_WORD)
+            .bind("left", Command::CHAR_LEFT)
+            .bind("right", Command::CHAR_RIGHT)
+            .bind("ctrl+left", Command::WORD_LEFT)
+            .bind("ctrl+right", Command::WORD_RIGHT)
+            .bind("up", Command::LINE_UP)
+            .bind("down", Command::LINE_DOWN)
+            .bind("home", Command::LINE_START)
+            .bind("end", Command::LINE_END)
+            .bind("ctrl+home", Command::TEXT_START)
+            .bind("ctrl+end", Command::TEXT_END)
+            .bind("pageup", Command::PAGE_UP)
+            .bind("pagedown", Command::PAGE_DOWN)
+            .bind("insert", Command::INS_MODE)
+            .bind("enter", Command::NEW_LINE);
+        k
+    }
+
+    /// Emacs preset — readline/Cocoa bindings; now active in input fields too.
+    pub fn emacs() -> Self {
+        let mut k = Keymap::new();
+        k.bind("ctrl+a", Command::LINE_START)
+            .bind("ctrl+e", Command::LINE_END)
+            .bind("ctrl+f", Command::CHAR_RIGHT)
+            .bind("ctrl+b", Command::CHAR_LEFT)
+            .bind("ctrl+n", Command::LINE_DOWN)
+            .bind("ctrl+p", Command::LINE_UP)
+            .bind("ctrl+d", Command::DEL_CHAR)
+            .bind("ctrl+k", Command::DEL_END)
+            .bind("ctrl+y", Command::PASTE)
+            .bind("alt+f", Command::WORD_RIGHT)
+            .bind("alt+b", Command::WORD_LEFT)
+            .bind("backspace", Command::BACK_SPACE)
+            .bind("delete", Command::DEL_CHAR)
+            .bind("left", Command::CHAR_LEFT)
+            .bind("right", Command::CHAR_RIGHT)
+            .bind("up", Command::LINE_UP)
+            .bind("down", Command::LINE_DOWN)
+            .bind("home", Command::LINE_START)
+            .bind("end", Command::LINE_END)
+            .bind("enter", Command::NEW_LINE);
+        k
+    }
 }
 
-pub fn set_global(_km: Keymap) {}
-pub fn resolve_global(_pending: Option<KeyStroke>, _stroke: KeyStroke) -> Resolve {
-    Resolve::None
+fn global_cell() -> &'static RwLock<Keymap> {
+    static GLOBAL: OnceLock<RwLock<Keymap>> = OnceLock::new();
+    GLOBAL.get_or_init(|| RwLock::new(Keymap::word_star()))
+}
+
+/// Replace the process-global keymap (the default for all text input).
+pub fn set_global(km: Keymap) {
+    *global_cell().write().expect("keymap lock poisoned") = km;
+}
+
+/// Resolve a stroke against the process-global keymap.
+pub fn resolve_global(pending: Option<KeyStroke>, stroke: KeyStroke) -> Resolve {
+    global_cell()
+        .read()
+        .expect("keymap lock poisoned")
+        .resolve(pending, stroke)
 }
 
 #[cfg(test)]
@@ -215,5 +396,91 @@ mod tests {
     fn parse_rejects_garbage() {
         assert!(parse_chord("ctrl+nope").is_err());
         assert!(parse_chord("").is_err());
+    }
+
+    #[test]
+    fn resolve_single_and_prefix_and_miss() {
+        let mut km = Keymap::new();
+        km.bind("ctrl+s", Command::CHAR_LEFT);
+        km.bind("ctrl+k ctrl+c", Command::COPY);
+
+        let s = KeyStroke::from_event(ev(Key::Char('s'), true, false, false));
+        assert!(matches!(km.resolve(None, s), Resolve::Command(c) if c == Command::CHAR_LEFT));
+
+        let k = KeyStroke::from_event(ev(Key::Char('k'), true, false, false));
+        assert!(matches!(km.resolve(None, k), Resolve::Prefix));
+
+        let c = KeyStroke::from_event(ev(Key::Char('c'), true, false, false));
+        assert!(matches!(km.resolve(Some(k), c), Resolve::Command(cmd) if cmd == Command::COPY));
+
+        // Unfinished prefix + wrong second key → None (pending already consumed).
+        let z = KeyStroke::from_event(ev(Key::Char('z'), true, false, false));
+        assert!(matches!(km.resolve(Some(k), z), Resolve::None));
+    }
+
+    #[test]
+    fn global_default_is_word_star_and_settable() {
+        // Default global resolves plain Backspace to BACK_SPACE (the bug fix).
+        let bs = KeyStroke::from_event(ev(Key::Backspace, false, false, false));
+        assert!(
+            matches!(resolve_global(None, bs), Resolve::Command(c) if c == Command::BACK_SPACE)
+        );
+
+        set_global(Keymap::cua());
+        let cc = KeyStroke::from_event(ev(Key::Char('c'), true, false, false));
+        assert!(matches!(resolve_global(None, cc), Resolve::Command(c) if c == Command::COPY));
+
+        set_global(Keymap::word_star()); // restore for other tests
+    }
+
+    #[test]
+    fn word_star_transcribes_editor_tables_plus_backspace_fix() {
+        let km = Keymap::word_star();
+        let r = |k: Key, ctrl, alt, shift| {
+            km.resolve(None, KeyStroke::from_event(ev(k, ctrl, alt, shift)))
+        };
+        // The bug fix:
+        assert!(
+            matches!(r(Key::Backspace, false, false, false), Resolve::Command(c) if c == Command::BACK_SPACE)
+        );
+        // A representative diamond binding, a named key, and a prefix:
+        assert!(
+            matches!(r(Key::Char('s'), true, false, false), Resolve::Command(c) if c == Command::CHAR_LEFT)
+        );
+        assert!(
+            matches!(r(Key::Char('a'), true, false, false), Resolve::Command(c) if c == Command::SELECT_ALL)
+        );
+        assert!(matches!(
+            r(Key::Char('q'), true, false, false),
+            Resolve::Prefix
+        ));
+        assert!(
+            matches!(r(Key::Enter, false, false, false), Resolve::Command(c) if c == Command::NEW_LINE)
+        );
+        // Ctrl-Q F → FIND (quickKeys prefix).
+        let q = KeyStroke::from_event(ev(Key::Char('q'), true, false, false));
+        let f = KeyStroke::from_event(ev(Key::Char('f'), false, false, false));
+        assert!(matches!(km.resolve(Some(q), f), Resolve::Command(c) if c == Command::FIND));
+    }
+
+    #[test]
+    fn cua_and_emacs_core_bindings() {
+        let cua = Keymap::cua();
+        let r = |km: &Keymap, k: Key, ctrl| {
+            km.resolve(None, KeyStroke::from_event(ev(k, ctrl, false, false)))
+        };
+        assert!(matches!(r(&cua, Key::Char('c'), true), Resolve::Command(c) if c == Command::COPY));
+        assert!(
+            matches!(r(&cua, Key::Char('v'), true), Resolve::Command(c) if c == Command::PASTE)
+        );
+        assert!(matches!(r(&cua, Key::Char('z'), true), Resolve::Command(c) if c == Command::UNDO));
+
+        let em = Keymap::emacs();
+        assert!(
+            matches!(r(&em, Key::Char('a'), true), Resolve::Command(c) if c == Command::LINE_START)
+        );
+        assert!(
+            matches!(r(&em, Key::Char('e'), true), Resolve::Command(c) if c == Command::LINE_END)
+        );
     }
 }
