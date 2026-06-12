@@ -55,6 +55,11 @@ pub fn build_book() -> Result<()> {
 /// so `api/` ends up holding only the `tvision` docs. See `paths::rustdoc_out`.
 fn build_rustdoc() -> Result<()> {
     let header = paths::book_root().join("theme").join("rustdoc-header.html");
+    anyhow::ensure!(
+        !header.to_string_lossy().contains(' '),
+        "rustdoc-header path contains a space; RUSTDOCFLAGS would be malformed: {}",
+        header.display()
+    );
     let flags = format!("--html-in-header {}", header.display());
     let target = paths::rustdoc_target_dir();
     let status = Command::new("cargo")

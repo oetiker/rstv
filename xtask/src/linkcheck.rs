@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 pub fn check_tree(root: &Path) -> Result<Vec<String>> {
     let mut broken = Vec::new();
     let mut html_files = Vec::new();
-    collect_html(root, &mut html_files)?;
+    collect_html(root, root, &mut html_files)?;
     for file in &html_files {
         let body = std::fs::read_to_string(file).unwrap_or_default();
         for link in extract_links(&body) {
@@ -100,20 +100,23 @@ fn extract_links(html: &str) -> Vec<String> {
 /// content, and they contain a `./index.html` self-link that only resolves in a
 /// multi-crate workspace doc root rustdoc does not generate here. We don't own
 /// their markup, so we don't gate the build on it.
-fn is_rustdoc_chrome(p: &Path) -> bool {
-    matches!(
-        p.file_name().and_then(|n| n.to_str()),
-        Some("help.html" | "settings.html")
-    )
+fn is_rustdoc_chrome(root: &Path, p: &Path) -> bool {
+    p.starts_with(root.join("api"))
+        && matches!(
+            p.file_name().and_then(|n| n.to_str()),
+            Some("help.html" | "settings.html")
+        )
 }
 
-fn collect_html(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+fn collect_html(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let p = entry.path();
         if entry.file_type()?.is_dir() {
-            collect_html(&p, out)?;
-        } else if p.extension().map(|e| e == "html").unwrap_or(false) && !is_rustdoc_chrome(&p) {
+            collect_html(root, &p, out)?;
+        } else if p.extension().map(|e| e == "html").unwrap_or(false)
+            && !is_rustdoc_chrome(root, &p)
+        {
             out.push(p);
         }
     }

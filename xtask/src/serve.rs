@@ -47,6 +47,21 @@ fn serve_one(root: &Path, request: tiny_http::Request) {
     if path.is_dir() || rel.is_empty() {
         path = path.join("index.html");
     }
+    // Reject path traversal: canonicalize and confirm the target stays under
+    // the served root. A missing file -> 404; an escape -> 403.
+    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let canonical = match path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => {
+            let _ = request.respond(tiny_http::Response::from_string("404").with_status_code(404));
+            return;
+        }
+    };
+    if !canonical.starts_with(&canonical_root) {
+        let _ = request.respond(tiny_http::Response::from_string("403").with_status_code(403));
+        return;
+    }
+    let path = canonical;
     match std::fs::read(&path) {
         Ok(bytes) => {
             let mime = match path.extension().and_then(|e| e.to_str()) {

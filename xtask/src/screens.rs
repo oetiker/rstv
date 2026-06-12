@@ -67,17 +67,26 @@ pub fn capture_one(s: &Screen) -> Result<String> {
     ])
     .context("tmux new-session failed")?;
 
+    // Drive + capture in an inner fn so the kill below ALWAYS runs, even when
+    // a send-keys/capture-pane step errors out (no orphaned tmux sessions).
+    let result = drive_and_capture(s, &session);
+    let _ = tmux(&["kill-session", "-t", &session]);
+    result
+}
+
+/// Drive the running session with the configured keystrokes and capture its
+/// colored output as an HTML fragment. The session is killed by the caller.
+fn drive_and_capture(s: &Screen, session: &str) -> Result<String> {
     sleep_ms(s.settle_ms);
     for key in s.keys {
-        tmux(&["send-keys", "-t", &session, key])?;
+        tmux(&["send-keys", "-t", session, key])?;
         sleep_ms(s.settle_ms.max(200));
     }
 
     let captured =
-        tmux(&["capture-pane", "-t", &session, "-e", "-p"]).context("capture-pane failed")?;
+        tmux(&["capture-pane", "-t", session, "-e", "-p"]).context("capture-pane failed")?;
     let ansi = String::from_utf8_lossy(&captured.stdout).into_owned();
 
-    let _ = tmux(&["kill-session", "-t", &session]);
     Ok(ansi_to_html(&ansi))
 }
 
