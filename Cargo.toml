@@ -1,5 +1,8 @@
 [workspace]
-members = ["tvision-macros"]
+members = ["tvision-macros", "xtask"]
+# Plain `cargo build`/`test` (no --workspace) skips the heavy doc-tooling crate;
+# `cargo test --workspace` still includes it.
+default-members = [".", "tvision-macros"]
 
 [package]
 name = "tvision"
