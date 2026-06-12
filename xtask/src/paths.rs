@@ -1,9 +1,6 @@
 //! Filesystem locations the doc build needs, resolved relative to the
 //! workspace root and honoring `CARGO_TARGET_DIR`.
 
-// Functions are stubs consumed by later tasks (build, screens, serve).
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 
 /// Workspace root = the directory two levels up from this file's crate
@@ -34,9 +31,20 @@ pub fn target_dir() -> PathBuf {
     }
 }
 
-/// rustdoc output: `<target>/doc`.
+/// A dedicated, xtask-owned target dir for the rustdoc layer, kept separate
+/// from the shared `$CARGO_TARGET_DIR`. The shared `<target>/doc` accumulates
+/// rustdoc from every crate that has ever shared the target dir (a documented
+/// dev-machine gotcha), and `cargo doc --no-deps` only refreshes our crate
+/// without evicting stale siblings — so building into an isolated dir is what
+/// guarantees `api/` holds only the `tvision` docs. In CI (pristine target)
+/// this is purely defensive.
+pub fn rustdoc_target_dir() -> PathBuf {
+    target_dir().join("rstv-rustdoc")
+}
+
+/// rustdoc HTML output root: `<rustdoc-target>/doc`.
 pub fn rustdoc_out() -> PathBuf {
-    target_dir().join("doc")
+    rustdoc_target_dir().join("doc")
 }
 
 /// Where generated screenshots are written: `docs/book/src/screens`.

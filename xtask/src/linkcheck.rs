@@ -1,9 +1,11 @@
-// TEMPORARY: removed in Task 4 once build.rs calls check_tree.
-#![allow(dead_code)]
-
 //! Internal-link checker over the assembled site tree (book + api/). Verifies
 //! that relative href/src targets resolve to files that exist. External links
-//! (http(s), mailto, protocol-relative) and pure fragments are skipped.
+//! (http(s), mailto, protocol-relative) and pure fragments are skipped, as are
+//! links that are plainly not filesystem paths: `javascript:` pseudo-URLs,
+//! JavaScript template-literal interpolations (`${…}`) that the crude attribute
+//! scan lifts out of rustdoc's inline `<script>` blocks, and rustdoc intra-doc
+//! link text (`crate::…`, `super::…`, `Type::method`, `struct@…`) rendered
+//! inside `<code>` — none of which are real relative URLs.
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -16,7 +18,7 @@ pub fn check_tree(root: &Path) -> Result<Vec<String>> {
     for file in &html_files {
         let body = std::fs::read_to_string(file).unwrap_or_default();
         for link in extract_links(&body) {
-            if is_external(&link) {
+            if is_external(&link) || is_not_a_path(&link) {
                 continue;
             }
             if !resolves(file, &link) {
@@ -36,6 +38,23 @@ fn is_external(link: &str) -> bool {
         || link.starts_with("data:")
         || link.starts_with("//")
         || link.starts_with('#')
+}
+
+/// Links that are syntactically not relative filesystem paths and so cannot be
+/// "broken internal links". These are artifacts of scanning machine-generated
+/// rustdoc HTML with a crude `href="`/`src="` matcher:
+/// - `javascript:` pseudo-URLs (`javascript:void(0)`),
+/// - JavaScript template-literal interpolations (`${…}`) lifted out of inline
+///   `<script>` blocks (e.g. `../static.files/${f}`, `${rootPath}help.html`),
+/// - rustdoc intra-doc link *text* rendered inside `<code>` — these carry a
+///   `::` path-separator or a `struct@`/`trait@`/`fn@` rustdoc disambiguator
+///   that never appears in a real relative URL we emit.
+fn is_not_a_path(link: &str) -> bool {
+    link.starts_with("javascript:")
+        || link.contains("${")
+        || link.contains("::")
+        || link.contains('@')
+        || link == "self" // bare rustdoc intra-doc keyword, not a URL
 }
 
 /// Resolve `link` relative to the directory of `from` and test existence.
@@ -76,13 +95,25 @@ fn extract_links(html: &str) -> Vec<String> {
     out
 }
 
+/// rustdoc emits standalone chrome pages (its Help and Settings UI) at the
+/// `api/` root. They are framework boilerplate we copy verbatim, not authored
+/// content, and they contain a `./index.html` self-link that only resolves in a
+/// multi-crate workspace doc root rustdoc does not generate here. We don't own
+/// their markup, so we don't gate the build on it.
+fn is_rustdoc_chrome(p: &Path) -> bool {
+    matches!(
+        p.file_name().and_then(|n| n.to_str()),
+        Some("help.html" | "settings.html")
+    )
+}
+
 fn collect_html(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let p = entry.path();
         if entry.file_type()?.is_dir() {
             collect_html(&p, out)?;
-        } else if p.extension().map(|e| e == "html").unwrap_or(false) {
+        } else if p.extension().map(|e| e == "html").unwrap_or(false) && !is_rustdoc_chrome(&p) {
             out.push(p);
         }
     }
@@ -102,18 +133,41 @@ mod tests {
     fn flags_missing_and_passes_present_and_skips_external() {
         let tmp = std::env::temp_dir().join(format!("rstv_lc_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
-        write(&tmp.join("a.html"),
+        write(
+            &tmp.join("a.html"),
             r##"<a href="b.html">ok</a>
                <a href="missing.html">bad</a>
                <a href="api/x.html">cross</a>
                <a href="https://example.com">ext</a>
-               <a href="#frag">frag</a>"##);
+               <a href="#frag">frag</a>"##,
+        );
         write(&tmp.join("b.html"), "<p>b</p>");
         write(&tmp.join("api/x.html"), "<p>x</p>");
 
         let broken = check_tree(&tmp).unwrap();
         assert_eq!(broken.len(), 1, "broken: {broken:?}");
         assert!(broken[0].contains("missing.html"));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn skips_rustdoc_machine_generated_noise() {
+        // The crude attribute scan lifts these out of rustdoc's inline <script>
+        // blocks and <code> spans; none are real relative file links, so none
+        // must be reported even though the targets don't exist on disk.
+        let tmp = std::env::temp_dir().join(format!("rstv_lc3_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        write(
+            &tmp.join("a.html"),
+            r##"<a href="../static.files/${f}">js</a>
+                <a href="${rootPath}help.html">tmpl</a>
+                <a href="javascript:void(0)">noop</a>
+                <a href="crate::dialog::Body">intradoc</a>
+                <a href="struct@tokio::net::TcpListener">disambig</a>
+                <a href="self::window">self</a>"##,
+        );
+        let broken = check_tree(&tmp).unwrap();
+        assert!(broken.is_empty(), "broken: {broken:?}");
         std::fs::remove_dir_all(&tmp).ok();
     }
 
