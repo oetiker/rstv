@@ -1,12 +1,17 @@
 # Cross-view brokering & `ViewId`
 
 A scroller needs to know how far its scrollbars have moved; a list box needs to
-push its position back into them. In C++ Turbo Vision the two views simply hold
-raw `TView*` pointers at each other and call across. Rust forbids that aliased
-mutable access, so rstv splits the old pointer web into two halves: ownership
-is a downward tree of `Box<dyn View>`, and every up- or sideways link becomes a
-lightweight handle — a [`ViewId`](../api/tvision/view/struct.ViewId.html) (see
-[Pointers & `infoPtr` → handles](../port/handles.md)).
+push its position back into them. In rstv, ownership is a downward tree of
+`Box<dyn View>`, and every up- or sideways link is a lightweight handle — a
+[`ViewId`](../api/tvision/view/struct.ViewId.html) — rather than a raw pointer.
+The event loop resolves handles and performs the actual cross-view reads and
+writes at a safe point when no other borrow is active. See
+[Pointers & `infoPtr` → handles](../port/handles.md) for the broader handle
+design.
+
+> **Turbo Vision heritage:** in C++ the two views simply held raw `TView*`
+> pointers at each other and called across directly. Rust forbids that aliased
+> mutable access — the broker pattern is the replacement.
 
 ## `ViewId`: identity, not a pointer
 

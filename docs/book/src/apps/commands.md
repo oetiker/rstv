@@ -1,21 +1,21 @@
 # Commands & events
 
-In Turbo Vision, the things that *happen* in your app — clicking OK, choosing a
-menu item, a scrollbar moving — travel through the view tree as **commands** and
-**events**. A button does not call a function directly; it emits a command, and
-some view up the tree decides what to do with it. This indirection is what lets
-the same `Command::OK` come from a button, a menu, or a keystroke and be handled
-in exactly one place.
+The things that *happen* in your app — clicking OK, choosing a menu item, a
+scrollbar moving — travel through the view tree as **commands** and **events**.
+A button does not call a function directly; it emits a command, and some view up
+the tree decides what to do with it. This indirection is what lets the same
+`Command::OK` come from a button, a menu, or a keystroke and be handled in
+exactly one place.
 
 ## Commands
 
 A [`Command`](../api/tvision/command/struct.Command.html) is an opaque token
 naming an intent. The framework ships a standard vocabulary as associated
 constants — `Command::OK`, `Command::CANCEL`, `Command::QUIT`, `Command::CLOSE`,
-and so on — each ported from a C++ `cm*` constant. Unlike C++, a command is not
-an integer: its identity is a namespaced `&'static str` (so `Command::OK` is
-`"tv.ok"`). That makes app- and view-defined commands collision-safe by
-construction. Mint your own with
+and so on. A command is not an integer: its identity is a namespaced
+`&'static str` (so `Command::OK` is `"tv.ok"`), making app- and view-defined
+commands collision-safe by construction *(the standard names map one-to-one onto
+the C++ `cm*` constants)*. Mint your own with
 [`Command::custom`](../api/tvision/command/struct.Command.html#method.custom),
 under a dotted prefix of your own:
 
@@ -56,11 +56,10 @@ app.enable_command(tv::Command::SAVE);
 Internally `Program` stores the *disabled* set (a denylist), so a brand-new
 custom command is enabled the moment it exists — there is no registration step.
 Five window commands (`ZOOM`, `CLOSE`, `RESIZE`, `NEXT`, `PREV`) start disabled
-and are granted only while a window is selected, faithful to C++
-`initCommands`. The disabled command set is a
+and are granted only while a window is selected. The disabled command set is a
 [`CommandSet`](../api/tvision/command/struct.CommandSet.html) — a set of commands
-with the familiar `+=` / `-=` / union / intersection operators ported from
-`TCommandSet`.
+with `+=` / `-=` / union / intersection operators *(the successor to C++
+`TCommandSet`)*.
 
 When the enabled set changes, the framework broadcasts
 `Command::COMMAND_SET_CHANGED` once on the next idle so menus, buttons and the

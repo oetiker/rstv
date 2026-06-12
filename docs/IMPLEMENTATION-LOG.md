@@ -5,6 +5,38 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Docs Phase 1 (guide) — Rust-first guide-page pass (2026-06-12)
+
+Pushed the same Rust-first standard the rustdoc got (heritage quarantined,
+primary prose readable with zero Turbo Vision knowledge) into the 16 narrative
+guide pages under `getting-started/`, `apps/`, and `internals/`. `port/` (the
+veteran chapter) and `reference/symbol-map`+`deviations` (which are *about* C++)
+were intentionally left C++-aware.
+
+- **Three editor subagents in parallel**, one per directory (disjoint Markdown,
+  no build → no conflict), each given the identical convention + worked
+  before/after examples. Orchestrator reviewed every diff against the standard.
+- **C++-led openings flipped Rust-first.** The heaviest were `event-loop.md`
+  ("Turbo Vision in C++ has *many* loops…" → "rstv runs the entire application on
+  **one** non-recursive event loop…"), `view-tree.md` (inheritance lead →
+  `View` trait + `ViewState` composition lead), `custom-view.md`, `brokering.md`,
+  and `dialogs.md`'s modal section. Every flipped section now stands on rstv
+  terms first.
+- **C++ demoted, never deleted.** Single mappings became skippable trailing
+  parentheticals; clustered mappings were collected into a uniform
+  `> **Turbo Vision heritage:**` blockquote (introduced as the guide's
+  equivalent of the rustdoc heritage section). Comparison tables (`view-tree`
+  flag words, `text-editing` editor faces) were reframed as veteran aids — the
+  `text-editing` "C++" column folded into the Type cells so the table reads
+  Type → Use.
+- **Orchestrator fixes:** product-name slip `tvision` → `rstv` in
+  `skeleton.md:3` (crate stays `tvision`); the `text-editing` table reframe.
+- **Verified:** invariant grep clean (no FOUNDATION/MECHANICAL/PORT-ORDER/row-N,
+  no `Dn` bare labels in prose, no porting-sense "deferred"); the single
+  surviving `[deviation D11]` in `drawing.md` is a *linked* citation in a
+  Rust-first sentence — the form Rule A's exception welcomes.
+  `cargo xtask docs` OK + link check clean.
+
 ## Docs Phase 1 — user-facing cleanup + `rstv` rename (2026-06-12)
 
 Swept both doc layers so they read for library *users*, not porting contributors,

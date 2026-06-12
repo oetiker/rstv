@@ -9,15 +9,15 @@ covers both halves: the key model your `View`s see, and the configurable
 
 A keystroke is a physical [`Key`](../api/tvision/event/enum.Key.html) plus a
 separate [`KeyModifiers`](../api/tvision/event/struct.KeyModifiers.html) channel,
-bundled into a [`KeyEvent`](../api/tvision/event/struct.KeyEvent.html). This is
-the decomposed form Turbo Vision's `TKey` canonicalises to: there
-are deliberately **no** modifier-combined variants. `Ctrl+C` is
+bundled into a [`KeyEvent`](../api/tvision/event/struct.KeyEvent.html). There are
+deliberately **no** modifier-combined variants: keys and modifiers are always
+separate. `Ctrl+C` is
 `Key::Char('c')` with `ctrl` set; `Shift+Tab` is `Key::Tab` with `shift`;
 `Alt+F3` is `Key::F(3)` with `alt`. The enum holds only base keys — characters,
 function keys, and the navigation/editing keys (`Enter`, `Tab`, arrows, `Home`,
 `PageUp`, `Insert`, `Delete`, …). The three logical modifiers `shift`, `ctrl`,
-and `alt` collapse the platform's left/right distinctions, exactly as the C++
-`kb*Shift` masks did.
+and `alt` collapse the platform's left/right distinctions *(mirroring the C++
+`kb*Shift` masks)*.
 
 Two helpers bridge the old DOS conventions into this model:
 

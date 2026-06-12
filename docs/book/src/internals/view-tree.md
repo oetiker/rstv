@@ -2,36 +2,43 @@
 
 Everything you see on screen is a node in one tree. The desktop is a node; each
 window on it is a node; the frame, scrollbars, buttons and input lines inside a
-window are nodes. Turbo Vision called the base class `TView` and the container
-`TGroup`; rstv keeps the model but renders it in idiomatic Rust.
+window are nodes. rstv calls the core abstraction the `View` trait and the
+container type `Group`, keeping the tree model but rendering it in idiomatic Rust.
 
 ## A trait, not a base class
 
-C++ Turbo Vision built every widget by *inheriting* from `TView`. Rust has no
-inheritance, so the hierarchy splits in two:
+Every widget in rstv is defined by two things working together:
 
-- **[`View`](../api/tvision/view/trait.View.html)** — the *behaviour*. It is the
-  port of `TView`'s virtual methods: [`draw`](../api/tvision/view/trait.View.html#method.draw)
+- **[`View`](../api/tvision/view/trait.View.html)** — the *behaviour*. It is a
+  trait whose required methods cover everything the framework calls:
+  [`draw`](../api/tvision/view/trait.View.html#method.draw)
   paints the view, [`handle_event`](../api/tvision/view/trait.View.html#method.handle_event)
   reacts to input, and a handful of others (`set_state`, `valid`, `value` /
   `set_value`) cover focus, validation and data transfer.
-- **[`ViewState`](../api/tvision/view/struct.ViewState.html)** — the *data*. It
-  is the port of `TView`'s data members: `origin`, `size`, `cursor`, the state /
-  option / grow / drag flags, the event mask and the help context.
+- **[`ViewState`](../api/tvision/view/struct.ViewState.html)** — the *data*. A
+  struct that every widget embeds (conventionally a field named `state`),
+  holding `origin`, `size`, `cursor`, the state / option / grow / drag flags,
+  the event mask and the help context.
 
-Every widget **embeds** a `ViewState` (conventionally a field named `state`) and
-**implements** `View`. Only three methods are required —
+Every widget **embeds** a `ViewState` and **implements** `View`. Only three
+methods are required —
 [`state`](../api/tvision/view/trait.View.html#method.state),
 [`state_mut`](../api/tvision/view/trait.View.html#method.state_mut), and `draw`;
 the rest have sensible defaults. That is the whole composition recipe, and the
 [Writing your own View](custom-view.md) chapter walks it end to end.
 
+> **Turbo Vision heritage:** the C++ library built every widget by *inheriting*
+> from `TView`. The `View` trait covers `TView`'s virtual methods; `ViewState`
+> covers its data members.
+
 ## Flags became fields
 
-Turbo Vision packed its `sfXxx` / `ofXxx` / `gfXxx` / `dmXxx` flag words into
-single integers. rstv unpacks each family into a **struct of named booleans**,
-so you read `self.state.state.visible` instead of masking
-`sfVisible`:
+The boolean properties of a view — visibility, focus, whether it responds to
+keyboard input — are organized into four **structs of named booleans**, one per
+logical family. You read `self.state.state.visible` directly; no bitmask
+arithmetic is needed.
+
+Coming from C++ Turbo Vision, the flag word families map like this:
 
 | C++ flag word | rstv struct |
 | ------------- | -------------- |
@@ -65,11 +72,14 @@ window and every dialog are groups. A group:
 
 - **owns its children in a `Vec`** in back-to-front paint order:
   `children[0]` is the bottom (drawn first), `children.last()` is the
-  frontmost (drawn last). C++'s circular `next`/`prev` ring and per-child `owner`
-  back-pointer are gone;
+  frontmost (drawn last);
 - **draws** its children back-to-front (painter's algorithm — there is no damage
   tracking; the whole tree redraws and a diff finds the changes);
 - **routes events** to them and tracks which child is *current* (focused).
+
+> **Turbo Vision heritage:** `TGroup` stored children in a circular `next`/`prev`
+> ring with a per-child `owner` back-pointer. rstv replaces this with a plain
+> `Vec` and handle-based addressing — children have no up-pointer.
 
 Because a child has no pointer back to its parent, cross-references use a
 **[`ViewId`](../api/tvision/view/struct.ViewId.html) handle** instead of a raw

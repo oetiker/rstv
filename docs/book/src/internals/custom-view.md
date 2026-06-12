@@ -9,13 +9,13 @@ and let a macro write the boilerplate.
 
 ## The shape of a view
 
-A view is the port of C++ `TView`: the
-inheritance hierarchy became a `View` **trait** plus a
-[`ViewState`](../api/tvision/view/struct.ViewState.html) **composition target**.
-Where C++ would write `class MyView : public TView`, you instead *embed* a
-`ViewState` field (TV's data members — geometry, the `sf*`/`of*` flags, the help
-context) and `impl View` (TV's virtual methods). See
-[Inheritance → trait + composition](../port/inheritance.md) for the why.
+Every widget in rstv combines two parts: a `View` **trait** that the framework
+calls, and a
+[`ViewState`](../api/tvision/view/struct.ViewState.html) **struct** you embed to
+carry the per-view data — geometry, the state/option flags, the help context.
+You *embed* a `ViewState` field in your struct and `impl View` for your type.
+See [Inheritance → trait + composition](../port/inheritance.md) for the full
+background.
 
 The trait has exactly three methods you **must** supply —
 [`state`](../api/tvision/view/trait.View.html#tymethod.state),
@@ -63,16 +63,16 @@ impl View for Banner {
 Three things worth noting:
 
 - **Construct state with [`ViewState::new(bounds)`](../api/tvision/view/struct.ViewState.html#method.new)**,
-  never `ViewState::default()` for a real view — `new` applies `TView`'s exact
-  constructor defaults (visible, the `dmLimitLoY` drag limit). An all-zero state
-  would be invisible.
+  never `ViewState::default()` for a real view — `new` applies the correct initial
+  defaults (visible, the `dmLimitLoY` drag limit). An all-zero state would be
+  invisible.
 - **Draw in *view-local* coordinates.** `DrawCtx` clips and offsets for you; the
   view's own extent is always `0,0 .. size.x,size.y`
   ([`get_extent`](../api/tvision/view/struct.ViewState.html#method.get_extent)).
 - **Colors come from a [`Role`](../api/tvision/theme/enum.Role.html), not a
-  palette.** There is no `getColor(n)` indirection — you ask
-  the theme for a role and get a [`Style`](../api/tvision/color/struct.Style.html)
-  back. See [Theming & colors](../apps/theming.md).
+  palette index.** Ask the theme for a role and get a
+  [`Style`](../api/tvision/color/struct.Style.html) back. See
+  [Theming & colors](../apps/theming.md).
 
 Insert it into a group (a window, the desktop) and the
 [event loop](event-loop.md) draws it on the next pump. A leaf that overrides
@@ -104,15 +104,20 @@ you gain or lose focus.
 ## Wrapping an existing view: `#[delegate]`
 
 Most "custom views" are not built from bare `ViewState` — they *specialise* an
-existing widget. In C++ you would subclass (`class MyDialog : public TDialog`)
-and inherit every virtual for free. In Rust, composition gives nothing for free:
-embed a `Dialog` and you must hand-forward every `View` method you did not
-override — and the trait has roughly two dozen — to the inner field.
+existing widget. To do that in rstv you *embed* the widget (e.g. a `Dialog`) and
+`impl View` for your wrapper type. The catch: the `View` trait has roughly two
+dozen methods, and you must hand-forward every one you did not override to the
+inner field — tedious boilerplate that is also easy to get wrong.
 
-That boilerplate is what the `#[delegate]` macro removes. Re-exported as
-`tvision::delegate`, it goes on the `impl View` block: write only the methods
-that differ, and the macro injects a forwarder (`self.<field>.method(args)`) for
-every method you did **not** write.
+That boilerplate is what the `#[delegate]` macro removes.
+
+> **Turbo Vision heritage:** in C++ you would subclass (`class MyDialog : public
+> TDialog`) and inherit every virtual method for free. Rust has no inheritance;
+> embed-and-delegate via `#[delegate]` is the equivalent.
+
+Re-exported as `tvision::delegate`, it goes on the `impl View` block: write only
+the methods that differ, and the macro injects a forwarder
+(`self.<field>.method(args)`) for every method you did **not** write.
 
 ```rust,ignore
 use tvision::delegate;

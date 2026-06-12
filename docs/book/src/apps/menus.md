@@ -11,9 +11,10 @@ to a view. The data lives in [`tv::menu`](../api/tvision/menu/index.html) and
 
 A menu is a [`Menu`](../api/tvision/menu/struct.Menu.html) — an ordered list of
 entries plus a default selection. You rarely build one by hand; instead you chain
-a [`MenuBuilder`](../api/tvision/menu/struct.MenuBuilder.html), the idiomatic
-replacement for the C++ `operator+` chains. Each call appends one
-[`MenuItem`](../api/tvision/menu/enum.MenuItem.html) and returns `self`:
+a [`MenuBuilder`](../api/tvision/menu/struct.MenuBuilder.html) — a fluent
+builder where each call appends one
+[`MenuItem`](../api/tvision/menu/enum.MenuItem.html) and returns `self`
+*(the idiomatic successor to C++'s `operator+` chains)*:
 
 ```rust,ignore
 let menu = Menu::builder()
@@ -32,20 +33,24 @@ let menu = Menu::builder()
 
 Three things to notice:
 
-- **`~`-marked labels.** The tildes bracket the hot-letter, exactly as in C++
-  (`"~F~ile"` highlights the `F`). Submenus take an
+- **`~`-marked labels.** The tildes bracket the hot-letter (`"~F~ile"` highlights
+  the `F`). Submenus take an
   [`alt()`](../api/tvision/menu/fn.alt.html) accelerator — a convenience that
-  builds an `Alt`+`<char>` key, mirroring the C++ `kbAltF` literals.
+  builds an `Alt`+`<char>` key.
 - **Three entry kinds.** `command` / `command_key` append a
   [`MenuItem::Command`](../api/tvision/menu/enum.MenuItem.html) (the latter adds
   an accelerator key plus the shortcut text shown at the right, like `"F3"`);
-  `submenu` appends a nested menu; `separator` appends a divider. These map
-  one-to-one onto C++ `TMenuItem`, `TSubMenu`, and `newLine()`.
+  `submenu` appends a nested menu; `separator` appends a divider.
 - **It is just data.** Choosing an item emits its
   [`Command`](../api/tvision/command/struct.Command.html) as an event — the menu
   never *does* anything itself. See [Commands & events](commands.md) for how that
   command reaches a handler, and for how a greyed-out (`disabled`) item is driven
   by command enable/disable state.
+
+> **Turbo Vision heritage:** `command`/`command_key`, `submenu`, and `separator`
+> map one-to-one onto C++ `TMenuItem`, `TSubMenu`, and `newLine()`; the
+> `~`-marked hot-letters and `alt()` accelerators mirror the C++ `"~F~ile"`
+> label convention and `kbAltF` literals.
 
 Wrap the finished `Menu` in a
 [`MenuBar`](../api/tvision/menu/menu_bar/struct.MenuBar.html) and return it from
@@ -76,10 +81,10 @@ clicking the label or pressing the key fires that command. Hand the `defs` to a
 [`StatusLine`](../api/tvision/status/status_line/struct.StatusLine.html) and
 return it from your `init_status_line` factory.
 
-A **hidden hotkey binding** is an item with no text (the `key_item` builder
-method, the C++ `TStatusItem(0, key, cmd)`): it draws nothing and consumes no
-width, but its accelerator still fires globally — the standard trick for app-wide
-shortcuts like `Shift-Del` ⇒ Cut.
+A **hidden hotkey binding** is an item with no text — use the `key_item` builder
+method. It draws nothing and consumes no width, but its accelerator still fires
+globally — the standard trick for app-wide shortcuts like `Shift-Del` ⇒ Cut
+*(the C++ equivalent was `TStatusItem(0, key, cmd)`).*
 
 ## Context-sensitive help
 
@@ -93,12 +98,16 @@ context is active, so the bottom line changes as focus moves between an editor, 
 browser, and so on.
 
 The current context is a [`HelpCtx`](../api/tvision/help/struct.HelpCtx.html).
-A help context is not the C++ hand-assigned `int` but a
-namespaced `&'static str` (`HelpCtx::custom("myapp.editor")`), so app- and
-view-defined contexts cannot collide. Because string identity has no ordering,
-the C++ `[min, max]` numeric range becomes the two-variant `HelpCtxRange` above:
-`All`, or an explicit `OneOf` membership set. Menu items also carry a `help_ctx`,
-so the same identity threads through the whole UI.
+A help context is a namespaced `&'static str`
+(`HelpCtx::custom("myapp.editor")`), so app- and view-defined contexts can never
+collide. Because string identity carries no ordering, context ranges are expressed
+as the two-variant `HelpCtxRange` above: `All`, or an explicit `OneOf` membership
+set. Menu items also carry a `help_ctx`, so the same identity threads through the
+whole UI.
+
+> **Turbo Vision heritage:** the C++ `HelpCtx` was a hand-assigned `int`, and
+> ranges were `[min, max]` numeric intervals. rstv replaces the integer with a
+> `&'static str` key and the numeric range with `HelpCtxRange`.
 
 ## See also
 

@@ -1,11 +1,11 @@
 # Controls
 
 Controls are the leaf views you put inside a dialog or window: buttons, check
-boxes, radio buttons, input fields, captions, list boxes, and scroll bars. Each
-one is a Turbo Vision class you already know, with the `T` prefix dropped and
-the `tv::` house style applied. You build them, insert them into a group (a
-[Dialog](dialogs.md) or [Window](windows.md)), and let the
-[event loop](../internals/event-loop.md) drive them.
+boxes, radio buttons, input fields, captions, list boxes, and scroll bars.
+You build them, insert them into a group (a [Dialog](dialogs.md) or
+[Window](windows.md)), and let the [event loop](../internals/event-loop.md)
+drive them. The names follow the `tv::` house style with no `T` prefix
+*(each maps to the corresponding Turbo Vision `T*` class)*.
 
 ## Buttons
 
@@ -26,10 +26,10 @@ let ok = Button::new(bounds, "~O~K", Command::OK, ButtonFlags { default: true, .
 ## Check boxes & radio buttons
 
 These share one engine, the
-[`Cluster`](../api/tvision/widgets/struct.Cluster.html). The C++ `TCluster` base
-with three subclasses becomes one `Cluster` that branches on a
+[`Cluster`](../api/tvision/widgets/struct.Cluster.html): a single type that
+branches on a
 [`ClusterKind`](../api/tvision/widgets/enum.ClusterKind.html), wrapped by three
-named types you recognise:
+named types:
 
 - [`CheckBoxes`](../api/tvision/widgets/struct.CheckBoxes.html) — independent
   on/off boxes (` [X] `); any combination may be set.
@@ -81,9 +81,10 @@ and wide text behave correctly.
 
 ## Validators
 
-A validator gates what an input line accepts. In C++ `TValidator` is an abstract
-base; here it is the [`Validator`](../api/tvision/validate/trait.Validator.html)
-trait, and an input line holds one as a boxed trait object. With no validator,
+A validator gates what an input line accepts.
+[`Validator`](../api/tvision/validate/trait.Validator.html) is a trait — an
+input line holds one as a boxed trait object *(the Rust-idiomatic successor to
+C++ `TValidator`'s abstract base class)*. With no validator,
 every keystroke is accepted. The trait has two checkpoints: `is_valid_input`
 runs as each character is typed (and may auto-fill or modify the buffer), while
 `is_valid` runs the final-form check when the field must be fully valid — on

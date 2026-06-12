@@ -2,11 +2,11 @@
 
 A **dialog** is a modal window: it appears on top of everything, captures input
 until the user dismisses it, and returns a single answer — which button closed
-it. [`Dialog`](../api/tvision/dialog/struct.Dialog.html) is the port of C++
-`TDialog`. It *is* a [`Window`](../api/tvision/window/struct.Window.html) (it
-embeds one and delegates to it) with dialog-specific behaviour layered on:
-`Esc` cancels, `Enter` accepts the default button, and the frame carries only
-the move and close affordances — no grow, no zoom.
+it. [`Dialog`](../api/tvision/dialog/struct.Dialog.html) embeds a
+[`Window`](../api/tvision/window/struct.Window.html) and delegates to it, with
+dialog-specific behaviour layered on: `Esc` cancels, `Enter` accepts the default
+button, and the frame carries only the move and close affordances — no grow, no
+zoom *(the rstv equivalent of C++ `TDialog`)*.
 
 ## Building a dialog
 
@@ -42,10 +42,10 @@ also uses `Command::YES` / `Command::NO`.
 ## Running it modally
 
 You do not insert a dialog into the view tree yourself. You hand it to
-[`Program::exec_view`](../api/tvision/app/struct.Program.html#method.exec_view),
-the port of C++ `TGroup::execView`. It inserts the dialog at the top of the
-tree, marks it modal, gives it focus, and spins the **same** event loop until
-the dialog ends itself — then removes it and hands back the closing command:
+[`Program::exec_view`](../api/tvision/app/struct.Program.html#method.exec_view).
+It inserts the dialog at the top of the tree, marks it modal, gives it focus,
+and spins the **same** event loop until the dialog ends itself — then removes it
+and hands back the closing command:
 
 ```rust,ignore
 match program.exec_view(Box::new(dialog)) {
@@ -55,13 +55,18 @@ match program.exec_view(Box::new(dialog)) {
 }
 ```
 
-There is no separate "modal loop." In C++ each `execView` was a fresh nested
-`getEvent` loop; rstv collapses them into one loop plus a **capture stack**
-(see [Modal execView → one loop + capture](../port/modal.md) and
+There is no separate "modal loop." rstv runs a single event loop plus a
+**capture stack**: `exec_view` pushes the dialog as the capture target, and the
+loop drives it until the dialog closes itself (see
+[Modal execView → one loop + capture](../port/modal.md) and
 [the event loop in depth](../internals/event-loop.md)). `exec_view` is
 **top-level only**: a view holds only a `&mut Context`, never the `Program`, so
 it *cannot* re-enter the loop from inside `handle_event` — which is exactly what
 keeps the single loop sound.
+
+> **Turbo Vision heritage:** in C++ each `TGroup::execView` spun a fresh nested
+> `getEvent` loop. rstv collapses all modal nesting into one loop + capture
+> stack, eliminating the reentrancy entirely.
 
 > A modal must have a path to closing itself, or it hangs. `Dialog` provides one
 > out of the box: `Esc` becomes a `Cancel`, the default button becomes an `OK`.
@@ -76,14 +81,13 @@ and return the user's answer.
 
 ## Moving data in and out
 
-Turbo Vision moves dialog data with `getData`/`setData`: every control
-`memcpy`s its value into an untyped record. rstv replaces that untyped blob
-with a **typed value currency** —
-[`FieldValue`](../api/tvision/data/enum.FieldValue.html) —
-passed through the `value` / `set_value` pair on the
+Dialog data flows through a **typed value currency** —
+[`FieldValue`](../api/tvision/data/enum.FieldValue.html) — passed through the
+`value` / `set_value` pair on the
 [`View`](../api/tvision/view/trait.View.html) trait. A text field reads and
 writes `FieldValue::Text`; an integer control uses `FieldValue::Int`. The enum
-**grows as controls need it**.
+**grows as controls need it** *(this replaces the C++ `getData`/`setData` pair,
+which moved data through an untyped `memcpy` record)*.
 
 Two operations bracket a dialog:
 

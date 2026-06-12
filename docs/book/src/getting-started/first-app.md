@@ -21,11 +21,11 @@ hot-key, and `Alt-X` quits:
 
 ## Building the program
 
-A Turbo Vision app is assembled from three factory functions — one each for the
-desktop, the status line, and the menu bar — handed to the program at
-construction. In C++ these are the `initDeskTop` / `initStatusLine` /
-`initMenuBar` overrides of `TApplication`; here they are plain functions passed
-to [`Program::new`](../api/tvision/app/struct.Program.html):
+An rstv app is assembled from three factory functions — one each for the
+desktop, the status line, and the menu bar — passed to
+[`Program::new`](../api/tvision/app/struct.Program.html) at construction.
+*(They are the successors to C++ `TApplication`'s `initDeskTop` /
+`initStatusLine` / `initMenuBar` overrides.)*
 
 ```rust,ignore
 {{#rustdoc_include ../../../../examples/hello.rs:setup}}
@@ -41,8 +41,7 @@ it is selected.
 `main` owns the terminal and runs the loop until a quit command ends it. The
 [`CrosstermBackend`](../api/tvision/backend/struct.CrosstermBackend.html) constructor
 takes over raw mode, the alternate screen, and mouse capture, and restores all
-of it on drop — even on a panic or a signal — just like the C++ `TApplication`
-constructor chain:
+of it on drop — even on a panic or a signal:
 
 ```rust,ignore
 {{#rustdoc_include ../../../../examples/hello.rs:main}}

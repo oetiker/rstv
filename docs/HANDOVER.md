@@ -229,17 +229,21 @@ This session ran the **backlog run** end to end:
 
 ## Next — docs polish + examples (content + user-facing cleanup DONE)
 
-The guide prose (Plan 2) **and** the user-facing cleanup/rename/IA/heritage/
-guide-links pass landed this session. The docs now read for library users.
-**Remaining docs work, in three planned phases (the user's call on order):**
+The guide prose, the user-facing cleanup/rename/IA/heritage/guide-links pass,
+**and the guide-page Rust-first pass (Phase 1 below)** have all landed. The docs
+now read for library users, guide and API alike. **Remaining docs work — two
+phases (the user's call on order):**
 
-1. **Guide-page Rust-first pass.** The mdBook pages themselves still mention C++
-   (~32 pages by `grep -rl 'C++' docs/book/src`). **Part II (`port/`) is
-   intentionally C++-aware** (the veteran chapter) and `reference/symbol-map` +
-   `deviations` are *about* C++ — leave those. But `getting-started/`, `apps/`,
-   and `internals/` should be Rust-first like the API now is. Same standard as
-   the rustdoc pass (see the `rstv-api-docs-user-facing` + `no-deferred-state`
-   memories).
+1. ~~**Guide-page Rust-first pass.**~~ ✅ **DONE this session** (see
+   IMPLEMENTATION-LOG "Docs Phase 1 (guide)"). The 16 narrative pages under
+   `getting-started/`, `apps/`, and `internals/` were rewritten Rust-first:
+   C++-led openings flipped, C++ demoted to skippable parentheticals or a uniform
+   `> **Turbo Vision heritage:**` blockquote. `port/` (the veteran chapter) and
+   `reference/symbol-map` + `deviations` stay C++-aware by design. Invariant grep
+   + `cargo xtask docs` link check clean. **Remaining C++ mentions in those dirs
+   are now all intentional asides** (heritage blockquotes, linked `[deviation Dn]`
+   citations, light parentheticals) — a future `grep 'C++'` will still hit them;
+   that is expected.
 2. **Example gallery (Phase 2) — agreed approach "B".** One parameterized
    `gallery` example binary with a per-widget `// ANCHOR:`-marked setup fn,
    selected by a CLI arg; each visible widget (~30: Button, CheckBoxes, Cluster,

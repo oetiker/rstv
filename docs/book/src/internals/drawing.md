@@ -17,10 +17,9 @@ and trailing halves of a double-width glyph. It is the Rust form of magiblot's
 
 A view does not poke cells one at a time. It fills a
 [`DrawBuffer`](../api/tvision/screen/struct.DrawBuffer.html) — a single fixed-width
-*row* of cells under construction, the port of `TDrawBuffer` — then blits that
-row. Writes past the buffer's width are clipped, exactly as the C++ clamps against
-its `capacity`. Text goes in through width-aware primitives, so truncation and
-double-width handling are shared with the rest of the renderer.
+*row* of cells under construction — then blits that row. Writes past the buffer's
+width are clipped automatically. Text goes in through width-aware primitives, so
+truncation and double-width handling are shared with the rest of the renderer.
 
 ```rust,ignore
 // In a view's draw(): build one line, then write it out.
@@ -29,8 +28,8 @@ b.move_str(0, "Hello", style);
 // ... hand `b` to the framework to blit at row y ...
 ```
 
-> The C++ `0 = retain` sentinel in `moveChar` is gone: in the typed model
-> `move_char` always writes both char and style. To touch only one, use
+> In the typed cell model, `move_char` always writes both char and style — there
+> is no retain-sentinel. To update only the character or only the style, use
 > `put_char` / `put_attribute`.
 
 ## The back buffer and the diff

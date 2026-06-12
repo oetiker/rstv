@@ -1,16 +1,16 @@
 # Theming & colors
 
-Turbo Vision never let a widget hard-code its colors. Every `draw()` reached
-through a chain of *palette* strings — the button asked its owner, the owner
-asked *its* owner, all the way up to the application's master palette — and the
-chain finally landed on a one-byte BIOS attribute. Re-theming the whole app was
-a matter of swapping that master palette.
+In rstv, colors come from a single central, swappable table: a typed map from a
+semantic [`Role`](../api/tvision/theme/enum.Role.html) to a
+[`Style`](../api/tvision/color/struct.Style.html). No widget ever hard-codes a
+color; every `draw()` asks for a role, and the active theme resolves it. Swapping
+the whole palette is a one-call operation. The narrative behind the design is in
+[Palettes & glyphs](../port/theme.md).
 
-rstv keeps the *idea* — colors come from a central, swappable table — but
-drops the index arithmetic. The palette chain collapses into a single typed map
-from a semantic [`Role`](../api/tvision/theme/enum.Role.html) to a
-[`Style`](../api/tvision/color/struct.Style.html). The
-narrative behind it is in [Palettes & glyphs](../port/theme.md).
+> **Turbo Vision heritage:** the C++ framework used a chain of per-widget palette
+> index strings that bottomed out in one-byte BIOS attributes. rstv keeps the
+> central-swappable-table idea but replaces the index arithmetic with a typed
+> `Role → Style` map, eliminating the palette-chain traversal entirely.
 
 ## The three types
 
@@ -31,11 +31,12 @@ The framework starts on
 [`Theme::classic_blue`](../api/tvision/theme/struct.Theme.html#method.classic_blue) —
 the canonical Turbo Vision blue look, and the value behind
 [`Theme::default`](../api/tvision/theme/struct.Theme.html#method.default). Each
-role is derived directly from the historic C++ palette chain (the source carries
-the full derivation inline), but the colors are pinned to definite true-color
-RGB via [`Color::bios_rgb`](../api/tvision/color/enum.Color.html#method.bios_rgb)
-so contrast is correct no matter how the terminal has remapped its own 16-color
-palette.
+role resolves to a definite true-color RGB via
+[`Color::bios_rgb`](../api/tvision/color/enum.Color.html#method.bios_rgb),
+so contrast is correct regardless of how the terminal has remapped its own
+16-color palette. The source carries the full per-role derivation inline
+*(each value is anchored to the corresponding entry in the classic C++ palette
+chain)*.
 
 ## Reading a theme color
 
@@ -58,8 +59,8 @@ come from `ctx.glyphs()` the same way. See
 
 ## Overriding colors
 
-Re-theming is a whole-theme swap, faithful to how C++ replaced the master
-palette. Take the default, override the roles you care about with
+Re-theming is a whole-theme swap. Take the default, override the roles you care
+about with
 [`set_style`](../api/tvision/theme/struct.Theme.html#method.set_style), and
 install it on the running program with
 [`Program::set_theme`](../api/tvision/app/struct.Program.html#method.set_theme),

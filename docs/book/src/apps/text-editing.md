@@ -9,11 +9,11 @@ reach for one of the three faces it wears.
 
 ## Three faces of the editor
 
-| Type | C++ | Use it for |
-| ---- | --- | ---------- |
-| [`Memo`](../api/tvision/widgets/struct.Memo.html) | `TMemo` | a multi-line edit field *inside a dialog* |
-| [`FileEditor`](../api/tvision/widgets/struct.FileEditor.html) | `TFileEditor` | an editor backed by a file on disk |
-| [`EditWindow`](../api/tvision/widgets/struct.EditWindow.html) | `TEditWindow` | a ready-made window wrapping a `FileEditor` plus its scrollbars and indicator |
+| Type | Use it for |
+| ---- | ---------- |
+| [`Memo`](../api/tvision/widgets/struct.Memo.html) *(`TMemo`)* | a multi-line edit field *inside a dialog* |
+| [`FileEditor`](../api/tvision/widgets/struct.FileEditor.html) *(`TFileEditor`)* | an editor backed by a file on disk |
+| [`EditWindow`](../api/tvision/widgets/struct.EditWindow.html) *(`TEditWindow`)* | a ready-made window wrapping a `FileEditor` plus its scrollbars and indicator |
 
 [`Memo`](../api/tvision/widgets/struct.Memo.html) is a thin wrapper over
 `Editor` that does two extra things: it lets a plain <kbd>Tab</kbd> fall through
@@ -69,8 +69,8 @@ editor — you *write into* it. It implements the
 you append output by calling
 [`write_bytes`](../api/tvision/widgets/terminal/trait.TextDevice.html#method.write_bytes);
 the most recent lines that fit are drawn, and the embedded scroller keeps its
-scrollbars in sync. The C++ `streambuf`/`otstream` plumbing is dropped — there is
-no stream wrapper, just the byte sink.
+scrollbars in sync. There is no stream wrapper — just the byte sink *(the C++
+`streambuf`/`otstream` layer is not ported)*.
 
 Because its constructor cannot touch the screen, `Terminal` follows the
 deferred-init pattern: build it, insert it into a group, then call

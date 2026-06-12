@@ -1,15 +1,15 @@
 # Windows & the desktop
 
-Every Turbo Vision program draws on a **desktop** — a full-screen container that
-holds a patterned background and any number of overlapping **windows**. This is
-the same `TDeskTop`/`TWindow` pair you know from C++, ported as
 [`Desktop`](../api/tvision/desktop/struct.Desktop.html) and
-[`Window`](../api/tvision/window/struct.Window.html). Both *embed a*
+[`Window`](../api/tvision/window/struct.Window.html) are the two core structural
+views of every rstv program: a full-screen container that holds a patterned
+background and any number of overlapping windows. Both *embed a*
 [`Group`](../api/tvision/view/struct.Group.html) and delegate the
 [`View`](../api/tvision/view/trait.View.html) trait to it (the embed-and-delegate
 pattern — see [Inheritance → trait + composition](../port/inheritance.md)), so a
 desktop *is* a view and a window *is* a view: you insert windows into a desktop,
-and child controls into a window.
+and child controls into a window *(these are the rstv equivalents of the C++
+`TDeskTop`/`TWindow` pair)*.
 
 ## The desktop
 
@@ -34,8 +34,8 @@ A [`Window`](../api/tvision/window/struct.Window.html) is constructed with its
 bounds, an optional title, and a *window number* (`1`–`9` become the
 `Alt-1`…`Alt-9` selectors; `0` means "no number"). By default it is movable,
 resizable, closable and zoomable — all four
-[`WindowFlags`](../api/tvision/window/struct.WindowFlags.html) start true,
-exactly as the C++ ctor sets `wfMove | wfGrow | wfClose | wfZoom`.
+[`WindowFlags`](../api/tvision/window/struct.WindowFlags.html) start true
+*(corresponding to the C++ `wfMove | wfGrow | wfClose | wfZoom` flags)*.
 
 To put a window on screen at construction time, insert it into the desktop. At
 runtime — from inside the run loop — open one through the program, which inserts
@@ -74,9 +74,10 @@ The keys above are the bindings the `hello` example installs on its status line
 and menu; the commands themselves carry no built-in key.
 
 You can also drag a window by its title bar to move it, or by a bottom corner to
-resize it — the desktop routes the click and the window starts the drag. The
-underlying nested mouse loop of C++ `dragView` becomes a capture handler on the
-single event loop (see [Modal execView → one loop + capture](../port/modal.md)).
+resize it — the desktop routes the click and the window starts the drag. The drag
+runs as a capture handler on the single event loop, with no nested loop
+(see [Modal execView → one loop + capture](../port/modal.md)) *(C++ used a
+dedicated `dragView` nested-mouse-loop for this)*.
 
 ## Tiling and cascading
 
@@ -85,9 +86,9 @@ The desktop can auto-arrange its **tileable** windows.
 them into a most-equal grid;
 [`Desktop::cascade`](../api/tvision/desktop/struct.Desktop.html#method.cascade)
 stacks them stepped down and to the right. Both skip windows that are not visible
-or not marked tileable, and both leave bounds unchanged when a window will not fit
-— faithful to the C++ `tileError` no-op. Note that `Window` does **not** set the
-tileable option for you; opt a window in explicitly:
+or not marked tileable, and both leave a window's bounds unchanged when it will
+not fit — a safe no-op. Note that `Window` does **not** set the tileable option
+for you; opt a window in explicitly:
 
 ```rust,ignore
 win.state_mut().options.tileable = true;

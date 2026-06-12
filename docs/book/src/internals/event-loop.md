@@ -1,25 +1,27 @@
 # The event loop in depth
 
-Turbo Vision in C++ has *many* loops. `execView` spins a nested blocking
-`getEvent` loop for every modal dialog; `dragView` spins another while you drag a
-window; a pressed button spins its own while you hold the mouse. Each one
-re-enters the framework and re-borrows the view tree.
-
-Rust will not let you nest a blocking loop that re-borrows the same `&mut` tree,
-so rstv collapses all of those into **one** non-recursive loop in
-[`Program`](../api/tvision/app/struct.Program.html). What used to be a nested
-loop becomes a *capture handler* on a LIFO stack (see
+rstv runs the entire application on **one** non-recursive event loop in
+[`Program`](../api/tvision/app/struct.Program.html). Every event — keystrokes,
+mouse motion, modal dialogs, window drags, mouse hold-tracking — routes through a
+single pass called `pump_once`. Modality and press-and-hold are not separate
+blocking loops; they are *capture handlers* stacked on a LIFO capture stack (see
 [Cross-view brokering & ViewId](./brokering.md) and the
-[capture section](#the-capture-stack) below). Everything routes through a single
-pass: `pump_once`.
+[capture section](#the-capture-stack) below). Because the whole tree is owned
+behind a single `&mut`, exactly one thing at a time may borrow it: the single
+loop enforces this structurally.
+
+> **Turbo Vision heritage:** the C++ library had *many* loops. `execView` spun a
+> nested blocking `getEvent` loop for every modal dialog; `dragView` spun another
+> while you dragged a window; a pressed button spun its own while you held the
+> mouse. Each re-entered the framework and re-borrowed the view tree — which Rust
+> forbids. Every one of those nested loop bodies is now a capture handler.
 
 ## `run` is the only outer loop
 
 [`Program::run`](../api/tvision/app/struct.Program.html#method.run) is the whole
-application loop. It mirrors C++ `TGroup::execute`'s
-`while (!valid(endState))` — pump until something sets an end command, then ask
-the *tree* to validate that command; if it validates, return, otherwise clear it
-and keep pumping:
+application loop. It pumps until something sets an end command, then asks the
+*tree* to validate that command; if it validates, return, otherwise clear it and
+keep pumping:
 
 ```rust,ignore
 loop {
@@ -34,12 +36,14 @@ loop {
 }
 ```
 
+> **Turbo Vision heritage:** this mirrors `TGroup::execute`'s
+> `while (!valid(endState))` pattern.
+
 [`run_app`](../api/tvision/app/struct.Program.html#method.run_app) is the same
 loop with one addition: any [`Command`](../api/tvision/command/struct.Command.html)
-that survives all view routing is handed to your callback — the rstv stand-in for
-`TApplication::handleEvent`. That is where menu commands like "open the color
-picker" get serviced. You almost always call one of these two and never touch the
-machinery below.
+that survives all view routing is handed to your callback. That is where menu
+commands like "open the color picker" get serviced. You almost always call one of
+these two and never touch the machinery below.
 
 ## One pass: `pump_once`
 
@@ -49,7 +53,7 @@ phases, in order:
 | Phase | What happens |
 | ----- | ------------ |
 | **Resize** | Query the terminal size; if it changed, relayout the whole tree. There is no `Event::Resize` — the backend is polled live. |
-| **Settle currency** | Apply any pending insert-time focus cascades so the event about to be dispatched sees C++-equivalent currency. |
+| **Settle currency** | Apply any pending insert-time focus cascades so the event about to be dispatched sees a fully settled focus state. |
 | **Pick an event** | Drain the internal queue first, else poll the backend with the frame-tick timeout; an idle pick may synthesize a mouse auto-repeat. |
 | **Idle** | No event: fire expired timers as [`Event::Timer`](../api/tvision/event/enum.Event.html), refresh the status line's help context. |
 | **Pre-route** | A `KeyDown` (always) or a `MouseDown` on the status line is offered to the status line first, so accelerators like F10/Alt-X fire even under a modal. |
@@ -64,8 +68,8 @@ currently **disabled** is dropped here — rstv uses a denylist, so unknown cust
 commands flow through untouched (see [Commands & events](../apps/commands.md)).
 What survives is offered to the [capture stack](#the-capture-stack) first; only if
 no handler consumes it does it go to the normal view-tree walk
-(`program_handle_event`, the successor to `TProgram::handleEvent`). A modal
-handler that consumes every otherwise-unhandled event *is* the modal loop.
+(`program_handle_event`). A modal handler that consumes every otherwise-unhandled
+event *is* the modal loop.
 
 ### The deferred drain
 
@@ -81,15 +85,16 @@ the pre-route consumed the event, and it runs **once** — anything an effect
 re-queues waits for the next pump (a loop-until-empty would risk spinning).
 
 Because capture pushes are deferred, a freshly pushed handler sees the *next*
-event, not the one that pushed it — exactly matching a C++ `do { } while` that
-runs its body once before its first wait.
+event, not the one that pushed it — the push and the first handled event are
+always separated by at least one pump boundary.
 
 ## The capture stack
 
 The [`CaptureStack`](../api/tvision/capture/struct.CaptureStack.html) is the LIFO
 list of [`CaptureHandler`](../api/tvision/capture/trait.CaptureHandler.html)s that
-replaces all those nested C++ loops. Each handler is offered every event before
-normal routing and returns a
+implements modality, dragging, press-and-hold, and menu sessions — anything that
+needs to intercept events globally before normal routing. Each handler is offered
+every event and returns a
 [`CaptureFlow`](../api/tvision/capture/enum.CaptureFlow.html):
 
 - `Pass` — not mine; offer it to the next lower handler, then to the view tree.
@@ -99,10 +104,10 @@ normal routing and returns a
 The return value is authoritative — handlers do **not** signal "consumed" by
 clearing the event. A handler holds a [`ViewId`](./brokering.md), never a view
 reference. Concrete handlers include a bounds-gating *modal frame*, window
-dragging and keyboard resize, mouse hold-tracking, and the menu session — each
-the single-loop form of a C++ loop body that used to block. Before every dispatch the pump
-re-syncs each bounds-gating handler from the live tree (`sync_gate_bounds`), so a
-dialog you have just dragged stays clickable in its new position.
+dragging and keyboard resize, mouse hold-tracking, and the menu session. Before
+every dispatch the pump re-syncs each bounds-gating handler from the live tree
+(`sync_gate_bounds`), so a dialog you have just dragged stays clickable in its new
+position.
 
 ## Where to go next
 

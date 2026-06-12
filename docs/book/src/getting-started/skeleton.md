@@ -1,23 +1,23 @@
 # The application skeleton
 
-Turbo Vision splits the running application into two layers, and so does
-tvision. Knowing which is which makes the rest of the framework easier to read.
+rstv splits the running application into two layers. Knowing which is which
+makes the rest of the framework easier to read.
 
 ## `Program` and `Application`
 
 [`Program`](../api/tvision/app/struct.Program.html) is the engine. It owns the
 **view tree** (the desktop with its windows, the menu bar, the status line), the
 **event loop**, the **capture stack** that drives modal dialogs, and the
-**backend** that talks to the terminal. It is the port of C++ `TProgram`. The
+**backend** that talks to the terminal *(the successor to C++ `TProgram`)*. The
 `hello` example builds a `Program` directly and wraps it in its own
 `HelloApp` struct.
 
 [`Application`](../api/tvision/app/struct.Application.html) is a thin wrapper *over*
-`Program` — the port of `TApplication`. It forwards everything to the embedded
-`Program` and adds the application-level commands `tile` / `cascade` (desktop
-window layout) and `dosShell` (suspend the terminal). You can build on either;
-use `Application` when you want those extras for free, or `Program` when you
-want to assemble the engine yourself.
+`Program`. It forwards everything to the embedded `Program` and adds the
+application-level commands `tile` / `cascade` (desktop window layout) and
+`dosShell` (suspend the terminal) *(the successor to C++ `TApplication`)*. You
+can build on either; use `Application` when you want those extras for free, or
+`Program` when you want to assemble the engine yourself.
 
 Both are constructed the same way — from a theme and the three factory functions
 that build the desktop, status line, and menu bar:
@@ -33,9 +33,11 @@ let program = Program::new(
 );
 ```
 
-This mirrors the C++ `TProgInit(initStatusLine, initMenuBar, initDeskTop)`
-factory-mixin: each factory receives the screen rectangle and returns the view
-to install (insetting itself to the top row, bottom row, or the space between).
+Each factory receives the screen rectangle and returns the view to install
+(insetting itself to the top row, bottom row, or the space between).
+
+> **Turbo Vision heritage:** this factory pattern mirrors the C++
+> `TProgInit(initStatusLine, initMenuBar, initDeskTop)` factory-mixin.
 
 ## The run loop
 
@@ -43,7 +45,7 @@ Calling [`run`](../api/tvision/app/struct.Program.html#method.run) spins the eve
 loop until a quit command ends it. For an app that needs to react to its *own*
 commands, [`run_app`](../api/tvision/app/struct.Program.html#method.run_app) takes a
 closure that is called whenever the program handles a command it does not
-recognise — the equivalent of overriding `TApplication::handleEvent`:
+recognise *(the successor to overriding C++ `TApplication::handleEvent`)*:
 
 ```rust,ignore
 {{#rustdoc_include ../../../../examples/hello.rs:run}}
