@@ -120,9 +120,16 @@ fn parse_key(name: &str) -> Result<Key, String> {
         "tab" => Key::Tab,
         "esc" | "escape" => Key::Esc,
         "space" => Key::Char(' '),
-        f if f.starts_with('f') && f[1..].parse::<u8>().is_ok() => Key::F(f[1..].parse().unwrap()),
-        c if c.chars().count() == 1 => Key::Char(c.chars().next().unwrap()),
-        other => return Err(format!("unknown key name {other:?}")),
+        other => {
+            if let Some(Ok(n)) = other.strip_prefix('f').map(str::parse::<u8>) {
+                return Ok(Key::F(n));
+            }
+            let mut chars = other.chars();
+            if let (Some(c), None) = (chars.next(), chars.clone().next()) {
+                return Ok(Key::Char(c));
+            }
+            return Err(format!("unknown key name {other:?}"));
+        }
     })
 }
 
@@ -330,6 +337,36 @@ pub fn resolve_global(pending: Option<KeyStroke>, stroke: KeyStroke) -> Resolve 
 }
 
 #[cfg(test)]
+pub(crate) static GLOBAL_KEYMAP_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// RAII guard for tests that mutate the process-global keymap: serializes
+/// against other global-touching tests and restores `word_star()` on drop
+/// (even on panic). Use in any test that calls `set_global`.
+#[cfg(test)]
+pub(crate) struct GlobalKeymapGuard(
+    // Held purely for its RAII effect: keeps the serialization lock until drop.
+    #[allow(dead_code)] std::sync::MutexGuard<'static, ()>,
+);
+
+#[cfg(test)]
+impl GlobalKeymapGuard {
+    pub(crate) fn new(km: Keymap) -> Self {
+        let lock = GLOBAL_KEYMAP_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()); // tolerate a poisoned lock from a prior panic
+        set_global(km);
+        GlobalKeymapGuard(lock)
+    }
+}
+
+#[cfg(test)]
+impl Drop for GlobalKeymapGuard {
+    fn drop(&mut self) {
+        set_global(Keymap::word_star());
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -420,17 +457,18 @@ mod tests {
 
     #[test]
     fn global_default_is_word_star_and_settable() {
-        // Default global resolves plain Backspace to BACK_SPACE (the bug fix).
+        // The "default is word_star / Backspace → BACK_SPACE" property is a
+        // property of word_star() itself — assert it locally, without touching
+        // the process-global (so this part can't race other tests).
+        let local = Keymap::word_star();
         let bs = KeyStroke::from_event(ev(Key::Backspace, false, false, false));
-        assert!(
-            matches!(resolve_global(None, bs), Resolve::Command(c) if c == Command::BACK_SPACE)
-        );
+        assert!(matches!(local.resolve(None, bs), Resolve::Command(c) if c == Command::BACK_SPACE));
 
-        set_global(Keymap::cua());
+        // The set_global / resolve_global round-trip mutates shared state, so
+        // run it under the serializing guard (restores word_star() on drop).
+        let _g = GlobalKeymapGuard::new(Keymap::cua());
         let cc = KeyStroke::from_event(ev(Key::Char('c'), true, false, false));
         assert!(matches!(resolve_global(None, cc), Resolve::Command(c) if c == Command::COPY));
-
-        set_global(Keymap::word_star()); // restore for other tests
     }
 
     #[test]
