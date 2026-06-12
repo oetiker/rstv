@@ -22,7 +22,13 @@ struct Sgr {
 
 impl Sgr {
     fn reset() -> Self {
-        Sgr { fg: Col::Default, bg: Col::Default, bold: false, underline: false, reverse: false }
+        Sgr {
+            fg: Col::Default,
+            bg: Col::Default,
+            bold: false,
+            underline: false,
+            reverse: false,
+        }
     }
 }
 
@@ -38,7 +44,11 @@ fn xterm256(i: u8) -> Col {
         16..=231 => {
             let i = i - 16;
             let steps = [0u8, 95, 135, 175, 215, 255];
-            Col::Rgb(steps[(i / 36) as usize], steps[((i / 6) % 6) as usize], steps[(i % 6) as usize])
+            Col::Rgb(
+                steps[(i / 36) as usize],
+                steps[((i / 6) % 6) as usize],
+                steps[(i % 6) as usize],
+            )
         }
         232..=255 => {
             let v = 8 + 10 * (i - 232);
@@ -101,7 +111,11 @@ fn apply_sgr(state: &mut Sgr, params: &[i64]) {
                     Some(5) => {
                         if let Some(n) = it.next() {
                             let c = xterm256(n as u8);
-                            if target_fg { state.fg = c } else { state.bg = c }
+                            if target_fg {
+                                state.fg = c
+                            } else {
+                                state.bg = c
+                            }
                         }
                     }
                     Some(2) => {
@@ -109,7 +123,11 @@ fn apply_sgr(state: &mut Sgr, params: &[i64]) {
                         let g = it.next().unwrap_or(0) as u8;
                         let b = it.next().unwrap_or(0) as u8;
                         let c = Col::Rgb(r, g, b);
-                        if target_fg { state.fg = c } else { state.bg = c }
+                        if target_fg {
+                            state.fg = c
+                        } else {
+                            state.bg = c
+                        }
                     }
                     _ => {}
                 }
@@ -253,6 +271,9 @@ mod tests {
         // fg=1, bg=2, then reverse → effective fg uses index 2, bg uses index 1.
         let out = ansi_to_html("\x1b[31;42;7mR\x1b[0m");
         assert!(out.contains(&format!("color:{}", rgb(2))), "got: {out}");
-        assert!(out.contains(&format!("background:{}", rgb(1))), "got: {out}");
+        assert!(
+            out.contains(&format!("background:{}", rgb(1))),
+            "got: {out}"
+        );
     }
 }

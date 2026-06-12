@@ -53,9 +53,17 @@ pub fn capture_one(s: &Screen) -> Result<String> {
         s.example, s.name
     );
     tmux(&[
-        "new-session", "-d", "-s", &session,
-        "-x", &s.cols.to_string(), "-y", &s.rows.to_string(),
-        "bash", "-lc", &run,
+        "new-session",
+        "-d",
+        "-s",
+        &session,
+        "-x",
+        &s.cols.to_string(),
+        "-y",
+        &s.rows.to_string(),
+        "bash",
+        "-lc",
+        &run,
     ])
     .context("tmux new-session failed")?;
 
@@ -65,8 +73,8 @@ pub fn capture_one(s: &Screen) -> Result<String> {
         sleep_ms(s.settle_ms.max(200));
     }
 
-    let captured = tmux(&["capture-pane", "-t", &session, "-e", "-p"])
-        .context("capture-pane failed")?;
+    let captured =
+        tmux(&["capture-pane", "-t", &session, "-e", "-p"]).context("capture-pane failed")?;
     let ansi = String::from_utf8_lossy(&captured.stdout).into_owned();
 
     let _ = tmux(&["kill-session", "-t", &session]);

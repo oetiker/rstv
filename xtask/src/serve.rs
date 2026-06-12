@@ -12,8 +12,7 @@ pub fn run() -> Result<()> {
 
     let root = paths::book_out();
     let addr = "127.0.0.1:3000";
-    let server = tiny_http::Server::http(addr)
-        .map_err(|e| anyhow::anyhow!("bind {addr}: {e}"))?;
+    let server = tiny_http::Server::http(addr).map_err(|e| anyhow::anyhow!("bind {addr}: {e}"))?;
     eprintln!("serving {} at http://{addr}/", root.display());
 
     // Watch sources; rebuild the book (not rustdoc) on change for fast loops.

@@ -25,11 +25,7 @@ fn main() -> Result<()> {
     match args.first().map(String::as_str) {
         Some("docs") => {
             let serve = args.iter().any(|a| a == "--serve");
-            if serve {
-                serve::run()
-            } else {
-                build::docs()
-            }
+            if serve { serve::run() } else { build::docs() }
         }
         Some("screens") => screens::regenerate(),
         _ => usage(),
