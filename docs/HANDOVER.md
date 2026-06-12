@@ -14,9 +14,30 @@
 > When a row lands: add an IMPLEMENTATION-LOG section, tick the BACKLOG row,
 > update this file.
 
-## Current state (2026-06-12, configurable keymap landed)
+## Current state (2026-06-12, developer-docs tooling landed)
 
-**Code HEAD = `5407109`; 1176 lib tests green; clippy + fmt clean.**
+**Code HEAD = `2b3656a`; 1177 lib tests + 14 xtask tests green; clippy + fmt clean.**
+
+**Developer-documentation system — Plan 1 landed** (merge `2b3656a`). A pure-`cargo`
+docs machine, separate from the porting work: **`cargo xtask docs`** builds the
+mdBook guide *and* rustdoc into ONE integrated GitHub Pages site (guide at root,
+rustdoc copied to `/api/`, a Guide⇄API toggle header, bidirectional links, gated by
+an owned book↔api link checker). mdBook is driven **as a library dependency** — no
+mise, no Makefile. Screens are colored selectable HTML via `tmux capture-pane -e` →
+an owned Rust ANSI→HTML converter (`xtask/src/ansi_html.rs`, reuses
+`tvision::Color::BIOS_RGB`). Also `cargo xtask docs --serve` and `cargo xtask
+screens`. The book lives in `docs/book/` (Part I–V skeleton; **prose is unwritten —
+that is Plan 2**). Spec + plan: `docs/superpowers/specs/2026-06-12-*` and
+`docs/superpowers/plans/2026-06-12-developer-documentation-tooling.md`.
+- **Deviations from the plan (intentional):** rustdoc builds into an isolated target
+  subdir (`<target>/rstv-rustdoc`) so the shared dev-box target doesn't leak sibling
+  crates' docs into `api/`; the link checker skips rustdoc machine-noise + api/ chrome.
+- **Deferred to Plan 2:** real mermaid runtime JS (placeholder empty file for now),
+  all page prose, `src/theme/` rustdoc gap + doctests, per-page screenshots.
+- **Action for repo owner:** Settings → Pages → Source = "GitHub Actions" (not
+  scriptable) before the `.github/workflows/docs.yml` deploy can publish.
+
+### Porting state (unchanged since `5407109`, configurable keymap)
 
 Since the last handover two non-PORT-ORDER changes landed (both 2026-06-12, see
 IMPLEMENTATION-LOG): the **default theme pinned to canonical RGB**
@@ -190,10 +211,21 @@ This session ran the **backlog run** end to end:
 
 *(none — all paused worktrees integrated this session)*
 
-## Next — all phases and latent notes addressed; plan the next phase
+## Next — Plan 2: developer-documentation content
 
-**Phase A + B + C fully ✅; latent edge notes resolved (see above).**
-The backlog is exhausted. Begin planning the next feature phase.
+**The immediate next session is Plan 2 (docs content authoring)** on the
+docs-tooling machine that just landed. It is enumerated at the tail of
+`docs/superpowers/plans/2026-06-12-developer-documentation-tooling.md`:
+the Part I–V page prose; completing `src/theme/` rustdoc to parity + promoting
+reference examples to doctests; growing `xtask/src/screens.rs` `SCREENS` (with
+`keys` to drive interactive states) for per-page screenshots; vendoring the real
+mermaid runtime (deferred Task 7); and adding `mdbook test` + `cargo test --doc`
+as CI gates once content exists. Brainstorm/spec for Plan 2 first if scope is
+unclear, then drive it subagent-style like Plan 1.
+
+**Porting backlog:** Phase A + B + C fully ✅; latent edge notes resolved (see
+above). The porting backlog is exhausted — a new *feature* phase would need its
+own planning (separate from the docs work above).
 
 **Standing deferrals:** none — `init/doneHistory` resolved (moot: thread-local
 Vec auto-inits/auto-drops; stale TODOs removed from `application.rs`).
