@@ -3,9 +3,6 @@
 //! The 16 base colors resolve through `tvision::Color::BIOS_RGB`, so embedded
 //! screenshots match the running crate's palette.
 
-// Items consumed by screens.rs (wired in Task 2).
-#![allow(dead_code)]
-
 use std::fmt::Write as _;
 
 #[derive(Clone, Copy, PartialEq)]
