@@ -31,6 +31,35 @@ pub enum Color {
 }
 
 impl Color {
+    /// Canonical IBM VGA text-mode RGB for each of the 16 BIOS palette indices.
+    /// Single source of truth for resolving `Color::Bios(n)` to a definite
+    /// true-color value (used by the default theme and the colour picker).
+    pub const BIOS_RGB: [(u8, u8, u8); 16] = [
+        (0, 0, 0),       // 0 Black
+        (0, 0, 170),     // 1 Blue
+        (0, 170, 0),     // 2 Green
+        (0, 170, 170),   // 3 Cyan
+        (170, 0, 0),     // 4 Red
+        (170, 0, 170),   // 5 Magenta
+        (170, 85, 0),    // 6 Brown
+        (170, 170, 170), // 7 Light Gray
+        (85, 85, 85),    // 8 Dark Gray
+        (85, 85, 255),   // 9 Light Blue
+        (85, 255, 85),   // 10 Light Green
+        (85, 255, 255),  // 11 Light Cyan
+        (255, 85, 85),   // 12 Light Red
+        (255, 85, 255),  // 13 Light Magenta
+        (255, 255, 85),  // 14 Yellow
+        (255, 255, 255), // 15 White
+    ];
+
+    /// Resolve a 4-bit BIOS index to its canonical true-color RGB.
+    /// The index is masked to 0..=15.
+    pub fn bios_rgb(index: u8) -> Color {
+        let (r, g, b) = Color::BIOS_RGB[(index & 0x0F) as usize];
+        Color::Rgb(r, g, b)
+    }
+
     pub fn is_default(self) -> bool {
         matches!(self, Color::Default)
     }
@@ -148,5 +177,13 @@ mod tests {
 
         // toggling twice returns to the original
         assert!(!r.reversed().modifiers.reverse);
+    }
+
+    #[test]
+    fn bios_rgb_canonical_values() {
+        assert_eq!(Color::bios_rgb(6), Color::Rgb(170, 85, 0)); // Brown special-case
+        assert_eq!(Color::bios_rgb(1), Color::Rgb(0, 0, 170)); // Blue
+        // Masking: 0x16 & 0x0F == 6, same as index 6
+        assert_eq!(Color::bios_rgb(0x16), Color::bios_rgb(6));
     }
 }

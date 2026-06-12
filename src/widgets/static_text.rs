@@ -953,14 +953,15 @@ mod tests {
             normal_snap, lit_snap,
             "the rendered snapshot must differ between normal and lit"
         );
-        // Concrete bite on the caption fg: normal is black (BIOS 0), lit is white
-        // (BIOS 15) — both over the gray-7 background.
+        // Concrete bite on the caption fg: normal is black (RGB 0,0,0), lit is white
+        // (RGB 255,255,255) — both over the lightgray background (RGB 170,170,170).
+        // The default theme now pins canonical true-color RGB rather than BIOS indices.
         assert!(
-            normal_snap.contains("fg=BIOS(0) bg=BIOS(7)"),
+            normal_snap.contains("fg=RGB(0,0,0) bg=RGB(170,170,170)"),
             "normal caption is black-on-gray"
         );
         assert!(
-            lit_snap.contains("fg=BIOS(15) bg=BIOS(7)"),
+            lit_snap.contains("fg=RGB(255,255,255) bg=RGB(170,170,170)"),
             "lit caption is white-on-gray"
         );
     }

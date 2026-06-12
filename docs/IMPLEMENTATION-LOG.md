@@ -5,6 +5,39 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Default theme pinned to canonical RGB (2026-06-12)
+
+**`fix(theme): pin default theme to canonical RGB instead of BIOS indices`**
+
+The default theme stored every role as `Color::Bios(n)`. At the backend a
+`Color::Bios` is emitted as a *named* terminal color (SGR 30–37/90–97), so the
+terminal paints it with the user's own (often customized) BIOS/ANSI palette —
+which destroys contrast in the colorful classic-blue theme. This deliberately
+deviates from magiblot (which relies on the terminal palette by design) for the
+**default theme only**.
+
+**Change:**
+- `src/color.rs` — new `Color::BIOS_RGB` (canonical IBM VGA text-mode palette,
+  incl. the brown special-case `(170,85,0)` at index 6) + `Color::bios_rgb(index)`
+  resolver. Single source of truth.
+- `src/theme.rs` — `Theme::classic_blue()`'s `set` closure now stores
+  `Color::Rgb` via `Color::bios_rgb(fg/bg)`. Every call site keeps its BIOS
+  nibbles + faithful C++ palette-chain comments — only the stored color becomes
+  definite RGB. So the desktop is now `Rgb(0,0,170)`, lightgray text
+  `Rgb(170,170,170)`, etc., regardless of terminal palette.
+- `src/dialog/colorpick/model.rs` — its duplicate `BIOS_RGB` table collapsed to
+  a one-line alias of `Color::BIOS_RGB`.
+
+The `Color::Bios` variant is untouched and fully supported for apps that *want*
+terminal-palette colors; only the default theme is pinned.
+
+**Verification:** 80 snapshots regenerated — legend lines only (`BIOS(n)` →
+`RGB(r,g,b)`); the BIOS→RGB map is a bijection so style-dedup keys and the
+`text:`/`attr:` layers are byte-identical. `cargo test --workspace` (1161+5+4
+passed), clippy `--all-targets -D warnings`, and `fmt --check` all clean.
+
+---
+
 ## tvdemo example (2026-06-12)
 
 **`feat(examples): port tvdemo from C++ tvision`**

@@ -24,5 +24,5 @@ attr:
 |aaaaaaaaaaaaaaaaaaaaaaaa|
 legend:
   . default
-  a fg=BIOS(15) bg=BIOS(7)
-  b fg=BIOS(10) bg=BIOS(7)
+  a fg=RGB(255,255,255) bg=RGB(170,170,170)
+  b fg=RGB(85,255,85) bg=RGB(170,170,170)

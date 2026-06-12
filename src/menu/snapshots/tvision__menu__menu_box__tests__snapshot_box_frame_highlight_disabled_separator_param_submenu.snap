@@ -20,8 +20,8 @@ attr:
 |aaaaaaaaaaaaaa|
 legend:
   . default
-  a fg=BIOS(0) bg=BIOS(7)
-  b fg=BIOS(4) bg=BIOS(7)
-  c fg=BIOS(8) bg=BIOS(7)
-  d fg=BIOS(0) bg=BIOS(2)
-  e fg=BIOS(4) bg=BIOS(2)
+  a fg=RGB(0,0,0) bg=RGB(170,170,170)
+  b fg=RGB(170,0,0) bg=RGB(170,170,170)
+  c fg=RGB(85,85,85) bg=RGB(170,170,170)
+  d fg=RGB(0,0,0) bg=RGB(0,170,0)
+  e fg=RGB(170,0,0) bg=RGB(0,170,0)

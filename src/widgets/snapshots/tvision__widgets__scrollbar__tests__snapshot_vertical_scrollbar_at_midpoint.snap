@@ -28,4 +28,4 @@ attr:
 |a|
 legend:
   . default
-  a fg=BIOS(1) bg=BIOS(3)
+  a fg=RGB(0,0,170) bg=RGB(0,170,170)

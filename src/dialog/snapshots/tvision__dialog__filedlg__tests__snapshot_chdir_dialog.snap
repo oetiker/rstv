@@ -48,12 +48,12 @@ attr:
 |................aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa|
 legend:
   . default
-  a fg=BIOS(0) bg=BIOS(7)
-  b fg=BIOS(14) bg=BIOS(7)
-  c fg=BIOS(15) bg=BIOS(1)
-  d fg=BIOS(2) bg=BIOS(7)
-  e fg=BIOS(0) bg=BIOS(2)
-  f fg=BIOS(0) bg=BIOS(3)
-  g fg=BIOS(1) bg=BIOS(3)
-  h fg=BIOS(14) bg=BIOS(2)
-  i fg=BIOS(15) bg=BIOS(2)
+  a fg=RGB(0,0,0) bg=RGB(170,170,170)
+  b fg=RGB(255,255,85) bg=RGB(170,170,170)
+  c fg=RGB(255,255,255) bg=RGB(0,0,170)
+  d fg=RGB(0,170,0) bg=RGB(170,170,170)
+  e fg=RGB(0,0,0) bg=RGB(0,170,0)
+  f fg=RGB(0,0,0) bg=RGB(0,170,170)
+  g fg=RGB(0,0,170) bg=RGB(0,170,170)
+  h fg=RGB(255,255,85) bg=RGB(0,170,0)
+  i fg=RGB(255,255,255) bg=RGB(0,170,0)

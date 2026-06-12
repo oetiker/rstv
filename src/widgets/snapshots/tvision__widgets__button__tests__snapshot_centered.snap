@@ -1,6 +1,5 @@
 ---
 source: src/widgets/button.rs
-assertion_line: 650
 expression: render(&mut b)
 ---
 size: 16x2
@@ -13,5 +12,5 @@ attr:
 |aaaaaaaaaaaaaaaa|
 legend:
   . default
-  a fg=BIOS(0) bg=BIOS(7)
-  b fg=BIOS(0) bg=BIOS(2)
+  a fg=RGB(0,0,0) bg=RGB(170,170,170)
+  b fg=RGB(0,0,0) bg=RGB(0,170,0)

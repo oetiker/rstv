@@ -710,8 +710,13 @@ impl Theme {
         // BIOS 4-bit palette reminder: 0=black 1=blue 2=green 3=cyan 4=red
         // 5=magenta 6=brown 7=lightgray 8=darkgray 9=lightblue ... F=white.
         let mut styles = [Style::default(); ROLE_COUNT];
+        // The default theme pins canonical true-color RGB (via `Color::bios_rgb`) so
+        // contrast is correct regardless of the terminal's BIOS palette. The BIOS nibbles
+        // in the call sites below remain as readable, faithful documentation of the C++
+        // palette chain; only the stored color becomes definite RGB. The `Color::Bios`
+        // variant remains available for apps that want terminal-palette colors.
         let set = |styles: &mut [Style; ROLE_COUNT], role: Role, fg: u8, bg: u8| {
-            styles[role.index()] = Style::new(Color::Bios(fg), Color::Bios(bg));
+            styles[role.index()] = Style::new(Color::bios_rgb(fg), Color::bios_rgb(bg));
         };
 
         // Desktop / frames. Faithful palette chains — TFrame's color slots
@@ -943,27 +948,27 @@ mod tests {
         let t = Theme::classic_blue();
         assert_eq!(
             t.style(Role::Background),
-            Style::new(Color::Bios(0x7), Color::Bios(0x1))
+            Style::new(Color::bios_rgb(0x7), Color::bios_rgb(0x1))
         );
         assert_eq!(
             t.style(Role::FrameActive),
-            Style::new(Color::Bios(0xF), Color::Bios(0x1))
+            Style::new(Color::bios_rgb(0xF), Color::bios_rgb(0x1))
         );
         assert_eq!(
             t.style(Role::Disabled),
-            Style::new(Color::Bios(0x8), Color::Bios(0x1))
+            Style::new(Color::bios_rgb(0x8), Color::bios_rgb(0x1))
         );
         assert_eq!(
             t.style(Role::ListSelected),
-            Style::new(Color::Bios(0xE), Color::Bios(0x3))
+            Style::new(Color::bios_rgb(0xE), Color::bios_rgb(0x3))
         );
         assert_eq!(
             t.style(Role::Error),
-            Style::new(Color::Bios(0xF), Color::Bios(0x4))
+            Style::new(Color::bios_rgb(0xF), Color::bios_rgb(0x4))
         );
         assert_eq!(
             t.style(Role::Success),
-            Style::new(Color::Bios(0xF), Color::Bios(0x2))
+            Style::new(Color::bios_rgb(0xF), Color::bios_rgb(0x2))
         );
     }
 

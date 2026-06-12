@@ -44,13 +44,13 @@ attr:
 |rraaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...|
 legend:
   . default
-  a fg=BIOS(14) bg=BIOS(1)
+  a fg=RGB(255,255,85) bg=RGB(0,0,170)
   b fg=RGB(0,0,0) bg=RGB(0,0,0)
   c fg=RGB(0,0,170) bg=RGB(0,0,170)
   d fg=RGB(0,170,0) bg=RGB(0,170,0)
   e fg=RGB(0,170,170) bg=RGB(0,170,170)
   f fg=RGB(170,0,0) bg=RGB(170,0,0)
-  g fg=BIOS(1) bg=BIOS(7)
+  g fg=RGB(0,0,170) bg=RGB(170,170,170)
   h fg=RGB(170,0,170) bg=RGB(170,0,170)
   i fg=RGB(170,85,0) bg=RGB(170,85,0)
   j fg=RGB(170,170,170) bg=RGB(170,170,170)
