@@ -334,10 +334,12 @@ impl Window {
                 Point::new(ext.b.x - 2, ext.b.y),
             )
         };
-        let mut sb = ScrollBar::new(r);
-        if opts.handle_keyboard {
-            sb.state.options.post_process = true;
-        }
+        let sb = ScrollBar::new(r);
+        let sb = if opts.handle_keyboard {
+            sb.with_keyboard()
+        } else {
+            sb
+        };
         self.group.insert(Box::new(sb))
     }
 

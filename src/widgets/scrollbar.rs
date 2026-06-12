@@ -197,6 +197,16 @@ impl ScrollBar {
         }
     }
 
+    /// Opt this bar into keyboard handling: set `ofPostProcess` so it receives
+    /// focused-chain arrow/page/home/end keys even when it is not the current
+    /// view (faithful to C++ `standardScrollBar(... | sbHandleKeyboard)`, which
+    /// sets `options |= ofPostProcess`). Builder form for the `ScrollBar::new`
+    /// path; `Window::standard_scroll_bar(handle_keyboard: true)` does the same.
+    pub fn with_keyboard(mut self) -> Self {
+        self.state.options.post_process = true;
+        self
+    }
+
     /// Whether this bar is oriented vertically (width == 1).
     pub fn is_vertical(&self) -> bool {
         self.vertical
@@ -977,6 +987,28 @@ mod tests {
         assert_eq!(sb.page_step, 5);
         assert_eq!(sb.arrow_step, 2);
         assert_eq!(out.len(), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // with_keyboard builder
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn with_keyboard_sets_post_process() {
+        let r = Rect::new(0, 0, 1, 10);
+        // A plain new() bar must NOT have post_process (the default is false,
+        // faithful to C++ TScrollBar: options == 0).
+        let sb_plain = ScrollBar::new(r);
+        assert!(
+            !sb_plain.state.options.post_process,
+            "plain ScrollBar::new must NOT have post_process"
+        );
+        // with_keyboard() sets it.
+        let sb_kb = ScrollBar::new(r).with_keyboard();
+        assert!(
+            sb_kb.state.options.post_process,
+            "with_keyboard() must set post_process (ofPostProcess / sbHandleKeyboard)"
+        );
     }
 
     // -----------------------------------------------------------------------

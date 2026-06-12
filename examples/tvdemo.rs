@@ -19,9 +19,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use tvision::{
     Backend, Button, ButtonFlags, Command, CrosstermBackend, Desktop, Dialog, DrawCtx, Event,
-    Frame, Key, KeyEvent, KeyModifiers, Menu, MenuBar, Program, Rect, Role, ScrollBar, Scroller,
-    StaticText, StatusDef, StatusLine, SystemClock, Theme, View, ViewId, ViewState, Window,
-    WindowFlags, alt, delegate,
+    Frame, Key, KeyEvent, KeyModifiers, Menu, MenuBar, Program, Rect, Role, ScrollBarOptions,
+    Scroller, StaticText, StatusDef, StatusLine, SystemClock, Theme, View, ViewId, ViewState,
+    Window, WindowFlags, alt, delegate,
 };
 
 // ---------------------------------------------------------------------------
@@ -1269,10 +1269,11 @@ impl EventViewer {
         window.state_mut().options.tileable = true;
 
         let ext = window.state().get_extent();
-        let vsb = ScrollBar::new(Rect::new(ext.b.x - 2, 1, ext.b.x - 1, ext.b.y - 1));
-        let vsb_id = window.insert_child(Box::new(vsb));
-
-        let log_r = Rect::new(1, 1, ext.b.x - 2, ext.b.y - 1);
+        let vsb_id = window.standard_scroll_bar(ScrollBarOptions {
+            vertical: true,
+            handle_keyboard: true,
+        });
+        let log_r = Rect::new(ext.a.x + 1, ext.a.y + 1, ext.b.x - 1, ext.b.y - 1);
         let log = EventLog::new(log_r, None, Some(vsb_id));
         let log_id = window.insert_child(Box::new(log));
 
@@ -1383,12 +1384,16 @@ impl FileWindow {
         window.state_mut().options.tileable = true;
 
         let ext = window.state().get_extent();
-        let r = Rect::new(1, 1, ext.b.x - 2, ext.b.y - 1);
-
-        let vsb = ScrollBar::new(Rect::new(ext.b.x - 2, 1, ext.b.x - 1, ext.b.y - 1));
-        let hsb = ScrollBar::new(Rect::new(1, ext.b.y - 1, ext.b.x - 2, ext.b.y));
-        let vsb_id = window.insert_child(Box::new(vsb));
-        let hsb_id = window.insert_child(Box::new(hsb));
+        // C++ TFileWindow: r = getExtent(); r.grow(-1, -1)
+        let r = Rect::new(ext.a.x + 1, ext.a.y + 1, ext.b.x - 1, ext.b.y - 1);
+        let hsb_id = window.standard_scroll_bar(ScrollBarOptions {
+            vertical: false,
+            handle_keyboard: true,
+        });
+        let vsb_id = window.standard_scroll_bar(ScrollBarOptions {
+            vertical: true,
+            handle_keyboard: true,
+        });
 
         let fv = FileViewer::new(r, Some(hsb_id), Some(vsb_id), path);
         window.insert_child(Box::new(fv));
