@@ -1,5 +1,17 @@
 # Async modal-from-a-view (the `messageBox`-from-`valid()` seam)
 
+> **Status: LANDED, and generalized into the project's interactive
+> modal-from-view foundation.** This note was written for the first consumer (the
+> `messageBox`-from-`valid()` case — validator errors + the `FileEditor`
+> modified-save prompt, rows 68/79). The same four-part machinery
+> (`Deferred::Open*` → `Program::pending_modal` → `exec_view_with_completion` →
+> `ModalCompletion`) was then reused verbatim for **richer interactive dialogs that
+> return typed data**: editor find/replace (C1, `b388492`), `FileEditor::saveAs`
+> (C5), the color/theme pickers (C8). **There is no separate "interactive modal"
+> seam — this is it.** The reuse recipe + the catalog of flow-back styles are in
+> [Generalization](#generalization--arbitrary-interactive-modals-the-reuse-recipe)
+> at the bottom; read that first if you are *adding a new* modal-from-view consumer.
+
 > The forward-looking detour decided in `HANDOVER.md`: let a **downward-borrowed
 > `&mut View`** (which owns no up-pointer and cannot run a nested modal inline)
 > **request a modal `messageBox` from the pump** and later observe the user's
@@ -193,3 +205,60 @@ Headless tests that the queue-and-hope version fails:
    `ofValidate` field; assert the box appears.
 
 Snapshot tests only for anything that draws differently; these are behavioral.
+
+## Generalization — arbitrary interactive modals (the reuse recipe)
+
+The `messageBox` case above hard-codes the *dialog* (a centered text box) and the
+*flow-back* (route a `Command` answer). The C1+ rows showed the **machinery is
+general**: a view can launch *any* dialog, let the user fill it in, and read typed
+data back. Nothing new in the loop was needed — only new variants.
+
+### The invariant four parts (all keyed on `ViewId`, D3)
+
+| Part | What | Where (find/replace example) |
+|---|---|---|
+| **1. Request** | View's `handle_event` pushes a `Deferred::Open*Dialog { requester_id, … }` (it can't call `exec_view` — top-level only). | `ctx.open_find_dialog(id)` → `Deferred::OpenFindDialog { editor_id }` |
+| **2. Build + stash** | Pump deferred-drain arm assembles the modal `Box<dyn View>` from existing widgets, picks `initial_focus`, picks a `ModalCompletion`, stashes the triple into `Program::pending_modal`. **Does not run the modal** (apply phase is inside the `pump_once` split borrow). | `program.rs` `OpenFindDialog` arm → `pending_modal = Some((dialog, FindPick{…}, focus))` |
+| **3. Drive** | `pump_and_drive` (used by *both* `run` and `exec_view`'s inner loop, so modal-from-modal works) takes `pending_modal` holding a whole `&mut self` and runs `exec_view_with_completion`. `end_state` save/restore keeps the inner modal transparent. | `program.rs:758` |
+| **4. Flow-back** | The `ModalCompletion` runs **after the loop ends but before the modal is dropped** — the only window where the finished dialog's children are still resolvable by id. | `FindPick` reads the dialog's `InputLine`/`CheckBoxes` children, writes them onto the editor, re-injects `cmSearchAgain` |
+
+### Why `ModalCompletion` is an enum, not a `Box<dyn FnOnce>`
+
+A view-built closure cannot hold `&mut Program` (the completion needs it to walk
+the tree and re-inject events), and the house pattern is **ADD A VARIANT** (same
+as `Deferred`). Each consumer adds one `Deferred::Open*` variant + one
+`ModalCompletion` variant; the loop itself is untouched.
+
+### Catalog of flow-back styles (pick one)
+
+1. **`set_modal_answer(cmd)` + re-post** (`RouteModalAnswer`) — cache a
+   Yes/No/Cancel decision on the requester (a `View` trait method, default no-op,
+   forwarded in `specs.rs`), then re-post `then_command` so the original
+   `valid()`/action re-runs with the cached answer. *Use when the modal is a
+   decision the requester's existing logic already branches on* (the save-on-close
+   prompt; the editor's replace-prompt via `pending_replace_answer`).
+2. **Direct read + re-inject** (`FindPick`/`ReplacePick`/`SaveAsPick`) — read the
+   modal's child widgets by `ViewId`, write the typed values onto the requester's
+   state, re-inject a command to continue. *Use when the modal collects multi-field
+   typed input for the requester* (find string + options; a filename).
+3. **`Rc<Cell>` / `Rc<RefCell>` sink** (`ColorPick`/`ThemeEdit`) — write the result
+   into a shared cell the top-level (non-view) caller reads after the modal returns.
+   *Use when a `Program` method — not a view — launched the modal and wants the
+   value returned out* (`color_dialog`).
+
+### Adding a new interactive modal-from-view — checklist
+
+1. `Deferred::Open<Foo>Dialog { requester_id, … }` + a `Context::open_<foo>_dialog`
+   helper (mirror `request_open_history` / `request_message_box`).
+2. Request it from the view's `handle_event`.
+3. Pump apply-arm: build the dialog (reuse existing widgets), choose `initial_focus`,
+   pick a `ModalCompletion::<Foo>Pick { …child ids… }`, set `pending_modal`.
+4. Completion arm in `apply_modal_completion`: resolve the modal's children by id,
+   flow back via one of the three styles above; return any `Event` to re-inject.
+5. If style 1, add a `set_modal_answer` override on the requester (+ `specs.rs`
+   forwarder check). Layout snapshot test for the new dialog; a behavioral test that
+   drives the pump and asserts the flow-back.
+
+**Live consumers** (read these as worked examples): `FindPick`/`ReplacePick`
+(`program.rs` ~2509/2596 build, ~2969/3006 flow-back), `SaveAsPick`,
+`RouteModalAnswer`, `ColorPick`, `ThemeEdit`, `HistoryPick`.
