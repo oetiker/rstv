@@ -1,0 +1,13 @@
+[package]
+name = "xtask"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+tvision = { path = ".." }
+mdbook = "0.4"
+mdbook-mermaid = "0.14"
+notify = "6"
+tiny_http = "0.12"
+anyhow = "1"
