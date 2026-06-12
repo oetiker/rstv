@@ -125,15 +125,17 @@ pub use view::{
     Context, DragMode, DrawCtx, Group, GrowMode, Options, Phase, Point, Rect, SelectMode, State,
     StateFlag, View, ViewId, ViewState,
 };
+pub use widgets::Indicator;
 pub use widgets::{Button, ButtonFlags};
 pub use widgets::{CheckBoxes, Cluster, ClusterKind, MultiCheckBoxes, RadioButtons};
+pub use widgets::{
+    EditWindow, Editor, InputLine, LimitMode, ListBox, ListRoles, ListViewer, ListViewerState,
+    ScrollBar, Scroller, SortedListBox,
+};
 pub use widgets::{Encoding, FileEditor, LineEnding, Memo};
-pub use widgets::{EditWindow, Editor, InputLine, LimitMode, ListBox, ListRoles, ListViewer,
-    ListViewerState, ScrollBar, Scroller, SortedListBox};
 pub use widgets::{
     HistoryViewer, HistoryWindow, THistory, clear_history, history_add, history_count, history_str,
 };
-pub use widgets::Indicator;
 pub use widgets::{Label, ParamText, StaticText};
 pub use widgets::{Node, Outline, OutlineViewer, OutlineViewerState, ov_update};
 pub use widgets::{Terminal, TextDevice};

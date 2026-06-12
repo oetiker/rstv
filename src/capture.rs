@@ -730,7 +730,10 @@ mod tests {
             !consumed,
             "broadcast passes through the hold (C++ message() bypasses the loop)"
         );
-        assert!(deferred.is_empty(), "the tracker forwards nothing for a broadcast");
+        assert!(
+            deferred.is_empty(),
+            "the tracker forwards nothing for a broadcast"
+        );
         assert_eq!(stack.len(), 1, "tracker stays on the stack until MouseUp");
     }
 

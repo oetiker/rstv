@@ -6640,7 +6640,11 @@ mod tests {
         // Before the fix the indicator was frozen at (0,0) ("1:1") because
         // `Indicator` lacked `as_any_mut`, so the `IndicatorSetValue` broker's
         // downcast always yielded `None`. It must now track the cursor row.
-        assert_eq!(indicator_loc(&mut program), Point::new(0, 0), "starts at 1:1");
+        assert_eq!(
+            indicator_loc(&mut program),
+            Point::new(0, 0),
+            "starts at 1:1"
+        );
         for _ in 0..5 {
             program
                 .out_events

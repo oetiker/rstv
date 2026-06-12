@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 
 use tvision::{
     Backend, Button, ButtonFlags, Command, CrosstermBackend, Desktop, Dialog, DrawCtx, Key,
-    KeyEvent, Menu, MenuBar, Node, Outline, OutlineViewer, OutlineViewerState, Program, Rect,
-    Role, ScrollBar, Scroller, StaticText, StatusDef, StatusLine, SystemClock, Theme, View, ViewId,
+    KeyEvent, Menu, MenuBar, Node, Outline, OutlineViewer, OutlineViewerState, Program, Rect, Role,
+    ScrollBar, Scroller, StaticText, StatusDef, StatusLine, SystemClock, Theme, View, ViewId,
     Window, alt, delegate, ov_update,
 };
 
@@ -97,12 +97,7 @@ struct DirOutline {
 }
 
 impl DirOutline {
-    fn new(
-        bounds: Rect,
-        h: Option<ViewId>,
-        v: Option<ViewId>,
-        root_path: PathBuf,
-    ) -> Self {
+    fn new(bounds: Rect, h: Option<ViewId>, v: Option<ViewId>, root_path: PathBuf) -> Self {
         let root_label = root_path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -136,7 +131,13 @@ impl DirOutline {
 
     /// DFS search for the node at DFS position `target` (root's children start at 1).
     /// Pushes path components while descending, pops on backtrack. Returns true when found.
-    fn find_path(&self, node: Option<&Node>, target: i32, pos: &mut i32, path: &mut PathBuf) -> bool {
+    fn find_path(
+        &self,
+        node: Option<&Node>,
+        target: i32,
+        pos: &mut i32,
+        path: &mut PathBuf,
+    ) -> bool {
         let Some(node) = node else { return false };
         *pos += 1;
         if *pos == target {
@@ -258,7 +259,11 @@ impl View for FilePane {
                 ""
             };
             let col_start = delta.x as usize;
-            let visible: String = text.chars().skip(col_start).take(extent.b.x as usize).collect();
+            let visible: String = text
+                .chars()
+                .skip(col_start)
+                .take(extent.b.x as usize)
+                .collect();
             ctx.fill(Rect::new(0, row, extent.b.x, row + 1), ' ', style);
             ctx.put_str(0, row, &visible, style);
         }
@@ -318,7 +323,8 @@ impl DirWindow {
 impl View for DirWindow {
     fn handle_event(&mut self, ev: &mut tvision::Event, ctx: &mut tvision::Context) {
         // Lazy init: ov_update needs a Context, which is not available at construction.
-        if let Some(ol) = self.window
+        if let Some(ol) = self
+            .window
             .child_mut(self.outline_id)
             .and_then(|v| v.as_any_mut())
             .and_then(|a| a.downcast_mut::<DirOutline>())
@@ -393,7 +399,9 @@ impl TDirApp {
         let mut r = r;
         r.a.y += 1;
         r.b.y -= 1;
-        Some(Box::new(Desktop::new(r, |br| Some(Desktop::init_background(br)))))
+        Some(Box::new(Desktop::new(r, |br| {
+            Some(Desktop::init_background(br))
+        })))
     }
 
     fn init_status_line(r: Rect) -> Option<Box<dyn View>> {
@@ -401,8 +409,11 @@ impl TDirApp {
         r.a.y = r.b.y - 1;
         let defs = StatusDef::list()
             .def_all(|d| {
-                d.key_item(alt('x'), Command::QUIT)
-                    .item("~F10~ Menu", KeyEvent::from(Key::F(10)), Command::MENU)
+                d.key_item(alt('x'), Command::QUIT).item(
+                    "~F10~ Menu",
+                    KeyEvent::from(Key::F(10)),
+                    Command::MENU,
+                )
             })
             .build();
         Some(Box::new(StatusLine::new(r, defs)))
@@ -412,9 +423,7 @@ impl TDirApp {
         let mut r = r;
         r.b.y = r.a.y + 1;
         let menu = Menu::builder()
-            .submenu("~\u{f0}~", alt(' '), |m| {
-                m.command("~A~bout…", CMD_ABOUT)
-            })
+            .submenu("~\u{f0}~", alt(' '), |m| m.command("~A~bout…", CMD_ABOUT))
             .submenu("~F~ile", alt('f'), |m| {
                 m.command("~N~ew Window…", CMD_NEW_WINDOW)
                     .separator()
@@ -438,7 +447,10 @@ impl TDirApp {
             Rect::new(14, 8, 25, 10),
             " OK",
             Command::OK,
-            ButtonFlags { default: true, ..ButtonFlags::new() },
+            ButtonFlags {
+                default: true,
+                ..ButtonFlags::new()
+            },
         )));
         prog.exec_view(Box::new(dlg));
     }

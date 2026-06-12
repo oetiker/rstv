@@ -3976,9 +3976,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn file_editor_load_unreadable_queues_error_box() {
+        use crate::view::Deferred;
         use std::fs::Permissions;
         use std::os::unix::fs::PermissionsExt;
-        use crate::view::Deferred;
 
         // Root bypasses DAC permission checks — mode 0o000 still opens for root.
         if unsafe { libc::geteuid() } == 0 {
@@ -3988,8 +3988,7 @@ mod tests {
         let path = tmp_path("unreadable");
         let _ = std::fs::remove_file(&path);
         std::fs::File::create(&path).expect("create temp file");
-        std::fs::set_permissions(&path, Permissions::from_mode(0o000))
-            .expect("set mode 0o000");
+        std::fs::set_permissions(&path, Permissions::from_mode(0o000)).expect("set mode 0o000");
 
         let mut fe = FileEditor::new(
             Rect::new(0, 0, 40, 10),
@@ -4094,7 +4093,11 @@ mod tests {
 
         // The main file must contain the new content.
         let on_disk = std::fs::read(&path).unwrap();
-        assert_eq!(on_disk, fe.editor.text(), "saved file holds the new content");
+        assert_eq!(
+            on_disk,
+            fe.editor.text(),
+            "saved file holds the new content"
+        );
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&backup);
@@ -4114,13 +4117,22 @@ mod tests {
 
         std::fs::write(&path, b"original\n").unwrap();
 
-        let mut fe = FileEditor::new(Rect::new(0, 0, 40, 10), None, None, None, Some(path.clone()));
+        let mut fe = FileEditor::new(
+            Rect::new(0, 0, 40, 10),
+            None,
+            None,
+            None,
+            Some(path.clone()),
+        );
         assert!(fe.editor.is_valid);
         // flag NOT set — default editor_flags = 0
         let mut cx = Cx::new();
         fe.save_file(&mut cx.ctx());
 
-        assert!(!backup.exists(), "backup must not be created when EF_BACKUP_FILES is off");
+        assert!(
+            !backup.exists(),
+            "backup must not be created when EF_BACKUP_FILES is off"
+        );
         let _ = std::fs::remove_file(&path);
     }
 

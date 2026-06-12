@@ -20,8 +20,8 @@ use std::io;
 use std::path::PathBuf;
 
 use tvision::{
-    Backend, CD_NORMAL, ChDirDialog, Command, CrosstermBackend, Desktop, EditWindow, Key,
-    KeyEvent, Menu, MenuBar, Program, Rect, StatusDef, StatusLine, SystemClock, Theme, View, alt,
+    Backend, CD_NORMAL, ChDirDialog, Command, CrosstermBackend, Desktop, EditWindow, Key, KeyEvent,
+    Menu, MenuBar, Program, Rect, StatusDef, StatusLine, SystemClock, Theme, View, alt,
 };
 
 // ---------------------------------------------------------------------------
@@ -59,7 +59,9 @@ impl TEditApp {
         let mut r = r;
         r.a.y += 1;
         r.b.y -= 1;
-        Some(Box::new(Desktop::new(r, |br| Some(Desktop::init_background(br)))))
+        Some(Box::new(Desktop::new(r, |br| {
+            Some(Desktop::init_background(br))
+        })))
     }
 
     /// `TEditorApp::initStatusLine` — pins to the bottom row.
@@ -169,31 +171,73 @@ fn ctrl_w() -> KeyEvent {
 }
 fn ctrl_f5() -> KeyEvent {
     use tvision::KeyModifiers;
-    KeyEvent::new(Key::F(5), KeyModifiers { ctrl: true, ..Default::default() })
+    KeyEvent::new(
+        Key::F(5),
+        KeyModifiers {
+            ctrl: true,
+            ..Default::default()
+        },
+    )
 }
 fn ctrl_ins() -> KeyEvent {
     use tvision::KeyModifiers;
-    KeyEvent::new(Key::Insert, KeyModifiers { ctrl: true, ..Default::default() })
+    KeyEvent::new(
+        Key::Insert,
+        KeyModifiers {
+            ctrl: true,
+            ..Default::default()
+        },
+    )
 }
 fn shift_del() -> KeyEvent {
     use tvision::KeyModifiers;
-    KeyEvent::new(Key::Delete, KeyModifiers { shift: true, ..Default::default() })
+    KeyEvent::new(
+        Key::Delete,
+        KeyModifiers {
+            shift: true,
+            ..Default::default()
+        },
+    )
 }
 fn shift_ins() -> KeyEvent {
     use tvision::KeyModifiers;
-    KeyEvent::new(Key::Insert, KeyModifiers { shift: true, ..Default::default() })
+    KeyEvent::new(
+        Key::Insert,
+        KeyModifiers {
+            shift: true,
+            ..Default::default()
+        },
+    )
 }
 fn shift_f6() -> KeyEvent {
     use tvision::KeyModifiers;
-    KeyEvent::new(Key::F(6), KeyModifiers { shift: true, ..Default::default() })
+    KeyEvent::new(
+        Key::F(6),
+        KeyModifiers {
+            shift: true,
+            ..Default::default()
+        },
+    )
 }
 fn ctrl_del() -> KeyEvent {
     use tvision::KeyModifiers;
-    KeyEvent::new(Key::Delete, KeyModifiers { ctrl: true, ..Default::default() })
+    KeyEvent::new(
+        Key::Delete,
+        KeyModifiers {
+            ctrl: true,
+            ..Default::default()
+        },
+    )
 }
 fn ctrl(k: Key) -> KeyEvent {
     use tvision::KeyModifiers;
-    KeyEvent::new(k, KeyModifiers { ctrl: true, ..Default::default() })
+    KeyEvent::new(
+        k,
+        KeyModifiers {
+            ctrl: true,
+            ..Default::default()
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------
