@@ -64,15 +64,12 @@
 use crate::capture::TrackMask;
 use crate::command::Command;
 use crate::data::FieldValue;
-use crate::event::{Event, Key, MouseEvent, ctrl_to_arrow};
+use crate::event::{Event, Key, MouseEvent};
+use crate::keymap::{self, KeyStroke, Resolve};
 use crate::text;
 use crate::theme::Role;
 use crate::validate::Validator;
 use crate::view::{Context, DrawCtx, Options, Point, Rect, StateFlag, View, ViewState};
-
-/// `Ctrl-Y` (`CONTROL_Y = 25`) — clears the whole field. In the decomposed key
-/// model this is `Key::Char('y')` + `ctrl`.
-const CONTROL_Y: char = 'y';
 
 // ---------------------------------------------------------------------------
 // LimitMode — D1 enum for ilMaxBytes / ilMaxWidth / ilMaxChars
@@ -470,6 +467,127 @@ impl InputLine {
             0
         }
     }
+
+    // -- clipboard helpers (extracted from the evCommand arm) --------------
+
+    /// cmCut — copy the current selection to the clipboard, then delete it.
+    /// Verbatim move of the `Event::Command(Command::CUT)` body; the clipboard
+    /// operation is guarded by the selection test (C++ always clears the event
+    /// regardless, which the callers handle).
+    fn do_cut(&mut self, ctx: &mut Context) {
+        if self.sel_start < self.sel_end {
+            let sel = self.data[self.sel_start as usize..self.sel_end as usize].to_string();
+            ctx.set_clipboard(sel);
+            self.save_state();
+            self.delete_select();
+            self.check_valid(true);
+            self.sel_start = 0;
+            self.sel_end = 0;
+            self.sync_cursor();
+        }
+    }
+
+    /// cmCopy — copy the current selection to the clipboard, keep it. Verbatim
+    /// move of the `Event::Command(Command::COPY)` body.
+    fn do_copy(&mut self, ctx: &mut Context) {
+        if self.sel_start < self.sel_end {
+            let sel = self.data[self.sel_start as usize..self.sel_end as usize].to_string();
+            ctx.set_clipboard(sel);
+        }
+    }
+
+    /// cmPaste — request an async paste via the broker. Verbatim move of the
+    /// `Event::Command(Command::PASTE)` body.
+    fn do_paste(&mut self, ctx: &mut Context) {
+        if let Some(id) = self.state.id() {
+            ctx.request_input_line_paste(id);
+        }
+    }
+
+    // -- keymap dispatch ----------------------------------------------------
+
+    /// Apply a resolved editor command within the single-line repertoire.
+    /// Returns `true` if handled; `false` means "not ours — let it bubble".
+    fn apply_input_command(&mut self, cmd: Command, ctx: &mut Context) -> bool {
+        match cmd {
+            Command::CHAR_LEFT => {
+                self.cur_pos -= text::prev(&self.data, self.cur_pos as usize) as i32
+            }
+            Command::CHAR_RIGHT => {
+                let cp = self.cur_pos as usize;
+                let step = text::next(&self.data[cp..]).map(|(l, _)| l).unwrap_or(0);
+                self.cur_pos += step as i32;
+            }
+            Command::WORD_LEFT => self.cur_pos = prev_word(&self.data, self.cur_pos),
+            Command::WORD_RIGHT => self.cur_pos = next_word(&self.data, self.cur_pos),
+            Command::LINE_START => self.cur_pos = 0,
+            Command::LINE_END => self.cur_pos = self.data.len() as i32,
+            Command::BACK_SPACE => {
+                if self.sel_start == self.sel_end {
+                    self.sel_start =
+                        self.cur_pos - text::prev(&self.data, self.cur_pos as usize) as i32;
+                    self.sel_end = self.cur_pos;
+                }
+                self.delete_select();
+                self.check_valid(true);
+            }
+            Command::DEL_WORD_LEFT => {
+                // kbCtrlBack / kbAltBack — delete the previous word.
+                if self.sel_start == self.sel_end {
+                    self.sel_start = prev_word(&self.data, self.cur_pos);
+                    self.sel_end = self.cur_pos;
+                }
+                self.delete_select();
+                self.check_valid(true);
+            }
+            Command::DEL_CHAR => {
+                if self.sel_start == self.sel_end {
+                    self.delete_current();
+                } else {
+                    self.delete_select();
+                }
+                self.check_valid(true);
+            }
+            Command::DEL_WORD => {
+                // kbCtrlDel — delete to the next word.
+                if self.sel_start == self.sel_end {
+                    self.sel_start = self.cur_pos;
+                    self.sel_end = next_word(&self.data, self.cur_pos);
+                }
+                self.delete_select();
+                self.check_valid(true);
+            }
+            Command::INS_MODE => {
+                // C++ setState(sfCursorIns, !(state & sfCursorIns)). sfCursorIns
+                // is NOT a propagating StateFlag, so flip it directly on ViewState.
+                self.state.state.cursor_ins = !self.state.state.cursor_ins;
+            }
+            Command::DEL_LINE => {
+                // Ctrl-Y clears the field (the C++ default's else-if).
+                self.data.clear();
+                self.cur_pos = 0;
+            }
+            Command::SELECT_ALL => {
+                self.sel_start = 0;
+                self.sel_end = self.data.len() as i32;
+                self.cur_pos = self.data.len() as i32;
+            }
+            Command::CUT => {
+                self.do_cut(ctx);
+                return true;
+            }
+            Command::COPY => {
+                self.do_copy(ctx);
+                return true;
+            }
+            Command::PASTE => {
+                self.do_paste(ctx);
+                return true;
+            }
+            _ => return false, // outside the single-line repertoire → bubble
+        }
+        true
+    }
 }
 
 /// `prevWord` (`tinputli.cpp`) — the byte offset of the start of the word before
@@ -701,14 +819,24 @@ impl View for InputLine {
             // -- Keyboard --------------------------------------------------
             Event::KeyDown(ke) => {
                 self.save_state();
-                let ke = ctrl_to_arrow(*ke);
+                let shift = ke.modifiers.shift;
+                let stroke = KeyStroke::from_event(*ke);
+                let cmd = match keymap::resolve_global(None, stroke) {
+                    Resolve::Command(c) => Some(c),
+                    // A `Prefix` (input fields use no 2-key chords) or `None` both
+                    // fall through to the printable/bubble path.
+                    _ => None,
+                };
 
-                // Shift-extend applies to the genuine pad keys (Home/End/Left/
-                // Right) with Shift held. ctrl_to_arrow cleared modifiers on the
-                // Ctrl-letter remaps, so a remapped key never carries Shift — only
-                // a literal Shift+arrow/Home/End reaches here.
-                let is_pad = matches!(ke.key, Key::Home | Key::End | Key::Left | Key::Right);
-                let extend_block = is_pad && ke.modifiers.shift;
+                // Shift-extend applies only to movement commands with Shift held.
+                let is_move = matches!(cmd, Some(c) if
+                    c == Command::CHAR_LEFT
+                        || c == Command::CHAR_RIGHT
+                        || c == Command::WORD_LEFT
+                        || c == Command::WORD_RIGHT
+                        || c == Command::LINE_START
+                        || c == Command::LINE_END);
+                let extend_block = is_move && shift;
                 if extend_block {
                     if self.cur_pos == self.sel_end {
                         self.anchor = self.sel_start;
@@ -719,107 +847,56 @@ impl View for InputLine {
                     }
                 }
 
-                // Distinguish Ctrl-Left/Right (word nav) from plain Left/Right.
-                let ctrl = ke.modifiers.ctrl;
-                let mut handled = true;
-                match ke.key {
-                    Key::Left if ctrl => self.cur_pos = prev_word(&self.data, self.cur_pos),
-                    Key::Right if ctrl => self.cur_pos = next_word(&self.data, self.cur_pos),
-                    Key::Left => {
-                        self.cur_pos -= text::prev(&self.data, self.cur_pos as usize) as i32
-                    }
-                    Key::Right => {
-                        let cp = self.cur_pos as usize;
-                        let step = text::next(&self.data[cp..]).map(|(l, _)| l).unwrap_or(0);
-                        self.cur_pos += step as i32;
-                    }
-                    Key::Home => self.cur_pos = 0,
-                    Key::End => self.cur_pos = self.data.len() as i32,
-                    Key::Backspace if ctrl => {
-                        // kbCtrlBack / kbAltBack — delete the previous word.
-                        if self.sel_start == self.sel_end {
-                            self.sel_start = prev_word(&self.data, self.cur_pos);
-                            self.sel_end = self.cur_pos;
-                        }
-                        self.delete_select();
-                        self.check_valid(true);
-                    }
-                    Key::Backspace => {
-                        if self.sel_start == self.sel_end {
-                            self.sel_start =
-                                self.cur_pos - text::prev(&self.data, self.cur_pos as usize) as i32;
-                            self.sel_end = self.cur_pos;
-                        }
-                        self.delete_select();
-                        self.check_valid(true);
-                    }
-                    Key::Delete if ctrl => {
-                        // kbCtrlDel — delete to the next word.
-                        if self.sel_start == self.sel_end {
-                            self.sel_start = self.cur_pos;
-                            self.sel_end = next_word(&self.data, self.cur_pos);
-                        }
-                        self.delete_select();
-                        self.check_valid(true);
-                    }
-                    Key::Delete => {
-                        if self.sel_start == self.sel_end {
-                            self.delete_current();
-                        } else {
-                            self.delete_select();
-                        }
-                        self.check_valid(true);
-                    }
-                    Key::Insert => {
-                        // C++ setState(sfCursorIns, !(state & sfCursorIns)). sfCursorIns
-                        // is NOT a propagating StateFlag (it has no broadcast/selectAll
-                        // side effect — see view.rs StateFlag docs), so flip it directly
-                        // on ViewState; this matches the C++ setState's only effect for
-                        // sfCursorIns (toggling the cursor shape).
-                        self.state.state.cursor_ins = !self.state.state.cursor_ins;
-                    }
-                    Key::Char(c) if ctrl && c.eq_ignore_ascii_case(&CONTROL_Y) => {
-                        // Ctrl-Y clears the field (handled in the C++ default's
-                        // else-if). ctrl_to_arrow leaves Ctrl-Y unchanged.
-                        self.data.clear();
-                        self.cur_pos = 0;
-                    }
-                    Key::Char(c) if !ctrl && !ke.modifiers.alt => {
-                        // Printable insertion. Tabs/newlines → space (faithful).
-                        let ch = if c == '\t' || c == '\r' || c == '\n' {
-                            ' '
-                        } else {
-                            c
-                        };
-                        let mut key_text = [0u8; 4];
-                        let key_text = ch.encode_utf8(&mut key_text);
-                        let len = key_text.len() as i32;
+                // SELECT_ALL establishes a selection that the post-dispatch tail
+                // (which clears the selection on any non-extend movement) must NOT
+                // wipe. It is the only repertoire command whose effect IS the
+                // selection, so it bypasses the tail's reset.
+                let keep_selection = cmd == Some(Command::SELECT_ALL);
 
-                        self.delete_select();
-                        if self.state.state.cursor_ins {
-                            self.delete_current();
-                        }
-                        if self.check_valid(true) {
-                            let data_m = text::measure(&self.data);
-                            let key_m = text::measure(key_text);
-                            if self.data.len() as i32 + len <= self.max_len
-                                && (data_m.width + key_m.width) as i32 <= self.max_width
-                                && (data_m.grapheme_count + key_m.grapheme_count) as i32
-                                    <= self.max_chars
-                            {
-                                // firstPos is a column; pull it back to the cursor
-                                // column if the cursor scrolled off the left.
-                                let cur_col = self.displayed_pos(self.cur_pos);
-                                if self.first_pos > cur_col {
-                                    self.first_pos = cur_col;
+                let mut handled = true;
+                match cmd {
+                    Some(c) => handled = self.apply_input_command(c, ctx),
+                    None => {
+                        // Printable insertion: only a plain Char with no ctrl/alt.
+                        match ke.key {
+                            Key::Char(c) if !ke.modifiers.ctrl && !ke.modifiers.alt => {
+                                // Printable insertion. Tabs/newlines → space (faithful).
+                                let ch = if c == '\t' || c == '\r' || c == '\n' {
+                                    ' '
+                                } else {
+                                    c
+                                };
+                                let mut key_text = [0u8; 4];
+                                let key_text = ch.encode_utf8(&mut key_text);
+                                let len = key_text.len() as i32;
+
+                                self.delete_select();
+                                if self.state.state.cursor_ins {
+                                    self.delete_current();
                                 }
-                                self.data.insert_str(self.cur_pos as usize, key_text);
-                                self.cur_pos += len;
+                                if self.check_valid(true) {
+                                    let data_m = text::measure(&self.data);
+                                    let key_m = text::measure(key_text);
+                                    if self.data.len() as i32 + len <= self.max_len
+                                        && (data_m.width + key_m.width) as i32 <= self.max_width
+                                        && (data_m.grapheme_count + key_m.grapheme_count) as i32
+                                            <= self.max_chars
+                                    {
+                                        // firstPos is a column; pull it back to the cursor
+                                        // column if the cursor scrolled off the left.
+                                        let cur_col = self.displayed_pos(self.cur_pos);
+                                        if self.first_pos > cur_col {
+                                            self.first_pos = cur_col;
+                                        }
+                                        self.data.insert_str(self.cur_pos as usize, key_text);
+                                        self.cur_pos += len;
+                                    }
+                                    self.check_valid(false);
+                                }
                             }
-                            self.check_valid(false);
+                            _ => handled = false,
                         }
                     }
-                    _ => handled = false,
                 }
 
                 if !handled {
@@ -831,7 +908,7 @@ impl View for InputLine {
 
                 if extend_block {
                     self.adjust_select_block();
-                } else {
+                } else if !keep_selection {
                     self.sel_start = 0;
                     self.sel_end = 0;
                 }
@@ -855,50 +932,22 @@ impl View for InputLine {
             // handleEvent already returns if !selected, so this arm is always
             // inside the selected block).
             Event::Command(cmd) => {
+                // Only CUT/COPY/PASTE are handled via the command channel — the
+                // input line must NOT newly react to movement/select commands that
+                // arrive here (the keymap-driven repertoire applies to KeyDown).
+                // C++ always calls clearEvent for these regardless of whether a
+                // selection exists; the clipboard operation is guarded inside each.
                 match *cmd {
-                    // B3: cmCut — copy selection to clipboard, then delete it.
-                    // C++: `TStringView sel(data+selStart, selEnd-selStart);
-                    //        TClipboard::setText(sel); saveState();
-                    //        deleteSelect(); checkValid(True);
-                    //        selStart = selEnd = 0; drawView()`.
-                    // C++ always calls clearEvent regardless of whether a selection
-                    // exists; the clipboard operation is guarded by the selection test.
                     Command::CUT => {
-                        if self.sel_start < self.sel_end {
-                            let sel = self.data[self.sel_start as usize..self.sel_end as usize]
-                                .to_string();
-                            ctx.set_clipboard(sel);
-                            self.save_state();
-                            self.delete_select();
-                            self.check_valid(true);
-                            self.sel_start = 0;
-                            self.sel_end = 0;
-                            self.sync_cursor();
-                        }
+                        self.do_cut(ctx);
                         ev.clear();
                     }
-                    // B3: cmCopy — copy selection to clipboard, keep it.
-                    // C++: `TStringView sel(data+selStart, selEnd-selStart);
-                    //        TClipboard::setText(sel)`.
-                    // C++ always calls clearEvent regardless of whether a selection
-                    // exists; the clipboard operation is guarded by the selection test.
                     Command::COPY => {
-                        if self.sel_start < self.sel_end {
-                            let sel = self.data[self.sel_start as usize..self.sel_end as usize]
-                                .to_string();
-                            ctx.set_clipboard(sel);
-                        }
+                        self.do_copy(ctx);
                         ev.clear();
                     }
-                    // B3: cmPaste — request async paste via the broker
-                    // (Deferred::InputLinePaste, mirroring EditorPaste). The pump
-                    // reads the backend clipboard and inserts at the cursor,
-                    // replacing any selection and clamping to max_len.
-                    // C++: `TClipboard::requestText()`.
                     Command::PASTE => {
-                        if let Some(id) = self.state.id() {
-                            ctx.request_input_line_paste(id);
-                        }
+                        self.do_paste(ctx);
                         ev.clear();
                     }
                     _ => {}
@@ -2152,5 +2201,69 @@ mod tests {
                 .any(|d| matches!(d, Deferred::SetClipboard(_))),
             "no SetClipboard when no selection"
         );
+    }
+
+    // -- Phase 3: global-keymap dispatch ------------------------------------
+
+    /// Regression: under the default (WordStar) preset the field's editing keys
+    /// still work — plain Backspace deletes, Home moves to start.
+    #[test]
+    fn keymap_default_backspace_and_nav_still_work() {
+        let mut il = field(12, "abc"); // cursor at end (3)
+        let mut ev = key(Key::Backspace);
+        send_key(&mut il, &mut ev);
+        assert_eq!(il.data, "ab");
+        let mut ev = key(Key::Home);
+        send_key(&mut il, &mut ev);
+        assert_eq!(il.cur_pos, 0);
+    }
+
+    /// Under the CUA preset, Ctrl-A selects all and Ctrl-C copies the selection
+    /// to the clipboard (via the SetClipboard deferred, like the existing
+    /// copy/cut tests).
+    #[test]
+    fn cua_ctrl_c_copies_in_input_line() {
+        let _g = crate::keymap::GlobalKeymapGuard::new(crate::keymap::Keymap::cua());
+        let mut il = field(12, "hello");
+        il.state.state.active = true;
+
+        // Ctrl-A → SELECT_ALL.
+        let mut ev = ctrl_key(Key::Char('a'));
+        send_key(&mut il, &mut ev);
+        assert_eq!(il.sel_start, 0);
+        assert_eq!(il.sel_end, 5);
+
+        // Ctrl-C → COPY: the selection text lands on the clipboard.
+        let mut ev = ctrl_key(Key::Char('c'));
+        let (_, deferred, ()) = with_ctx_d(|ctx| il.handle_event(&mut ev, ctx));
+        let clipboard_text = deferred.iter().find_map(|d| {
+            if let Deferred::SetClipboard(s) = d {
+                Some(s.as_str())
+            } else {
+                None
+            }
+        });
+        assert_eq!(clipboard_text, Some("hello"));
+    }
+
+    /// Under every preset, plain Enter resolves to NEW_LINE — outside the
+    /// single-line repertoire — so it must remain LIVE/unhandled and bubble to
+    /// the dialog (default-button / focus / cancel routing).
+    #[test]
+    fn enter_tab_esc_bubble_under_every_preset() {
+        for preset in [
+            crate::keymap::Keymap::word_star(),
+            crate::keymap::Keymap::cua(),
+            crate::keymap::Keymap::emacs(),
+        ] {
+            let _g = crate::keymap::GlobalKeymapGuard::new(preset);
+            let mut il = field(12, "x");
+            let mut ev = key(Key::Enter);
+            send_key(&mut il, &mut ev);
+            assert!(
+                matches!(ev, Event::KeyDown(_)),
+                "Enter must remain live (bubble) under the active preset"
+            );
+        }
     }
 }
