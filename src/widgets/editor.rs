@@ -66,6 +66,7 @@
 //! * Internal-clipboard **TEditor branch** (`insertFrom`) — row 69.
 //! * `TStreamable` (D12).
 
+use crate::keymap::{self, KeyStroke, Resolve};
 use crate::theme::Role;
 use crate::view::{
     Context, DrawCtx, GrowMode, Options, Point, Rect, StateFlag, View, ViewId, ViewState,
@@ -405,8 +406,8 @@ pub struct Editor {
     lock_count: u8,
     /// `updateFlags` — pending `uf*` redraw flags.
     update_flags: u8,
-    /// `keyState` — the two-key prefix machine (0 = none, 1 = Ctrl-Q, 2 = Ctrl-K).
-    key_state: i32,
+    /// `keyState` — the pending first stroke of a two-key chord, if any.
+    pending: Option<KeyStroke>,
     /// `lineEndingType`.
     line_ending: LineEnding,
     /// `encoding`.
@@ -495,7 +496,7 @@ impl Editor {
             auto_indent: true,
             lock_count: 0,
             update_flags: 0,
-            key_state: 0,
+            pending: None,
             line_ending: DEFAULT_LINE_ENDING,
             encoding: Encoding::Default,
             h_scroll_bar,
@@ -2231,129 +2232,24 @@ impl View for Editor {
 
 impl Editor {
     /// `convertEvent` — translate a `KeyDown` into a `Command` (or a cleared
-    /// prefix), honoring the Ctrl-K / Ctrl-Q two-key prefix machine.
+    /// prefix), routing through the process-global keymap.
     fn convert_event(&mut self, ev: &mut crate::event::Event) {
         use crate::event::Event;
         if let Event::KeyDown(k) = ev {
-            let k = *k;
-            // shift+arrow charCode-zeroing: a no-op in our model (shift+arrow is a
-            // non-Char Key, never insertable). TODO(row 66): charScan.scanCode
-            // zeroing not representable; the simple path is already correct.
-            let cmd = self.scan_key_map(self.key_state, k);
-            self.key_state = 0;
-            match cmd {
-                KeyMapResult::Prefix(state) => {
-                    self.key_state = state;
+            let stroke = KeyStroke::from_event(*k);
+            let pending = self.pending.take();
+            match keymap::resolve_global(pending, stroke) {
+                Resolve::Prefix => {
+                    self.pending = Some(stroke);
                     ev.clear();
                 }
-                KeyMapResult::Command(c) => {
+                Resolve::Command(c) => {
                     *ev = Event::Command(c);
                 }
-                KeyMapResult::None => {
-                    // Leave the event unchanged (an insertable char, or unhandled).
+                Resolve::None => {
+                    // Insertable char or unhandled — leave the event unchanged.
                 }
             }
-        }
-    }
-
-    /// `scanKeyMap` — resolve `key` against the keymap for `key_state`.
-    fn scan_key_map(&self, key_state: i32, k: crate::event::KeyEvent) -> KeyMapResult {
-        use crate::command::Command;
-        use crate::event::Key;
-
-        match key_state {
-            0 => {
-                // firstKeys table. Two-key prefixes: Ctrl-Q → state 1, Ctrl-K → 2.
-                if k.modifiers.ctrl
-                    && let Key::Char(c) = k.key
-                {
-                    let lc = c.to_ascii_lowercase();
-                    return match lc {
-                        'a' => KeyMapResult::Command(Command::SELECT_ALL),
-                        'c' => KeyMapResult::Command(Command::PAGE_DOWN),
-                        'd' => KeyMapResult::Command(Command::CHAR_RIGHT),
-                        'e' => KeyMapResult::Command(Command::LINE_UP),
-                        'f' => KeyMapResult::Command(Command::WORD_RIGHT),
-                        'g' => KeyMapResult::Command(Command::DEL_CHAR),
-                        'h' => KeyMapResult::Command(Command::BACK_SPACE),
-                        'k' => KeyMapResult::Prefix(2),
-                        'l' => KeyMapResult::Command(Command::SEARCH_AGAIN),
-                        'm' => KeyMapResult::Command(Command::NEW_LINE),
-                        'o' => KeyMapResult::Command(Command::INDENT_MODE),
-                        'p' => KeyMapResult::Command(Command::ENCODING),
-                        'q' => KeyMapResult::Prefix(1),
-                        'r' => KeyMapResult::Command(Command::PAGE_UP),
-                        's' => KeyMapResult::Command(Command::CHAR_LEFT),
-                        't' => KeyMapResult::Command(Command::DEL_WORD),
-                        'u' => KeyMapResult::Command(Command::UNDO),
-                        'v' => KeyMapResult::Command(Command::INS_MODE),
-                        'x' => KeyMapResult::Command(Command::LINE_DOWN),
-                        'y' => KeyMapResult::Command(Command::DEL_LINE),
-                        _ => KeyMapResult::None,
-                    };
-                }
-                // Named keys + their Ctrl/Shift variants.
-                match (k.key, k.modifiers.ctrl, k.modifiers.shift, k.modifiers.alt) {
-                    (Key::Left, false, _, false) => KeyMapResult::Command(Command::CHAR_LEFT),
-                    (Key::Right, false, _, false) => KeyMapResult::Command(Command::CHAR_RIGHT),
-                    (Key::Backspace, _, _, true) => KeyMapResult::Command(Command::DEL_WORD_LEFT),
-                    (Key::Backspace, true, _, _) => KeyMapResult::Command(Command::DEL_WORD_LEFT),
-                    // Ctrl-Del → cmDelWord: firstKeys lists `kbCtrlDel, cmDelWord`
-                    // (teditor1.cpp:71) BEFORE the dead `kbCtrlDel, cmClear` (:87),
-                    // and scanKeyMap returns the FIRST match. So cmClear is
-                    // unreachable from the keyboard — faithful.
-                    (Key::Delete, true, _, _) => KeyMapResult::Command(Command::DEL_WORD),
-                    (Key::Left, true, _, _) => KeyMapResult::Command(Command::WORD_LEFT),
-                    (Key::Right, true, _, _) => KeyMapResult::Command(Command::WORD_RIGHT),
-                    (Key::Home, false, _, _) => KeyMapResult::Command(Command::LINE_START),
-                    (Key::End, false, _, _) => KeyMapResult::Command(Command::LINE_END),
-                    (Key::Up, false, _, _) => KeyMapResult::Command(Command::LINE_UP),
-                    (Key::Down, false, _, _) => KeyMapResult::Command(Command::LINE_DOWN),
-                    (Key::PageUp, false, _, _) => KeyMapResult::Command(Command::PAGE_UP),
-                    (Key::PageDown, false, _, _) => KeyMapResult::Command(Command::PAGE_DOWN),
-                    (Key::Home, true, _, _) => KeyMapResult::Command(Command::TEXT_START),
-                    (Key::End, true, _, _) => KeyMapResult::Command(Command::TEXT_END),
-                    (Key::Insert, false, false, false) => KeyMapResult::Command(Command::INS_MODE),
-                    (Key::Delete, false, false, false) => KeyMapResult::Command(Command::DEL_CHAR),
-                    (Key::Insert, false, true, false) => KeyMapResult::Command(Command::PASTE),
-                    (Key::Delete, false, true, false) => KeyMapResult::Command(Command::CUT),
-                    (Key::Insert, true, false, false) => KeyMapResult::Command(Command::COPY),
-                    (Key::Enter, _, _, _) => KeyMapResult::Command(Command::NEW_LINE),
-                    _ => KeyMapResult::None,
-                }
-            }
-            1 => {
-                // quickKeys (Ctrl-Q prefix). Second key normalized to uppercase.
-                if let Key::Char(c) = k.key {
-                    return match c.to_ascii_uppercase() {
-                        'A' => KeyMapResult::Command(Command::REPLACE),
-                        'C' => KeyMapResult::Command(Command::TEXT_END),
-                        'D' => KeyMapResult::Command(Command::LINE_END),
-                        'F' => KeyMapResult::Command(Command::FIND),
-                        'H' => KeyMapResult::Command(Command::DEL_START),
-                        'R' => KeyMapResult::Command(Command::TEXT_START),
-                        'S' => KeyMapResult::Command(Command::LINE_START),
-                        'Y' => KeyMapResult::Command(Command::DEL_END),
-                        _ => KeyMapResult::None,
-                    };
-                }
-                KeyMapResult::None
-            }
-            2 => {
-                // blockKeys (Ctrl-K prefix).
-                if let Key::Char(c) = k.key {
-                    return match c.to_ascii_uppercase() {
-                        'B' => KeyMapResult::Command(Command::START_SELECT),
-                        'C' => KeyMapResult::Command(Command::PASTE),
-                        'H' => KeyMapResult::Command(Command::HIDE_SELECT),
-                        'K' => KeyMapResult::Command(Command::COPY),
-                        'Y' => KeyMapResult::Command(Command::CUT),
-                        _ => KeyMapResult::None,
-                    };
-                }
-                KeyMapResult::None
-            }
-            _ => KeyMapResult::None,
         }
     }
 
@@ -2433,16 +2329,6 @@ impl Editor {
         }
         true
     }
-}
-
-/// The result of resolving a key against the keymap (`scanKeyMap`'s return).
-enum KeyMapResult {
-    /// A resolved editor command.
-    Command(crate::command::Command),
-    /// A two-key prefix was started; the value is the new `key_state`.
-    Prefix(i32),
-    /// No mapping — the event is left unchanged (an insertable char or unhandled).
-    None,
 }
 
 // ---------------------------------------------------------------------------
@@ -3406,69 +3292,51 @@ mod tests {
 
     #[test]
     fn keymap_arrows_and_named() {
-        let e = ed();
         use crate::event::Key;
-        assert!(matches!(
-            e.scan_key_map(0, key(Key::Left)),
-            KeyMapResult::Command(c) if c == Command::CHAR_LEFT
-        ));
-        assert!(matches!(
-            e.scan_key_map(0, key(Key::Home)),
-            KeyMapResult::Command(c) if c == Command::LINE_START
-        ));
-        assert!(matches!(
-            e.scan_key_map(0, key(Key::PageDown)),
-            KeyMapResult::Command(c) if c == Command::PAGE_DOWN
-        ));
-        assert!(matches!(
-            e.scan_key_map(0, key(Key::Enter)),
-            KeyMapResult::Command(c) if c == Command::NEW_LINE
-        ));
-        assert!(matches!(
-            e.scan_key_map(0, key(Key::Delete)),
-            KeyMapResult::Command(c) if c == Command::DEL_CHAR
-        ));
+        use crate::keymap::{KeyStroke, Resolve, resolve_global};
+        let r = |k| resolve_global(None, KeyStroke::from_event(key(k)));
+        assert!(matches!(r(Key::Left),     Resolve::Command(c) if c == Command::CHAR_LEFT));
+        assert!(matches!(r(Key::Home),     Resolve::Command(c) if c == Command::LINE_START));
+        assert!(matches!(r(Key::PageDown), Resolve::Command(c) if c == Command::PAGE_DOWN));
+        assert!(matches!(r(Key::Enter),    Resolve::Command(c) if c == Command::NEW_LINE));
+        assert!(matches!(r(Key::Delete),   Resolve::Command(c) if c == Command::DEL_CHAR));
     }
 
     #[test]
     fn keymap_ctrl_letters() {
-        let e = ed();
-        assert!(matches!(
-            e.scan_key_map(0, ctrl('s')),
-            KeyMapResult::Command(c) if c == Command::CHAR_LEFT
-        ));
-        assert!(matches!(
-            e.scan_key_map(0, ctrl('y')),
-            KeyMapResult::Command(c) if c == Command::DEL_LINE
-        ));
-        assert!(matches!(
-            e.scan_key_map(0, ctrl('u')),
-            KeyMapResult::Command(c) if c == Command::UNDO
-        ));
+        use crate::keymap::{KeyStroke, Resolve, resolve_global};
+        let r = |ke| resolve_global(None, KeyStroke::from_event(ke));
+        assert!(matches!(r(ctrl('s')), Resolve::Command(c) if c == Command::CHAR_LEFT));
+        assert!(matches!(r(ctrl('y')), Resolve::Command(c) if c == Command::DEL_LINE));
+        assert!(matches!(r(ctrl('u')), Resolve::Command(c) if c == Command::UNDO));
     }
 
     #[test]
     fn keymap_two_key_prefixes() {
-        let e = ed();
-        // Ctrl-Q → prefix state 1.
+        use crate::event::Key;
+        use crate::keymap::{KeyStroke, Resolve, resolve_global};
+        let ks = |ke| KeyStroke::from_event(ke);
+        // Ctrl-Q → prefix.
         assert!(matches!(
-            e.scan_key_map(0, ctrl('q')),
-            KeyMapResult::Prefix(1)
+            resolve_global(None, ks(ctrl('q'))),
+            Resolve::Prefix
         ));
-        // Ctrl-K → prefix state 2.
+        // Ctrl-K → prefix.
         assert!(matches!(
-            e.scan_key_map(0, ctrl('k')),
-            KeyMapResult::Prefix(2)
+            resolve_global(None, ks(ctrl('k'))),
+            Resolve::Prefix
         ));
-        // In state 1, 'F' → cmFind.
+        // Ctrl-Q then 'f' → FIND.
+        let q = ks(ctrl('q'));
         assert!(matches!(
-            e.scan_key_map(1, key(crate::event::Key::Char('f'))),
-            KeyMapResult::Command(c) if c == Command::FIND
+            resolve_global(Some(q), ks(key(Key::Char('f')))),
+            Resolve::Command(c) if c == Command::FIND
         ));
-        // In state 2, 'B' → cmStartSelect.
+        // Ctrl-K then 'b' → START_SELECT.
+        let k = ks(ctrl('k'));
         assert!(matches!(
-            e.scan_key_map(2, key(crate::event::Key::Char('b'))),
-            KeyMapResult::Command(c) if c == Command::START_SELECT
+            resolve_global(Some(k), ks(key(Key::Char('b')))),
+            Resolve::Command(c) if c == Command::START_SELECT
         ));
     }
 
@@ -3479,12 +3347,34 @@ mod tests {
         let mut ev = Event::KeyDown(ctrl('k'));
         e.convert_event(&mut ev);
         assert!(ev.is_nothing(), "prefix key is cleared");
-        assert_eq!(e.key_state, 2);
+        assert!(e.pending.is_some(), "pending stroke stored");
         // The next 'b' resolves to cmStartSelect.
         let mut ev2 = Event::KeyDown(key(crate::event::Key::Char('b')));
         e.convert_event(&mut ev2);
         assert_eq!(ev2, Event::Command(Command::START_SELECT));
-        assert_eq!(e.key_state, 0, "prefix consumed");
+        assert!(e.pending.is_none(), "prefix consumed");
+    }
+
+    /// Regression: plain Backspace must delete the character to the left.
+    /// The WordStar default (seeded in Phase 1) binds `backspace → BACK_SPACE`,
+    /// so this test needs no `set_global`.  Before the Phase 2 refactor,
+    /// plain Backspace had no arm in `scan_key_map` and was a no-op.
+    #[test]
+    fn plain_backspace_deletes_char_left() {
+        let mut e = ed();
+        insert(&mut e, "ab");
+        let mut cx = Cx::new();
+        let mut ev = Event::KeyDown(crate::event::KeyEvent::from(crate::event::Key::Backspace));
+        {
+            let mut ctx = cx.ctx();
+            e.handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(
+            text(&e),
+            "a",
+            "plain Backspace must delete the char to the left"
+        );
+        check_invariant(&e);
     }
 
     // -- handle_event end-to-end (a typed char) ------------------------------
