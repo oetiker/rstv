@@ -25,8 +25,12 @@ and an API reference in another.
 2. **Custom-view authors** — users who need to extend the framework with new
    views; served by a dedicated architecture/internals part.
 
+A C++ Turbo Vision veteran is a **cross-cutting lens**, not a third audience: a
+dedicated part (Part II) explains the ideas behind the idiomatic port for readers
+arriving with that background.
+
 **Not** a primary audience: porting contributors. The existing `docs/` already
-serve them; the new docs only *point* there (Part IV).
+serve them; the new docs only *point* there (Part V).
 
 ---
 
@@ -158,9 +162,38 @@ CI invokes the same `cargo xtask docs` to build + link-check + deploy.
 - **Your first app** — desktop + menu bar + status line (the `hello` example),
   with a colored screenshot; code pulled from `examples/hello.rs`.
 - **The application skeleton** — `Application`/`Program` and the run loop at a
-  glance (high level; depth is Part III).
+  glance (high level; depth is Part IV).
 
-### Part II · Building Apps
+### Part II · The Idiomatic Port — for Turbo Vision veterans
+*Optional for newcomers; if you know C++ Turbo Vision, read this next. This is the
+**narrative behind the deviations** — the *ideas* that turned the C++ class
+library into idiomatic Rust. The formal deviation list is D1–D13 in
+`docs/PORTING-GUIDE.md`; the terse C++→Rust symbol lookup is in Part V. Each topic
+links forward to Part IV (How It Works) for the runtime mechanics and to the
+rustdoc.*
+- **What "faithful" means** — behavior is ported verbatim; the *only* intentional
+  departures are the pre-decided D1–D13. Why a faithful port at all.
+- **Inheritance → trait + composition** — the `TView` class hierarchy becomes the
+  `View` trait + `ViewState` composition; `#[delegate]` embed-and-delegate (D2).
+- **Pointers & `infoPtr` → handles** — raw `TView*` becomes `ViewId` handles
+  resolved through a downward-borrowed `Context` (D3).
+- **Events → `enum Event` + match** (D4), including `Event::Broadcast`.
+- **Flag words → struct-of-bools** — `ofXxx`/`sfXxx`/`bfXxx` bitmasks become named
+  boolean fields (D5).
+- **Constant families → open newtypes** — `cmXxx`/`hcXxx` become namespaced
+  `&'static str` consts (`Command::OK`); newtype-vs-enum chosen by extensibility.
+- **Palettes & glyph tables → `Theme`/`Role`** — the index-into-palette scheme
+  becomes a typed theme.
+- **The draw model → whole-tree redraw + diff** — no damage tracking; a
+  back-buffer diff replaces it.
+- **Modal `execView` → one loop + capture stack** — nested modal loops collapse
+  into a single event loop with a capture stack (D9).
+- **The `Deferred` channel** — effects a downward-borrowed `&mut View` can't
+  perform inline are deferred to the loop owner.
+- **Dropped/changed** — `TStreamable` dropped (serde if revived); coordinates stay
+  `i32`, faithful to magiblot's `int`.
+
+### Part III · Building Apps
 *Task recipes. Each topic = a screenshot + example-sourced code + a link into the
 rustdoc reference. Not a method-by-method dump.*
 - Windows & the desktop (z-order, tile/cascade)
@@ -173,7 +206,7 @@ rustdoc reference. Not a method-by-method dump.*
 - Theming & colors (`Theme`, `Role`)
 - Text editing (`Memo`, `FileEditor`, `Terminal`)
 
-### Part III · How It Works
+### Part IV · How It Works
 *Architecture, ending at the path to custom views.*
 - The view tree: `View` trait + `ViewState`
 - The event loop in depth (`pump_once`, the capture stack)
@@ -182,9 +215,10 @@ rustdoc reference. Not a method-by-method dump.*
 - Drawing: `DrawBuffer`/`Cell`, back-buffer diff, the `Backend` trait
 - **Writing your own View** (capstone) + delegation (`#[delegate]`)
 
-### Part IV · Reference
+### Part V · Reference
 - How the rustdoc API is organized (where per-component reference lives)
-- C++ Turbo Vision → tvision symbol map (for veterans)
+- C++ Turbo Vision → tvision symbol map — terse lookup table (the *narrative* is
+  Part II)
 - Deviations D1–D13 (summary + link to `docs/PORTING-GUIDE.md`)
 - The screenshot tooling (how to add/regenerate a screen)
 - Pointer to the internal porting docs (for contributors)
@@ -208,11 +242,12 @@ rustdoc reference. Not a method-by-method dump.*
 ## 8. Scope boundaries (YAGNI)
 
 **In scope:** the two-layer architecture; completing rustdoc gaps (theme) +
-doctests; the mdBook guide (outline above); the unified-site assembly + CI deploy;
-the tmux→Rust screenshot pipeline; the xtask tooling.
+doctests; the mdBook guide (outline above, including the Part II "idiomatic port"
+narrative for C++ veterans); the unified-site assembly + CI deploy; the
+tmux→Rust screenshot pipeline; the xtask tooling.
 
 **Out of scope:**
-- A separate porting-contributor track (existing `docs/` serve it; Part IV points
+- A separate porting-contributor track (existing `docs/` serve it; Part V points
   there).
 - A deeply-embedded auto-linking mdBook preprocessor.
 - PNG rasterization of screens.
@@ -229,5 +264,8 @@ the tmux→Rust screenshot pipeline; the xtask tooling.
 3. Every code snippet in the guide and every rustdoc doctest compiles in CI
    (`mdbook test` + `cargo test --doc`).
 4. `src/theme/` reaches parity with other modules' rustdoc coverage.
-5. A reader can follow Part III to implement a trivial custom `View` end to end.
-6. Guide ⇄ API cross-links resolve in both directions on the deployed site.
+5. A reader can follow Part IV to implement a trivial custom `View` end to end.
+6. A C++ Turbo Vision veteran can read Part II and understand the rationale for
+   each major deviation (inheritance→trait+composition, pointers→`ViewId`, flag
+   words→struct-of-bools, modal loops→single loop+capture, …).
+7. Guide ⇄ API cross-links resolve in both directions on the deployed site.
