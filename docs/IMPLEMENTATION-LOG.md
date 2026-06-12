@@ -5,6 +5,36 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Fix tvdemo file viewer scrolling + `ScrollBar::with_keyboard` (2026-06-12)
+
+Pre-existing bug (not keymap-related): tvdemo's read-only file viewer wouldn't
+scroll. Two stacked causes, both faithful-port gaps in the **example**:
+
+1. **Scrollbars lacked keyboard handling.** A `Scroller` scrolls when its
+   `ScrollBar` siblings handle keys, and a bar only receives keyboard events with
+   the `ofPostProcess` option — set by `standardScrollBar(... | sbHandleKeyboard)`
+   in C++. The rstv tvdemo built its bars with bare `ScrollBar::new(...)`,
+   dropping the flag. Fixed by using `Window::standard_scroll_bar(ScrollBarOptions
+   { handle_keyboard: true, .. })` faithfully (C++ `TFileWindow`/`TEventViewer`).
+2. **The viewer never published its scroll limit.** `FileViewer` only overrode
+   `draw`, never calling `set_limit`, so the scroller's `limit` stayed `(0,0)` →
+   bars had zero range (no keyboard *or* mouse scroll). Fixed by publishing the
+   content extent (longest line, line count) on the first `handle_event` (the
+   established "deferred ctor-work" pattern — the ctor has no `Context`), faithful
+   to C++ `TFileViewer::readFile` → `setLimit`.
+
+**Foundation:** added `ScrollBar::with_keyboard()` — a public builder that sets
+`post_process` so the lower-level `ScrollBar::new` path can opt into keyboard
+handling (previously only `Window::standard_scroll_bar` could). `standard_scroll_bar`
+now uses it (one source of truth). Closes the "bare constructor is a keyboard-deaf
+trap" gap. The API surface itself was already faithful (C++'s `options`/`ofPostProcess`
+is public; rstv's `state.options.post_process` is too) — the bug was the example
+bypassing the helper.
+
+Verified by driving tvdemo in tmux: Down/PageDown/End now scroll (vertical +
+horizontal), thumb tracks. Commits `ee26574`, `7980bd6`. 1177 lib tests green
+(incl. new `with_keyboard_sets_post_process`), clippy + fmt clean, zero snapshot drift.
+
 ## Configurable global keymap — WordStar/CUA/Emacs presets (2026-06-12)
 
 **Extension feature** (not a PORT-ORDER row): a data-driven, process-global
