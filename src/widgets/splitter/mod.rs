@@ -914,13 +914,23 @@ mod view_tests {
         outer.insert(Fill::boxed('T'), Constraints::fixed(8));
         outer.insert(Box::new(inner), Constraints::flex());
         let marks = outer.frame_junction_marks(frame_bounds);
-        assert!(
-            marks.iter().any(|m| m.edge == Edge::Right),
-            "inner horizontal divider must abut the right frame edge, got {marks:?}"
+        assert_eq!(
+            marks.len(),
+            3,
+            "outer top+bottom + inner right, got {marks:?}"
         );
         assert!(
-            marks.iter().filter(|m| m.edge == Edge::Top).count() == 1,
+            marks.iter().any(|m| m.edge == Edge::Right && m.offset == 3),
+            "inner horizontal divider abuts the right frame edge at offset 3, got {marks:?}"
+        );
+        assert_eq!(
+            marks.iter().filter(|m| m.edge == Edge::Top).count(),
+            1,
             "outer vertical divider abuts the top edge once"
+        );
+        assert!(
+            !marks.iter().any(|m| m.edge == Edge::Left),
+            "no spurious left mark, got {marks:?}"
         );
     }
 
