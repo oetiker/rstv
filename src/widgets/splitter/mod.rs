@@ -2,7 +2,7 @@ pub mod layout;
 
 use crate::capture::TrackMask;
 use crate::event::{Event, Key};
-use crate::junction::{Edge, JunctionMark, Weight};
+use crate::junction::{Edge, Junction, JunctionMark, Weight, divider_junction};
 use crate::theme::Role;
 use crate::view::{Context, DrawCtx, Group, Point, Rect, View, ViewId, ViewState};
 
@@ -498,6 +498,106 @@ impl Splitter {
             }
         }
     }
+
+    // -- interior crossings (Site 2) --------------------------------------------
+
+    /// Site 2 (rstv-original): overlay `├`/`┤`/`┴`/`┬` on this splitter's own
+    /// divider cells where a perpendicular pane sub-splitter's divider meets them.
+    /// `&mut self` because reaching a pane child to read its divider positions
+    /// needs `Group::child_mut` (the `&self draw_dividers` cannot do this). Reads
+    /// the child's positions into owned data (borrow released) before drawing on
+    /// this splitter's own cells via `ctx`.
+    fn draw_interior_crossings(&mut self, ctx: &mut DrawCtx) {
+        if self.slots.len() < 2 {
+            return; // no dividers of our own → nothing to cross
+        }
+        let b = self.group.state().get_bounds();
+        let weight = if self.reconfig.is_some() {
+            Weight::Double
+        } else {
+            Weight::Single
+        };
+        let ids = self.group.child_ids_in_order();
+        for (p, id) in ids.iter().enumerate() {
+            // Owned (sub bounds, perpendicular divider local positions) or None.
+            let info = self.group.child_mut(*id).and_then(|v| {
+                v.as_any_mut()
+                    .and_then(|a| a.downcast_mut::<Splitter>())
+                    .filter(|sub| sub.orientation != self.orientation)
+                    .map(|sub| {
+                        let cb = sub.group.state().get_bounds();
+                        let csizes = solve(&sub.slots, sub.content_len());
+                        let mut pos = Vec::new();
+                        let mut c = 0i32;
+                        for i in 0..sub.slots.len().saturating_sub(1) {
+                            c += csizes.get(i).copied().unwrap_or(0);
+                            let full = matches!(sub.style_of(i), DividerStyle::Line)
+                                || sub.reconfig.is_some();
+                            if full {
+                                pos.push(c);
+                            }
+                            c += 1;
+                        }
+                        (cb, pos)
+                    })
+            });
+            let Some((cb, perp)) = info else { continue };
+
+            let low = if p > 0 {
+                self.divider_axis_pos(p - 1)
+            } else {
+                None
+            };
+            let high = if p < self.slots.len() - 1 {
+                self.divider_axis_pos(p)
+            } else {
+                None
+            };
+
+            for d in &perp {
+                let (cross_local, branch_low, branch_high) = match self.orientation {
+                    // Cols outer: vertical dividers; sub is Rows (horizontal). The
+                    // crossing's cross-axis is the ROW.
+                    Orientation::Cols => {
+                        let row = (cb.a.y - b.a.y) + d;
+                        (row, Junction::TeeLeft, Junction::TeeRight)
+                    }
+                    // Rows outer: horizontal dividers; sub is Cols (vertical). The
+                    // crossing's cross-axis is the COLUMN.
+                    Orientation::Rows => {
+                        let col = (cb.a.x - b.a.x) + d;
+                        (col, Junction::TeeUp, Junction::TeeDown)
+                    }
+                };
+                // Sub on the HIGH side of the low divider → branch toward high.
+                if let Some(ld) = low {
+                    let glyph = divider_junction(branch_high, weight, ctx.glyphs());
+                    self.put_crossing(ctx, ld, cross_local, glyph);
+                }
+                // Sub on the LOW side of the high divider → branch toward low.
+                if let Some(hd) = high {
+                    let glyph = divider_junction(branch_low, weight, ctx.glyphs());
+                    self.put_crossing(ctx, hd, cross_local, glyph);
+                }
+            }
+        }
+    }
+
+    /// Overlay one crossing glyph at (outer-divider axis pos, cross-axis pos),
+    /// mapped to (x, y) by orientation. Local 0-based coords (same as `draw_dividers`).
+    fn put_crossing(&self, ctx: &mut DrawCtx, axis: i32, cross: i32, glyph: char) {
+        let role = if self.reconfig.is_some() {
+            Role::FrameDragging
+        } else {
+            Role::FramePassive
+        };
+        let st = ctx.style(role);
+        let (x, y) = match self.orientation {
+            Orientation::Cols => (axis, cross), // vertical divider: column=axis, row=cross
+            Orientation::Rows => (cross, axis), // horizontal divider: row=axis, column=cross
+        };
+        ctx.put_char(x, y, glyph, st);
+    }
 }
 
 #[crate::delegate(to = group)]
@@ -513,6 +613,7 @@ impl View for Splitter {
         self.abs_origin = ctx.origin();
         self.group.draw(ctx);
         self.draw_dividers(ctx);
+        self.draw_interior_crossings(ctx);
     }
 
     fn change_bounds(&mut self, bounds: Rect) {
@@ -930,6 +1031,22 @@ mod view_tests {
             !marks.iter().any(|m| m.edge == Edge::Left),
             "no spurious left mark, got {marks:?}"
         );
+    }
+
+    #[test]
+    fn interior_crossing_grid_renders_left_tee() {
+        // Outer cols: [tree(fixed 6) | inner-rows(flex)]. The inner rows splitter
+        // has a horizontal divider; where it meets the outer vertical divider, the
+        // outer divider cell must show ├ (a vertical line branching right into the
+        // inner pane), not a plain │.
+        let inner = Splitter::rows()
+            .pane(Fill::boxed('L'), Constraints::flex())
+            .pane(Fill::boxed('F'), Constraints::flex());
+        let mut outer = Splitter::cols();
+        outer.change_bounds(Rect::new(0, 0, 20, 7));
+        outer.insert(Fill::boxed('T'), Constraints::fixed(6));
+        outer.insert(Box::new(inner), Constraints::flex());
+        insta::assert_snapshot!(render(&mut outer, 20, 7));
     }
 
     #[test]

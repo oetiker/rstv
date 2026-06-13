@@ -1,0 +1,26 @@
+---
+source: src/widgets/splitter/mod.rs
+expression: "render(&mut outer, 20, 7)"
+---
+size: 20x7
+cursor: hidden
+text:
+|TTTTTT│       LLLLLL|
+|TTTTTT│       LLLLLL|
+|TTTTTT│       LLLLLL|
+|TTTTTT├─────────────|
+|TTTTTT│       FFFFFF|
+|TTTTTT│       FFFFFF|
+|TTTTTT│       FFFFFF|
+attr:
+|aaaaaab.......aaaaaa|
+|aaaaaab.......aaaaaa|
+|aaaaaab.......aaaaaa|
+|aaaaaabbbbbbbbbbbbbb|
+|aaaaaab.......aaaaaa|
+|aaaaaab.......aaaaaa|
+|aaaaaab.......aaaaaa|
+legend:
+  . default
+  a fg=RGB(0,0,0) bg=RGB(0,170,170)
+  b fg=RGB(170,170,170) bg=RGB(0,0,170)
