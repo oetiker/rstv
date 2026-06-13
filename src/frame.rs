@@ -194,10 +194,7 @@ impl Frame {
     /// frame (non-joined windows unchanged). Faithful re-expression of TV's
     /// `frameLine` tee-walk, fed by pushed data instead of a sideways sibling walk.
     ///
-    /// Called by `Window::with_joined_lines` (Task 3 of the splitter feature).
-    // The caller lives in the not-yet-landed Task 3; suppress the dead-code lint
-    // until that integration lands.
-    #[allow(dead_code)]
+    /// Called by `Window::draw` when the window opts into joined lines.
     pub(crate) fn set_junction_marks(&mut self, marks: Vec<JunctionMark>) {
         self.junction_marks = marks;
     }

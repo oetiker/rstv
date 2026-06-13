@@ -231,8 +231,6 @@ impl Splitter {
     /// self` because reaching a pane child to recurse needs `Group::child_mut`
     /// (the only child accessor `Group` exposes is `&mut`). The owning window
     /// already holds the `&mut Splitter`, so this is free there.
-    // caller lands in Task 5 (Window broker)
-    #[allow(dead_code)]
     pub(crate) fn frame_junction_marks(&mut self, frame_bounds: Rect) -> Vec<JunctionMark> {
         let mut out = Vec::new();
         self.collect_frame_marks(frame_bounds, &mut out);

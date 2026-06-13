@@ -4,7 +4,9 @@ use crate::capture::{CaptureFlow, CaptureHandler};
 use crate::command::Command;
 use crate::event::{Event, Key};
 use crate::frame::Frame;
-use crate::view::{Context, DragMode, Group, GrowMode, Point, Rect, StateFlag, View, ViewId};
+use crate::view::{
+    Context, DragMode, DrawCtx, Group, GrowMode, Point, Rect, StateFlag, View, ViewId,
+};
 use crate::widgets::ScrollBar;
 
 // ---------------------------------------------------------------------------
@@ -110,6 +112,10 @@ pub struct Window {
     palette: WindowPalette,
     /// The window title.
     title: Option<String>,
+    /// Opt-in: join the linework of an embedded splitter to this window's frame
+    /// (and the splitter's own dividers to each other). Default `false` — a plain
+    /// window is byte-for-byte unchanged. See [`with_joined_lines`](Window::with_joined_lines).
+    joined_lines: bool,
 }
 
 impl Window {
@@ -172,6 +178,7 @@ impl Window {
             number,
             palette: WindowPalette::Blue,
             title,
+            joined_lines: false,
         }
     }
 
@@ -205,6 +212,18 @@ impl Window {
     /// The window title.
     pub fn title(&self) -> Option<&str> {
         self.title.as_deref()
+    }
+
+    /// Opt this window into divider↔frame and divider↔divider line-joining for an
+    /// embedded [`Splitter`](crate::widgets::Splitter). Builder form.
+    pub fn with_joined_lines(mut self) -> Self {
+        self.joined_lines = true;
+        self
+    }
+
+    /// Setter form of [`with_joined_lines`](Window::with_joined_lines).
+    pub fn set_joined_lines(&mut self, on: bool) {
+        self.joined_lines = on;
     }
 
     /// Update the window title in both the `Window` record and the [`Frame`]
@@ -284,6 +303,43 @@ impl Window {
     /// without exposing the group itself.
     pub fn child_mut(&mut self, id: ViewId) -> Option<&mut dyn View> {
         self.group.child_mut(id)
+    }
+
+    /// The first non-frame child that downcasts to a [`Splitter`](crate::widgets::Splitter),
+    /// or `None`. Used by the joined-lines `draw` to read divider abutments.
+    fn interior_splitter_mut(&mut self) -> Option<&mut crate::widgets::Splitter> {
+        let frame_id = self.frame_id;
+        let ids: Vec<ViewId> = self
+            .group
+            .child_ids_in_order()
+            .into_iter()
+            .filter(|&id| id != frame_id)
+            .collect();
+        for id in ids {
+            // Probe first so the &mut borrow does not span the loop; re-borrow to return.
+            let is_splitter = self
+                .group
+                .child_mut(id)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<crate::widgets::Splitter>())
+                .is_some();
+            if is_splitter {
+                return self
+                    .group
+                    .child_mut(id)
+                    .and_then(|v| v.as_any_mut())
+                    .and_then(|a| a.downcast_mut::<crate::widgets::Splitter>());
+            }
+        }
+        None
+    }
+
+    /// The frame child, downcast to [`Frame`] — the same seam `zoom`/`set_flags` use.
+    fn frame_mut(&mut self) -> Option<&mut Frame> {
+        self.group
+            .child_mut(self.frame_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<Frame>())
     }
 
     /// Make `id` the current (focused) child of the embedded group, so focused
@@ -826,6 +882,26 @@ fn move_grow(
     value,
 ))]
 impl View for Window {
+    /// Default draw delegates to the embedded group. When `joined_lines` is set,
+    /// first read the divider abutment marks from the interior splitter child
+    /// (parent→child) and push them down to the frame child (owner-data-down), so
+    /// the frame composes connected tees. Both child borrows are sequential — the
+    /// marks `Vec` is cloned out between them, so only one `&mut` child is live at
+    /// a time. With the flag off, or no splitter child, this is identical to the
+    /// delegated draw.
+    fn draw(&mut self, ctx: &mut DrawCtx) {
+        if self.joined_lines {
+            let fb = self.group.state().get_extent();
+            let marks = self
+                .interior_splitter_mut()
+                .map(|s| s.frame_junction_marks(fb));
+            if let (Some(marks), Some(frame)) = (marks, self.frame_mut()) {
+                frame.set_junction_marks(marks);
+            }
+        }
+        self.group.draw(ctx);
+    }
+
     /// Delegate to the group first, then handle the window's own commands and the
     /// focus-cycling keys:
     ///
@@ -1826,6 +1902,118 @@ mod tests {
         assert!(
             frame_zoomed(&mut w),
             "locate to max rect pushes zoomed = true"
+        );
+    }
+
+    // -- 14. joined_lines: splitter divider tees joined into the frame ---------
+
+    /// A minimal fill view for splitter-pane snapshot tests.
+    fn plain_fill(ch: char) -> Box<dyn View> {
+        struct F(char, ViewState);
+        impl View for F {
+            fn state(&self) -> &ViewState {
+                &self.1
+            }
+            fn state_mut(&mut self) -> &mut ViewState {
+                &mut self.1
+            }
+            fn draw(&mut self, ctx: &mut DrawCtx) {
+                let b = self.1.get_bounds();
+                let (w, h) = (b.b.x - b.a.x, b.b.y - b.a.y);
+                ctx.fill(
+                    Rect::new(0, 0, w, h),
+                    self.0,
+                    ctx.style(crate::theme::Role::Normal),
+                );
+            }
+        }
+        Box::new(F(ch, ViewState::new(Rect::new(0, 0, 1, 1))))
+    }
+
+    #[test]
+    fn joined_lines_passive_frame_tees_top_and_bottom() {
+        use crate::widgets::{Constraints, Splitter};
+        let theme = Theme::classic_blue();
+        let mut win = Window::new(Rect::new(0, 0, 16, 6), None, 0).with_joined_lines();
+        let ext = win.state().get_extent();
+        let interior = Rect::new(1, 1, ext.b.x - 1, ext.b.y - 1);
+        let split = Splitter::cols()
+            .pane(plain_fill('A'), Constraints::flex())
+            .pane(plain_fill('B'), Constraints::flex());
+        let sid = win.insert_child(Box::new(split));
+        if let Some(v) = win.child_mut(sid) {
+            v.change_bounds(interior);
+        }
+        let (backend, screen) = HeadlessBackend::new(16, 6);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = win.state().get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            win.draw(&mut dc);
+        });
+        insta::assert_snapshot!(screen.snapshot());
+    }
+
+    #[test]
+    fn joined_lines_active_frame_uses_mixed_tees() {
+        use crate::widgets::{Constraints, Splitter};
+        let theme = Theme::classic_blue();
+        let mut win = Window::new(Rect::new(0, 0, 16, 6), None, 0).with_joined_lines();
+        let ext = win.state().get_extent();
+        let interior = Rect::new(1, 1, ext.b.x - 1, ext.b.y - 1);
+        let split = Splitter::cols()
+            .pane(plain_fill('A'), Constraints::flex())
+            .pane(plain_fill('B'), Constraints::flex());
+        let sid = win.insert_child(Box::new(split));
+        if let Some(v) = win.child_mut(sid) {
+            v.change_bounds(interior);
+        }
+        // Activate the frame CHILD directly so it draws its double-line box (the
+        // group's own active flag does not propagate to children without set_state).
+        let fid = win.frame_id();
+        if let Some(v) = win.child_mut(fid) {
+            v.state_mut().state.active = true;
+        }
+        let (backend, screen) = HeadlessBackend::new(16, 6);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = win.state().get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            win.draw(&mut dc);
+        });
+        insta::assert_snapshot!(screen.snapshot());
+    }
+
+    #[test]
+    fn without_flag_frame_is_plain() {
+        use crate::widgets::{Constraints, Splitter};
+        let theme = Theme::classic_blue();
+        let mut win = Window::new(Rect::new(0, 0, 16, 6), None, 0);
+        let ext = win.state().get_extent();
+        let interior = Rect::new(1, 1, ext.b.x - 1, ext.b.y - 1);
+        let split = Splitter::cols()
+            .pane(plain_fill('A'), Constraints::flex())
+            .pane(plain_fill('B'), Constraints::flex());
+        let sid = win.insert_child(Box::new(split));
+        if let Some(v) = win.child_mut(sid) {
+            v.change_bounds(interior);
+        }
+        let (backend, screen) = HeadlessBackend::new(16, 6);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = win.state().get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            win.draw(&mut dc);
+        });
+        let snap = screen.snapshot();
+        // The first interior row (the top frame edge) must contain no junction tee.
+        let top_edge = snap
+            .lines()
+            .find(|l| l.contains('┌') || l.contains('╔'))
+            .unwrap_or("");
+        assert!(
+            !top_edge.contains('┬') && !top_edge.contains('╤'),
+            "no tee without the flag: {top_edge:?}"
         );
     }
 }
