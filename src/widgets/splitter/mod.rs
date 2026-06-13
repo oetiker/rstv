@@ -430,6 +430,16 @@ impl View for Splitter {
         self.resolve_layout_local();
     }
 
+    /// Downcast seam: a parent (the owning window, or an outer splitter reaching a
+    /// pane sub-splitter) reaches this `Splitter` concretely via `child_mut` +
+    /// `as_any_mut` + `downcast_mut::<Splitter>()` — the same mechanism a window
+    /// uses to push data to its `Frame`. The `#[delegate(to = group)]` macro would
+    /// otherwise forward this to the inner `Group` (which returns `None`), so the
+    /// override body here is required; the macro auto-excludes it from forwarding.
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        Some(self)
+    }
+
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         match ev {
             Event::KeyDown(k) => {
@@ -756,5 +766,18 @@ mod view_tests {
         sp.change_bounds(Rect::new(0, 0, 13, 1));
         sp.enter_reconfig(); // a previously-hidden divider should now light up (double-line ║)
         insta::assert_snapshot!(render(&mut sp, 13, 1));
+    }
+
+    #[test]
+    fn splitter_downcasts_through_as_any_mut() {
+        let mut sp = Splitter::cols();
+        sp.change_bounds(Rect::new(0, 0, 13, 3));
+        sp.insert(Fill::boxed('A'), Constraints::flex());
+        sp.insert(Fill::boxed('B'), Constraints::flex());
+        let resolved = (&mut sp as &mut dyn View)
+            .as_any_mut()
+            .and_then(|a| a.downcast_mut::<Splitter>())
+            .is_some();
+        assert!(resolved, "Splitter must override as_any_mut → Some(self)");
     }
 }
