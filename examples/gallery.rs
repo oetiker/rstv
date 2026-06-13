@@ -15,8 +15,10 @@
 use std::{env, io};
 
 use tvision::{
-    Button, ButtonFlags, Command, CrosstermBackend, Desktop, Dialog, Key, KeyEvent, Menu, MenuBar,
-    Program, Rect, StatusDef, StatusLine, SystemClock, Theme, View, alt,
+    Button, ButtonFlags, CheckBoxes, Color, ColorPicker, Command, CrosstermBackend, Desktop,
+    Dialog, InputLine, Key, KeyEvent, Label, Memo, Menu, MenuBar, Program, RadioButtons, Rect,
+    ScrollBar, StaticText, StatusDef, StatusLine, SystemClock, THistory, Theme, View, alt,
+    history_add,
 };
 
 /// How a specimen is shown. Most widgets are leaf controls hosted in a dialog on
@@ -39,12 +41,36 @@ fn specimen(name: &str) -> Option<Specimen> {
         "button" => OnDesktop(button),
         "menubar" => Menu(menubar),
         "statusline" => Status(statusline),
+        "checkboxes" => OnDesktop(checkboxes),
+        "radiobuttons" => OnDesktop(radiobuttons),
+        "inputline" => OnDesktop(inputline),
+        "statictext" => OnDesktop(statictext),
+        "scrollbar" => OnDesktop(scrollbar),
+        "history" => OnDesktop(history),
+        "dialog" => OnDesktop(dialog),
+        "memo" => OnDesktop(memo),
+        "colorpicker" => OnDesktop(colorpicker),
+        "messagebox" => OnDesktop(messagebox),
         _ => return None,
     })
 }
 
 /// Every registered widget name (for the no-arg listing and the xtask registry).
-const NAMES: &[&str] = &["button", "menubar", "statusline"];
+const NAMES: &[&str] = &[
+    "button",
+    "menubar",
+    "statusline",
+    "checkboxes",
+    "radiobuttons",
+    "inputline",
+    "statictext",
+    "scrollbar",
+    "history",
+    "dialog",
+    "memo",
+    "colorpicker",
+    "messagebox",
+];
 
 // ===========================================================================
 // Specimens — one `// ANCHOR: <name>` builder per widget.
@@ -126,6 +152,230 @@ fn statusline() -> Vec<StatusDef> {
         .build()
 }
 // ANCHOR_END: statusline
+
+// ANCHOR: checkboxes
+/// Three independent check boxes hosted in a dialog. `cluster.value` is a
+/// bitmask: bit 0 = first item, bit 1 = second, etc. Bit 0 and bit 2 are set
+/// so items A and C start checked.
+fn checkboxes() -> Box<dyn View> {
+    let mut dlg = Dialog::new(Rect::new(2, 1, 38, 9), Some("Check Boxes".to_string()));
+    let mut cb = CheckBoxes::new(
+        Rect::new(3, 3, 34, 6),
+        vec![
+            "~O~ption A".to_string(),
+            "~O~ption B".to_string(),
+            "~O~ption C".to_string(),
+        ],
+    );
+    cb.cluster.value = 0b101; // items A and C checked
+    dlg.insert_child(Box::new(cb));
+    Box::new(dlg)
+}
+// ANCHOR_END: checkboxes
+
+// ANCHOR: radiobuttons
+/// Three mutually-exclusive radio buttons. `cluster.value` is the selected
+/// index; item 1 ("Two") starts selected.
+fn radiobuttons() -> Box<dyn View> {
+    let mut dlg = Dialog::new(Rect::new(2, 1, 38, 9), Some("Radio Buttons".to_string()));
+    let mut rb = RadioButtons::new(
+        Rect::new(3, 3, 34, 6),
+        vec![
+            "~O~ne".to_string(),
+            "~T~wo".to_string(),
+            "T~h~ree".to_string(),
+        ],
+    );
+    rb.cluster.value = 1; // "Two" selected
+    dlg.insert_child(Box::new(rb));
+    Box::new(dlg)
+}
+// ANCHOR_END: radiobuttons
+
+// ANCHOR: inputline
+/// A labeled single-line text entry. The `Label` links to the `InputLine` via
+/// its `ViewId` so that pressing `~N~` focuses the field.
+fn inputline() -> Box<dyn View> {
+    let mut dlg = Dialog::new(Rect::new(2, 1, 44, 9), Some("Input Line".to_string()));
+    let mut il = InputLine::with_limit(Rect::new(10, 3, 40, 4), 64);
+    il.data = "default text".to_string();
+    let il_id = dlg.insert_child(Box::new(il));
+    dlg.insert_child(Box::new(Label::new(
+        Rect::new(2, 3, 10, 4),
+        "~N~ame:",
+        Some(il_id),
+    )));
+    Box::new(dlg)
+}
+// ANCHOR_END: inputline
+
+// ANCHOR: statictext
+/// Static text supports word wrap, left-aligned lines, and the `\x03` prefix
+/// to center individual lines.
+fn statictext() -> Box<dyn View> {
+    let mut dlg = Dialog::new(Rect::new(2, 1, 44, 12), Some("Static Text".to_string()));
+    dlg.insert_child(Box::new(StaticText::new(
+        Rect::new(2, 2, 40, 9),
+        "\x03Centered Title\n\nLeft-aligned body text.\nSecond line of body.\nThird line here.",
+    )));
+    Box::new(dlg)
+}
+// ANCHOR_END: statictext
+
+// ANCHOR: scrollbar
+/// One vertical and one horizontal scroll bar with a visible thumb. The thumb
+/// position is set by writing the public fields before insertion.
+fn scrollbar() -> Box<dyn View> {
+    let mut dlg = Dialog::new(Rect::new(2, 1, 44, 14), Some("Scroll Bars".to_string()));
+
+    // Vertical bar: 1 wide × 10 tall
+    let mut vsb = ScrollBar::new(Rect::new(20, 2, 21, 12));
+    vsb.min_value = 0;
+    vsb.max_value = 50;
+    vsb.value = 10;
+    vsb.page_step = 5;
+    vsb.arrow_step = 1;
+    dlg.insert_child(Box::new(vsb));
+
+    // Horizontal bar: 30 wide × 1 tall
+    let mut hsb = ScrollBar::new(Rect::new(5, 5, 35, 6));
+    hsb.min_value = 0;
+    hsb.max_value = 50;
+    hsb.value = 20;
+    hsb.page_step = 5;
+    hsb.arrow_step = 1;
+    dlg.insert_child(Box::new(hsb));
+
+    Box::new(dlg)
+}
+// ANCHOR_END: scrollbar
+
+// ANCHOR: history
+/// An input line with a `THistory` dropdown icon. Two history entries are
+/// pre-loaded into channel 1 so the recall list is non-empty.
+fn history() -> Box<dyn View> {
+    history_add(1, "previous entry");
+    history_add(1, "another entry");
+
+    let mut dlg = Dialog::new(Rect::new(2, 1, 50, 9), Some("History".to_string()));
+    let il = InputLine::with_limit(Rect::new(3, 3, 40, 4), 64);
+    let il_id = dlg.insert_child(Box::new(il));
+    dlg.insert_child(Box::new(THistory::new(Rect::new(40, 3, 43, 4), il_id, 1u8)));
+    Box::new(dlg)
+}
+// ANCHOR_END: history
+
+// ANCHOR: dialog
+/// A realistic settings dialog combining a labeled text field, check boxes,
+/// and OK / Cancel buttons.
+fn dialog() -> Box<dyn View> {
+    let mut dlg = Dialog::new(Rect::new(2, 1, 46, 14), Some("Settings".to_string()));
+
+    // Name field with label
+    let il = InputLine::with_limit(Rect::new(12, 2, 42, 3), 64);
+    let il_id = dlg.insert_child(Box::new(il));
+    dlg.insert_child(Box::new(Label::new(
+        Rect::new(2, 2, 12, 3),
+        "~N~ame:",
+        Some(il_id),
+    )));
+
+    // Check boxes
+    let mut cb = CheckBoxes::new(
+        Rect::new(2, 5, 42, 8),
+        vec![
+            "~E~nable logging".to_string(),
+            "~A~uto-save".to_string(),
+            "~S~how hints".to_string(),
+        ],
+    );
+    cb.cluster.value = 0b001; // "Enable logging" checked
+    dlg.insert_child(Box::new(cb));
+
+    // OK and Cancel buttons
+    dlg.insert_child(Box::new(Button::new(
+        Rect::new(5, 10, 17, 12),
+        "~O~K",
+        Command::OK,
+        ButtonFlags {
+            default: true,
+            ..Default::default()
+        },
+    )));
+    dlg.insert_child(Box::new(Button::new(
+        Rect::new(27, 10, 41, 12),
+        "~C~ancel",
+        Command::CANCEL,
+        ButtonFlags::default(),
+    )));
+
+    Box::new(dlg)
+}
+// ANCHOR_END: dialog
+
+// ANCHOR: memo
+/// A `Memo` editor with pre-filled text. Scroll-bar ids are omitted (`None`)
+/// to keep the specimen self-contained.
+fn memo() -> Box<dyn View> {
+    let mut dlg = Dialog::new(Rect::new(2, 1, 50, 14), Some("Memo".to_string()));
+    let mut m = Memo::new(Rect::new(2, 2, 46, 11), None, None, None, 4096);
+    m.editor
+        .set_text(b"Initial memo text.\nSecond line.\nThird line of content.");
+    dlg.insert_child(Box::new(m));
+    Box::new(dlg)
+}
+// ANCHOR_END: memo
+
+// ANCHOR: colorpicker
+/// A full-color picker with OK and Cancel buttons. The picker needs at least
+/// 56 × 18 content area; the dialog is sized to give it comfortable margins.
+fn colorpicker() -> Box<dyn View> {
+    let mut dlg = Dialog::new(Rect::new(1, 0, 63, 23), Some("Select Color".to_string()));
+    dlg.insert_child(Box::new(ColorPicker::new(
+        Rect::new(2, 2, 60, 20),
+        Color::Rgb(30, 144, 255),
+    )));
+    dlg.insert_child(Box::new(Button::new(
+        Rect::new(8, 20, 20, 22),
+        "~O~K",
+        Command::OK,
+        ButtonFlags {
+            default: true,
+            ..Default::default()
+        },
+    )));
+    dlg.insert_child(Box::new(Button::new(
+        Rect::new(42, 20, 56, 22),
+        "~C~ancel",
+        Command::CANCEL,
+        ButtonFlags::default(),
+    )));
+    Box::new(dlg)
+}
+// ANCHOR_END: colorpicker
+
+// ANCHOR: messagebox
+/// A simple information dialog — equivalent to a Turbo Vision `messageBox` —
+/// built from public types: a `Dialog`, a `StaticText` message, and a default
+/// OK `Button`.
+fn messagebox() -> Box<dyn View> {
+    let mut dlg = Dialog::new(Rect::new(5, 3, 45, 12), Some("Information".to_string()));
+    dlg.insert_child(Box::new(StaticText::new(
+        Rect::new(2, 2, 38, 6),
+        "\x03Operation completed successfully.",
+    )));
+    dlg.insert_child(Box::new(Button::new(
+        Rect::new(14, 6, 26, 8),
+        "~O~K",
+        Command::OK,
+        ButtonFlags {
+            default: true,
+            ..Default::default()
+        },
+    )));
+    Box::new(dlg)
+}
+// ANCHOR_END: messagebox
 
 // ===========================================================================
 // Default chrome (used whenever a specimen does not replace it).
