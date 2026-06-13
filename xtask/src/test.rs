@@ -1,18 +1,31 @@
-//! Run the guide's doctests via the mdBook library API.
+//! Run the guide's doctests.
 //!
 //! Compiles every non-`ignore` ```rust block in the mdBook guide
-//! (`docs/book/`) as a doctest, with the freshly-built `tvision` rlib (and its
-//! dependency rlibs) on the linker search path.
+//! (`docs/book/`) as a doctest against the freshly-built `tvision` rlib.
+//!
+//! We invoke `rustdoc --test` per chapter source file ourselves rather than
+//! going through mdBook's `MDBook::test`, because that API only forwards `-L`
+//! library-search paths and has no way to pass `--extern tvision=<rlib>`. With
+//! only `-L`, a doctest's `use tvision::…;` fails with "no external crate
+//! tvision" (the crate is never put in the extern prelude), and an `extern
+//! crate` form instead trips over "multiple candidates" whenever the shared
+//! target dir holds more than one `libtvision-*.rlib`. Passing the exact rlib
+//! via `--extern` sidesteps both. `rustdoc --test` on the raw chapter markdown
+//! still extracts the blocks, honours `ignore`, and processes hidden `#` lines —
+//! mdBook preprocessor directives (`{{#rustdoc_include}}`, ```mermaid```) live in
+//! non-`rust` or `rust,ignore` blocks, so rustdoc skips them.
 
 use crate::paths;
 use anyhow::{Context, Result};
+use mdbook::MDBook;
+use mdbook::book::BookItem;
 use std::process::Command;
 
-/// `cargo xtask test`: build the `tvision` lib, then run the guide's doctests
-/// against the produced rlibs.
+/// `cargo xtask test`: build the `tvision` lib, then run the guide's doctests.
 pub fn run() -> Result<()> {
-    // 1. Build the `tvision` lib so its rlib and dependency rlibs exist on disk.
-    //    `-j2` respects the shared-machine core cap.
+    // 1. Build the `tvision` lib so its rlib (and dependency rlibs) exist on
+    //    disk. `-j2` respects the shared-machine core cap. Cargo produces a
+    //    stable, unhashed `<target>/debug/libtvision.rlib` for the lib target.
     let status = Command::new("cargo")
         .args(["build", "--package", "tvision", "--lib", "-j2"])
         .current_dir(paths::workspace_root())
@@ -20,16 +33,62 @@ pub fn run() -> Result<()> {
         .context("spawn cargo build -p tvision")?;
     anyhow::ensure!(status.success(), "cargo build -p tvision failed");
 
-    // 2. The deps dir holds the rlibs the doctests link against.
-    let deps_dir = paths::target_dir().join("debug").join("deps");
-    let deps_dir_str = deps_dir.to_str().context("deps dir path is not UTF-8")?;
+    let target = paths::target_dir();
+    let rlib = target.join("debug").join("libtvision.rlib");
+    anyhow::ensure!(
+        rlib.exists(),
+        "tvision rlib not found at {} (did the build emit a lib?)",
+        rlib.display()
+    );
+    let deps = target.join("debug").join("deps");
+    let extern_arg = format!(
+        "tvision={}",
+        rlib.to_str().context("rlib path is not UTF-8")?
+    );
 
-    // 3. Load the book and run its doctests, pointing rustdoc at the deps dir.
-    let mut book =
-        mdbook::MDBook::load(paths::book_root()).map_err(|e| anyhow::anyhow!("load book: {e}"))?;
-    book.test(vec!["-L", deps_dir_str])
-        .map_err(|e| anyhow::anyhow!("mdbook test: {e}"))?;
+    // 2. Enumerate chapter source files via mdBook (respects SUMMARY.md; skips
+    //    draft chapters that have no source path).
+    let book = MDBook::load(paths::book_root()).map_err(|e| anyhow::anyhow!("load book: {e}"))?;
+    let src = paths::book_root().join("src");
 
-    eprintln!("OK: guide doctests passed");
+    let mut failures = Vec::new();
+    let mut tested = 0usize;
+    for item in book.book.iter() {
+        let BookItem::Chapter(ch) = item else { continue };
+        let Some(rel) = ch.source_path.as_ref().or(ch.path.as_ref()) else {
+            continue; // draft chapter — nothing to compile
+        };
+        let md = src.join(rel);
+
+        // 3. rustdoc extracts and compiles the `rust` blocks itself; `--extern`
+        //    makes `tvision` resolvable, `-L deps` covers its transitive deps.
+        let status = Command::new("rustdoc")
+            .arg("--test")
+            .arg(&md)
+            .args(["--edition", "2024"])
+            .arg("--extern")
+            .arg(&extern_arg)
+            .arg("-L")
+            .arg(&deps)
+            .current_dir(paths::workspace_root())
+            .status()
+            .with_context(|| format!("spawn rustdoc for {}", md.display()))?;
+        tested += 1;
+        if !status.success() {
+            failures.push(md);
+        }
+    }
+
+    anyhow::ensure!(
+        failures.is_empty(),
+        "guide doctests failed in {} chapter(s): {}",
+        failures.len(),
+        failures
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    eprintln!("OK: guide doctests passed ({tested} chapters checked)");
     Ok(())
 }
