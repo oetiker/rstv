@@ -1,9 +1,12 @@
 # Splitter Frame-Joining — design
 
 **Date:** 2026-06-13
-**Status:** Proposed (for review) — v3, after two Turbo-Vision-mindset reviews
-(v2 fixed the read-back/trait-method issues; v3 fixes the `as_any_mut` downcast
-keystone the second review found)
+**Status:** Proposed — v4, after three Turbo-Vision-mindset reviews. v2 fixed the
+read-back/trait-method issues; v3 fixed the `as_any_mut` downcast keystone; v4
+applies the third review's mechanical fixes (`frame_junction_marks` is `&mut self`
+since `Group` exposes only `&mut` child access; `skip(as_any_mut)` is optional, the
+override body is what matters). Third review: **no remaining blocking issues** —
+ready to implement.
 **Builds on:** `Splitter` (rstv-original extension) — spec
 [`2026-06-13-splitter-design.md`](2026-06-13-splitter-design.md), plan
 [`2026-06-13-splitter.md`](../plans/2026-06-13-splitter.md). Implemented on branch
@@ -108,8 +111,9 @@ hosts — divider→frame and divider→divider (including nested grids).
   `Splitter` to override `as_any_mut` itself (see Component 5). That is **not** a
   new trait method (`as_any_mut` already exists and is in
   `tvision-macros/src/specs.rs`), so the `delegate_view` spy test stays green — it
-  is only a `skip(as_any_mut)` + a one-line override, exactly the `Frame`
-  precedent.
+  is only a one-line `as_any_mut` override **body** on `Splitter` (the macro
+  auto-excludes provided methods from forwarding; `skip` is optional). See
+  Component 5.
 - No coupling of divider line-*weight* to window focus. Dividers keep their
   natural weight; mixed junction glyphs bridge single↔double.
 - No new "split window" constructor (YAGNI).
@@ -254,29 +258,41 @@ the zoom flag to its Frame — `window.rs:357-365`.)
 
 ### 5. `Splitter` — downcast keystone + frame marks + interior crossings (`src/widgets/splitter/mod.rs`)
 
-- **Keystone — make `Splitter` downcastable** (required by Components 4 and by the
-  interior crossings below). Add `as_any_mut` to the delegate skip list and
-  override it, exactly like `Frame` (`frame.rs:450-452`):
+- **Keystone — make `Splitter` downcastable** (required by Component 4 and by the
+  interior crossings below). **Override `as_any_mut` in the impl body** to return
+  `Some(self)`:
   ```rust
-  #[crate::delegate(to = group, skip(as_any_mut))]
+  #[crate::delegate(to = group)]            // skip(as_any_mut) is optional/redundant
   impl View for Splitter { /* existing overrides … */
       fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> { Some(self) }
   }
   ```
-  This is **not** a new `View` method (`as_any_mut` already exists / is in
-  `specs.rs`), so the `delegate_view` spy test stays green. Without it,
-  `splitter.as_any_mut()` forwards to the inner `Group` and returns `None`, and
-  every downcast in this design fails.
-- `pub(crate) fn frame_junction_marks(&self, frame_bounds: Rect) -> Vec<JunctionMark>`:
+  **Providing the method body is what matters** — the delegate macro auto-excludes
+  any method written in the impl from forwarding (the same rule that lets the
+  existing `draw`/`handle_event`/`change_bounds` overrides stand with an empty
+  skip), so `skip(as_any_mut)` is redundant (harmless if added). Precedents: the
+  override *body* mirrors `Frame` (`frame.rs:450`, a plain `impl View`); the
+  `#[delegate(skip(as_any_mut))]` *syntax* is used by `Window` (`window.rs:821`) —
+  but Window uses it to *keep the `None` default* (no body), the opposite intent,
+  so don't copy Window's no-body form. This adds **no new `View` method**
+  (`as_any_mut` already exists / is in `specs.rs`), so the `delegate_view` spy test
+  stays green. Without the override, `splitter.as_any_mut()` forwards to the inner
+  `Group` (which does not override it → `None`), and every downcast in this design
+  fails.
+- `pub(crate) fn frame_junction_marks(&mut self, frame_bounds: Rect) -> Vec<JunctionMark>`:
   for each of this splitter's dividers, if its end abuts the given frame edge,
   emit a mark (edge, frame-local offset, this divider's weight). **Recurses into
   pane sub-splitters** (reached by `child_mut → as_any_mut → downcast_mut::<Splitter>`),
   translating coordinates into frame-local space (see "Coordinates" — the frame
   interior starts at `(1,1)`, so a child's parent-local position is offset by the
   splitter's own origin and then by the frame inset). A `Hidden`/`Locked` divider
-  that drew nothing emits no mark. Pure function of layout — no drawing,
-  unit-testable. (It is `&self`; recursion borrows each pane child `&mut`
-  transiently only to read — the read returns owned data, so borrows don't overlap.)
+  that drew nothing emits no mark. It is a pure function of layout (no drawing,
+  unit-testable) but takes **`&mut self`**, because reaching a pane child to
+  recurse requires `Group::child_mut` — the *only* child-view accessor `Group`
+  exposes is `&mut` (there is no read-only `as_any`/child accessor). The window
+  already holds the `&mut Splitter` (from `child_mut` + `downcast_mut`), so calling
+  a `&mut self` method there is free. Recursion borrows each pane child `&mut`
+  transiently to read; the read returns owned data, so borrows don't overlap.
 - **Interior crossings — composed in `draw(&mut self)`, not the `&self`
   `draw_dividers`.** After `self.group.draw(ctx)` + `self.draw_dividers(ctx)`, run
   `self.draw_interior_crossings(ctx)` (which is `&mut self`): for each adjacent pane
@@ -350,10 +366,9 @@ other's focus state.
   `├` + `┤` to the right frame.
 - **Regression:** an existing window snapshot WITHOUT the flag is unchanged.
   **No new `View` trait method** is added — the only delegate change is
-  `Splitter` adding `skip(as_any_mut)` + a one-line `as_any_mut` override (the
-  `Frame` precedent), and since `as_any_mut` is already declared in
-  `tvision-macros/src/specs.rs`, the `delegate_view` spy test stays green with no
-  `specs.rs` edit. A focused test should assert `(&mut splitter as &mut dyn
+  `Splitter` providing a one-line `as_any_mut` override body (`skip` optional), and
+  since `as_any_mut` is already declared in `tvision-macros/src/specs.rs`, the
+  `delegate_view` spy test stays green with no `specs.rs` edit. A focused test should assert `(&mut splitter as &mut dyn
   View).as_any_mut().and_then(|a| a.downcast_mut::<Splitter>()).is_some()` so the
   keystone override can't silently regress.
 
