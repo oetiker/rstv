@@ -24,6 +24,7 @@ application loop. It pumps until something sets an end command, then asks the
 keep pumping:
 
 ```rust,ignore
+// Illustrative sketch — not a standalone program.
 loop {
     self.end_state = None;
     while self.end_state.is_none() {

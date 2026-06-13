@@ -21,11 +21,16 @@ A view does not poke cells one at a time. It fills a
 width are clipped automatically. Text goes in through width-aware primitives, so
 truncation and double-width handling are shared with the rest of the renderer.
 
-```rust,ignore
+```rust
+# use tvision as tv;
+# use tv::{DrawBuffer, Style};
+# fn _demo(style: Style) {
+# let width = 10usize;
 // In a view's draw(): build one line, then write it out.
 let mut b = DrawBuffer::new(width);
 b.move_str(0, "Hello", style);
 // ... hand `b` to the framework to blit at row y ...
+# }
 ```
 
 > In the typed cell model, `move_char` always writes both char and style — there

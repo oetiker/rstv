@@ -23,6 +23,7 @@ Both are constructed the same way — from a theme and the three factory functio
 that build the desktop, status line, and menu bar:
 
 ```rust,ignore
+// Illustrative sketch — not a standalone program.
 let program = Program::new(
     backend,
     clock,

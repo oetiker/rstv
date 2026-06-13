@@ -35,6 +35,7 @@ Each documented screen is one entry in the `SCREENS` table in
 keystrokes to drive it, and a settle delay:
 
 ```rust,ignore
+// Illustrative sketch — not a standalone program.
 Screen {
     name: "hello",       // output file stem → src/screens/hello.html
     example: "hello",    // cargo run --example hello

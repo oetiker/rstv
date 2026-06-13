@@ -51,6 +51,7 @@ viewer) is always the same: resolve each participant in its **own**
 type via `as_any_mut()` to call its real method:
 
 ```rust,ignore
+// Illustrative sketch — not a standalone program.
 // At deferred-apply, inside the pump, `group` is the whole tree:
 let dx = h_bar_id
     .and_then(|id| group.find_mut(id))   // resolve one bar

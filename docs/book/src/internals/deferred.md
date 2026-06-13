@@ -42,6 +42,7 @@ order**. Each variant matches to an arm that now holds the loop-owned state the
 view could not:
 
 ```rust,ignore
+// Illustrative sketch — not a standalone program.
 let effects: Vec<Deferred> = std::mem::take(deferred);
 for effect in effects {
     match effect {

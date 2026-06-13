@@ -32,14 +32,16 @@ Here is a complete view that fills its rectangle and prints a centered label —
 the same pattern the real
 [`StaticText`](../api/tvision/widgets/struct.StaticText.html) widget follows:
 
-```rust,ignore
+```rust
 use tvision::{DrawCtx, Rect, Role, View, ViewState};
 
+# #[allow(dead_code)]
 struct Banner {
     state: ViewState,
     text: String,
 }
 
+# #[allow(dead_code)]
 impl Banner {
     fn new(bounds: Rect, text: impl Into<String>) -> Self {
         Banner { state: ViewState::new(bounds), text: text.into() }
@@ -119,9 +121,11 @@ Re-exported as `tvision::delegate`, it goes on the `impl View` block: write only
 the methods that differ, and the macro injects a forwarder
 (`self.<field>.method(args)`) for every method you did **not** write.
 
-```rust,ignore
+```rust
 use tvision::delegate;
+# use tvision::{DrawCtx, Scroller, View};
 
+# #[allow(dead_code)]
 struct MyTerminal {
     scroller: Scroller,
 }
