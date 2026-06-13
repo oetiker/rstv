@@ -221,9 +221,15 @@ impl Window {
         self
     }
 
-    /// Setter form of [`with_joined_lines`](Window::with_joined_lines).
+    /// Setter form of [`with_joined_lines`](Window::with_joined_lines). Turning
+    /// joining off clears any marks previously pushed to the frame, so it reverts
+    /// to a plain border immediately (the `draw` path stays zero-cost for windows
+    /// that never opt in).
     pub fn set_joined_lines(&mut self, on: bool) {
         self.joined_lines = on;
+        if !on && let Some(frame) = self.frame_mut() {
+            frame.set_junction_marks(Vec::new());
+        }
     }
 
     /// Update the window title in both the `Window` record and the [`Frame`]
@@ -894,8 +900,9 @@ impl View for Window {
             let fb = self.group.state().get_extent();
             let marks = self
                 .interior_splitter_mut()
-                .map(|s| s.frame_junction_marks(fb));
-            if let (Some(marks), Some(frame)) = (marks, self.frame_mut()) {
+                .map(|s| s.frame_junction_marks(fb))
+                .unwrap_or_default();
+            if let Some(frame) = self.frame_mut() {
                 frame.set_junction_marks(marks);
             }
         }
@@ -2014,6 +2021,46 @@ mod tests {
         assert!(
             !top_edge.contains('┬') && !top_edge.contains('╤'),
             "no tee without the flag: {top_edge:?}"
+        );
+        // Freeze a baseline reference rendering for the no-flag case.
+        insta::assert_snapshot!(snap);
+    }
+
+    #[test]
+    fn toggling_joined_lines_off_reverts_to_plain_frame() {
+        use crate::widgets::{Constraints, Splitter};
+        let theme = Theme::classic_blue();
+        let mut win = Window::new(Rect::new(0, 0, 16, 6), None, 0).with_joined_lines();
+        let ext = win.state().get_extent();
+        let interior = Rect::new(1, 1, ext.b.x - 1, ext.b.y - 1);
+        let split = Splitter::cols()
+            .pane(plain_fill('A'), Constraints::flex())
+            .pane(plain_fill('B'), Constraints::flex());
+        let sid = win.insert_child(Box::new(split));
+        if let Some(v) = win.child_mut(sid) {
+            v.change_bounds(interior);
+        }
+
+        // First draw with joining ON: top edge gains a tee.
+        let render = |win: &mut Window| {
+            let (backend, screen) = HeadlessBackend::new(16, 6);
+            let mut r = Renderer::new(Box::new(backend));
+            r.render(|buf: &mut Buffer| {
+                let bounds = win.state().get_bounds();
+                let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+                win.draw(&mut dc);
+            });
+            screen.snapshot()
+        };
+        let on = render(&mut win);
+        assert!(on.contains('┬'), "joined: top tee present");
+
+        // Toggle OFF and redraw: no tee remains.
+        win.set_joined_lines(false);
+        let off = render(&mut win);
+        assert!(
+            !off.contains('┬') && !off.contains('╤'),
+            "after toggle off, plain frame: {off:?}"
         );
     }
 }

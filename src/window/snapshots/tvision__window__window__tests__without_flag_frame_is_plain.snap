@@ -1,0 +1,24 @@
+---
+source: src/window/window.rs
+expression: snap
+---
+size: 16x6
+cursor: hidden
+text:
+|┌──────────────┐|
+|│       │      │|
+|│ AAAAAA│ BBBBB│|
+|│ AAAAAA│ BBBBB│|
+|│ AAAAAA│ BBBBB│|
+|└──────────────┘|
+attr:
+|aaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaa|
+|aabbbbbbaabbbbba|
+|aabbbbbbaabbbbba|
+|aabbbbbbaabbbbba|
+|aaaaaaaaaaaaaaaa|
+legend:
+  . default
+  a fg=RGB(170,170,170) bg=RGB(0,0,170)
+  b fg=RGB(0,0,0) bg=RGB(0,170,170)
