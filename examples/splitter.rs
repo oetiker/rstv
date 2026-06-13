@@ -1,10 +1,12 @@
-//! `splitter` — a nested-grid window using the [`Splitter`] widget: a fixed
-//! tree sidebar beside a right column that stacks a scrolling list over a
-//! small form. The two splitters (vertical outer + horizontal inner) are
-//! nested inside a plain [`tvision::Window`]; the outer [`Splitter`] is built
-//! `.joined()`, so its divider lines join each other (`├`) at every crossing —
-//! and the window automatically joins a joined splitter body to its frame
-//! (`┬`/`┴`/`┤`). Joining cascades, so only the outer splitter opts in.
+//! `splitter` — a nested-grid window using the [`Splitter`] widget: a three-
+//! column layout where the left column stacks a tree over a list, the middle
+//! column holds a single form, and the right column stacks a list over a form.
+//! The outer [`Splitter`] (columns) is built `.joined()`, so its divider lines
+//! join each other and cascade into the inner horizontal splitters — producing
+//! `┬`/`┴` where vertical seams meet the window frame, `├`/`┤` where
+//! horizontal seams meet the outer verticals, and `┼` at interior crossings.
+//! The mixed/double variants appear when the window is active (double-line
+//! frame, single-line interior dividers).
 //!
 //! This is the N-ary resizable splitter in action. The panes are real Turbo
 //! Vision controls (an [`Outline`] tree, a [`ListBox`], and a form [`Group`]
@@ -13,8 +15,8 @@
 //!
 //! Controls:
 //!   - **Mouse:** drag a `Line` divider seam to resize the panes on either
-//!     side. There are two seams: vertical (between tree and right column) and
-//!     horizontal (between list and form).
+//!     side. There are four seams: two vertical (between the three columns) and
+//!     one horizontal seam in each outer column (left and right).
 //!   - **F6:** enter divider-reconfig mode. Then:
 //!       - `Tab` / `Shift-Tab` pick which divider to move,
 //!       - arrow keys nudge the selected divider,
@@ -28,10 +30,9 @@
 use std::io;
 
 use tvision::{
-    Backend, Button, ButtonFlags, Command, Constraints, Context, CrosstermBackend, Desktop,
-    DividerStyle, Event, Group, InputLine, Key, KeyEvent, Label, ListBox, Menu, MenuBar, Node,
-    Outline, Program, Rect, Splitter, StatusDef, StatusLine, SystemClock, Theme, View, alt,
-    delegate,
+    Backend, Button, ButtonFlags, Command, Constraints, Context, CrosstermBackend, Desktop, Event,
+    Group, InputLine, Key, KeyEvent, Label, ListBox, Menu, MenuBar, Node, Outline, Program, Rect,
+    Splitter, StatusDef, StatusLine, SystemClock, Theme, View, alt, delegate,
 };
 
 // ---------------------------------------------------------------------------
@@ -194,27 +195,28 @@ impl SplitterApp {
         let ext = win.state().get_extent();
         let interior = Rect::new(1, 1, ext.b.x - 1, ext.b.y - 1);
 
-        let tree = build_tree(interior);
-        let list = build_list(interior);
-        let form = build_form(interior);
+        // Left column: a tree over a list (its own horizontal split).
+        let left = Splitter::rows()
+            .pane(build_tree(interior), Constraints::flex().min(3))
+            .pane(build_list(interior), Constraints::flex().min(3));
 
-        // Right side: list stacked over form, separated by a horizontal divider.
+        // Middle column: a single form panel.
+        let middle = build_form(interior);
+
+        // Right column: a list over a form (its own horizontal split).
         let right = Splitter::rows()
-            .pane(list, Constraints::flex().min(3))
-            .pane(form, Constraints::flex().min(6));
+            .pane(build_list(interior), Constraints::flex().min(3))
+            .pane(build_form(interior), Constraints::flex().min(6));
 
-        // Outer: a fixed tree sidebar column beside the right grid, with a thin
-        // Line divider. Built `.joined()` so the seam joins the window frame
-        // (┬/┴, auto-brokered by the window) and the inner horizontal divider (├);
-        // joining cascades to the inner `right` splitter.
+        // Three vertical columns; all seams are the default Line style, so the
+        // whole grid's linework joins (`.joined()` cascades to the sub-splitters).
         let split = Splitter::cols()
-            .pane(tree, Constraints::fixed(22))
-            .pane(Box::new(right), Constraints::flex())
-            .divider(0, DividerStyle::Line)
+            .pane(Box::new(left), Constraints::flex().min(16))
+            .pane(middle, Constraints::flex().min(16))
+            .pane(Box::new(right), Constraints::flex().min(16))
             .joined();
 
         let split_id = win.insert_child(Box::new(split));
-        // Size the splitter to fill the window interior so it lays the panes out.
         if let Some(v) = win.child_mut(split_id) {
             v.change_bounds(interior);
         }
