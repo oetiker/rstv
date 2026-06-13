@@ -16,10 +16,11 @@ use std::{env, io};
 
 use tvision::{
     Button, ButtonFlags, CD_NORMAL, ChDirDialog, CheckBoxes, Color, ColorPicker, Command, Context,
-    CrosstermBackend, Desktop, Dialog, EditWindow, Event, FD_OPEN_BUTTON, FileDialog, InputLine,
-    Key, KeyEvent, Label, ListBox, Memo, Menu, MenuBar, Node, Outline, OutlineViewer, Program,
-    RadioButtons, Rect, ScrollBar, StaticText, StatusDef, StatusLine, SystemClock, THistory,
-    Terminal, TextDevice, Theme, View, ViewId, Window, alt, delegate, history_add, ov_update,
+    CrosstermBackend, Desktop, Dialog, EditWindow, Event, FD_OPEN_BUTTON, FileDialog,
+    HistoryWindow, InputLine, Key, KeyEvent, Label, ListBox, Memo, Menu, MenuBar, MenuBox, Node,
+    Outline, OutlineViewer, Program, RadioButtons, Rect, ScrollBar, ScrollBarOptions, StaticText,
+    StatusDef, StatusLine, SystemClock, THistory, Tab, Terminal, TextDevice, Theme, View, ViewId,
+    Window, alt, delegate, history_add, ov_update,
 };
 
 /// How a specimen is shown. Most widgets are leaf controls hosted in a dialog on
@@ -46,6 +47,7 @@ fn specimen(name: &str) -> Option<Specimen> {
         "button" => OnDesktop(button),
         "menubar" => Menu(menubar),
         "statusline" => Status(statusline),
+        "contextmenu" => OnDesktop(contextmenu),
         "checkboxes" => OnDesktop(checkboxes),
         "radiobuttons" => OnDesktop(radiobuttons),
         "inputline" => OnDesktop(inputline),
@@ -72,6 +74,7 @@ const NAMES: &[&str] = &[
     "button",
     "menubar",
     "statusline",
+    "contextmenu",
     "checkboxes",
     "radiobuttons",
     "inputline",
@@ -122,6 +125,7 @@ fn button() -> Box<dyn View> {
 // ANCHOR: menubar
 /// A menu bar with `File`, `Edit`, and `Window` pull-downs. Each `~`-marked
 /// letter is the hot-key; `command_key` adds the accelerator shown at the right.
+/// `File ▸ Recent` is a nested sub-menu (a sub-menu inside a sub-menu).
 fn menubar() -> Menu {
     Menu::builder()
         .submenu("~F~ile", alt('f'), |m| {
@@ -137,6 +141,11 @@ fn menubar() -> Menu {
                 KeyEvent::from(Key::F(4)),
                 "F4",
             )
+            .submenu("~R~ecent", alt('r'), |s| {
+                s.command("report.txt", Command::custom("gallery.recent1"))
+                    .command("budget.csv", Command::custom("gallery.recent2"))
+                    .command("notes.md", Command::custom("gallery.recent3"))
+            })
             .separator()
             .command_key("E~x~it", Command::QUIT, alt('x'), "Alt-X")
         })
@@ -171,6 +180,22 @@ fn statusline() -> Vec<StatusDef> {
         .build()
 }
 // ANCHOR_END: statusline
+
+// ANCHOR: contextmenu
+/// A context menu — the pop-up box shown on a right-click, built from the same
+/// `Menu` data as a menu bar and wrapped in a `MenuBox` (which sizes itself to
+/// fit the items). At runtime `popup_menu(pos, menu, …)` opens one at the cursor.
+fn contextmenu() -> Box<dyn View> {
+    let menu = Menu::builder()
+        .command("Cu~t~", Command::CUT)
+        .command("~C~opy", Command::COPY)
+        .command("~P~aste", Command::PASTE)
+        .separator()
+        .command("Select ~A~ll", Command::custom("gallery.select_all"))
+        .build();
+    Box::new(MenuBox::new(Rect::new(6, 2, 40, 16), menu))
+}
+// ANCHOR_END: contextmenu
 
 // ANCHOR: checkboxes
 /// Three independent check boxes hosted in a dialog. `cluster.value` is a
@@ -242,13 +267,14 @@ fn statictext() -> Box<dyn View> {
 // ANCHOR_END: statictext
 
 // ANCHOR: scrollbar
-/// One vertical and one horizontal scroll bar with a visible thumb. The thumb
-/// position is set by writing the public fields before insertion.
+/// A vertical and a horizontal scroll bar with a visible thumb, framing the
+/// right and bottom edges of the dialog the way they sit around a scrollable
+/// view. The thumb position is set by writing the public fields before insertion.
 fn scrollbar() -> Box<dyn View> {
     let mut dlg = Dialog::new(Rect::new(2, 1, 44, 14), Some("Scroll Bars".to_string()));
 
-    // Vertical bar: 1 wide × 10 tall
-    let mut vsb = ScrollBar::new(Rect::new(20, 2, 21, 12));
+    // Vertical bar down the right inner edge.
+    let mut vsb = ScrollBar::new(Rect::new(40, 1, 41, 12));
     vsb.min_value = 0;
     vsb.max_value = 50;
     vsb.value = 10;
@@ -256,8 +282,8 @@ fn scrollbar() -> Box<dyn View> {
     vsb.arrow_step = 1;
     dlg.insert_child(Box::new(vsb));
 
-    // Horizontal bar: 30 wide × 1 tall
-    let mut hsb = ScrollBar::new(Rect::new(5, 5, 35, 6));
+    // Horizontal bar along the bottom inner edge.
+    let mut hsb = ScrollBar::new(Rect::new(1, 11, 40, 12));
     hsb.min_value = 0;
     hsb.max_value = 50;
     hsb.value = 20;
@@ -270,16 +296,26 @@ fn scrollbar() -> Box<dyn View> {
 // ANCHOR_END: scrollbar
 
 // ANCHOR: history
-/// An input line with a `THistory` dropdown icon. Two history entries are
-/// pre-loaded into channel 1 so the recall list is non-empty.
+/// An input line with a `THistory` dropdown icon, shown with its recall list
+/// open. Clicking the `↓` icon drops down a [`HistoryWindow`] over the field;
+/// here one is shown directly, listing the entries pre-loaded into channel 1.
 fn history() -> Box<dyn View> {
-    history_add(1, "previous entry");
-    history_add(1, "another entry");
+    for entry in [
+        "report.txt",
+        "budget.csv",
+        "notes.md",
+        "config.toml",
+        "readme.md",
+    ] {
+        history_add(1, entry);
+    }
 
-    let mut dlg = Dialog::new(Rect::new(2, 1, 50, 9), Some("History".to_string()));
-    let il = InputLine::with_limit(Rect::new(3, 3, 40, 4), 64);
+    let mut dlg = Dialog::new(Rect::new(2, 1, 50, 14), Some("History".to_string()));
+    let il = InputLine::with_limit(Rect::new(3, 2, 40, 3), 64);
     let il_id = dlg.insert_child(Box::new(il));
-    dlg.insert_child(Box::new(THistory::new(Rect::new(40, 3, 43, 4), il_id, 1u8)));
+    dlg.insert_child(Box::new(THistory::new(Rect::new(40, 2, 43, 3), il_id, 1u8)));
+    // The drop-down recall popup, listing channel 1, opened below the field.
+    dlg.insert_child(Box::new(HistoryWindow::new(Rect::new(3, 3, 34, 12), 1u8)));
     Box::new(dlg)
 }
 // ANCHOR_END: history
@@ -350,10 +386,10 @@ fn memo() -> Box<dyn View> {
 /// 56 × 18 content area; the dialog is sized to give it comfortable margins.
 fn colorpicker() -> Box<dyn View> {
     let mut dlg = Dialog::new(Rect::new(1, 0, 63, 23), Some("Select Color".to_string()));
-    dlg.insert_child(Box::new(ColorPicker::new(
-        Rect::new(2, 2, 60, 20),
-        Color::Rgb(30, 144, 255),
-    )));
+    let mut picker = ColorPicker::new(Rect::new(2, 2, 60, 20), Color::Rgb(30, 144, 255));
+    // Open on the visual hue/saturation plane rather than the preset palette.
+    picker.select_tab(Tab::Plane);
+    dlg.insert_child(Box::new(picker));
     dlg.insert_child(Box::new(Button::new(
         Rect::new(8, 20, 20, 22),
         "~O~K",
@@ -535,10 +571,18 @@ struct OutlineShowcase {
 impl OutlineShowcase {
     fn new() -> Self {
         let mut win = Window::new(Rect::new(2, 1, 46, 21), Some("Outline".to_string()), 1);
-        let hsb = ScrollBar::new(Rect::new(1, 18, 41, 19));
-        let h_id = win.insert_child(Box::new(hsb));
-        let vsb = ScrollBar::new(Rect::new(41, 1, 42, 19));
-        let v_id = win.insert_child(Box::new(vsb));
+        // Standard scroll bars sit on the window's right and bottom frame edges;
+        // the outline fills the inner area (extent shrunk by one cell each side).
+        let h_id = win.standard_scroll_bar(ScrollBarOptions {
+            vertical: false,
+            handle_keyboard: true,
+        });
+        let v_id = win.standard_scroll_bar(ScrollBarOptions {
+            vertical: true,
+            handle_keyboard: true,
+        });
+        let mut inner = View::state(&win).get_extent();
+        inner.grow(-1, -1);
         let root = Node::new("Root")
             .with_expanded(true)
             .with_children(Box::new(
@@ -553,12 +597,7 @@ impl OutlineShowcase {
                             .with_children(Box::new(Node::new("Grandchild B1"))),
                     )),
             ));
-        let ol = Outline::new(
-            Rect::new(1, 1, 41, 19),
-            Some(h_id),
-            Some(v_id),
-            Some(Box::new(root)),
-        );
+        let ol = Outline::new(inner, Some(h_id), Some(v_id), Some(Box::new(root)));
         let outline_id = win.insert_child(Box::new(ol));
         OutlineShowcase {
             window: win,

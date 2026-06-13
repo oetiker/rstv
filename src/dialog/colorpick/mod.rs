@@ -132,6 +132,13 @@ impl ColorPicker {
         self.model.color
     }
 
+    /// Open the picker on a specific [`Tab`]. By default the picker starts on the
+    /// preset palette; call this to preselect another surface (e.g. the visual
+    /// hue/saturation [`Tab::Plane`]) when embedding the picker yourself.
+    pub fn select_tab(&mut self, tab: Tab) {
+        self.active = tab;
+    }
+
     /// Picker-local surface body rect (left of the info column, below the tab bar).
     fn body_rect(&self) -> Rect {
         let sz = self.state.size;

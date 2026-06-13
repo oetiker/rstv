@@ -226,11 +226,22 @@ line:column indicator.
 ### Menu bar
 
 The top menu bar, built from nested pull-downs with hot-keys and accelerators.
+`File ▸ Recent` is a sub-menu nested inside a sub-menu.
 
 {{#include screens/menubar.html}}
 
 ```rust,ignore
 {{#rustdoc_include ../../../examples/gallery.rs:menubar}}
+```
+
+### Context menu
+
+A right-click pop-up, built from the same `Menu` data and wrapped in a `MenuBox`.
+
+{{#include screens/contextmenu.html}}
+
+```rust,ignore
+{{#rustdoc_include ../../../examples/gallery.rs:contextmenu}}
 ```
 
 ### Status line

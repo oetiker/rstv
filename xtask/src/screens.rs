@@ -48,9 +48,9 @@ pub const SCREENS: &[Screen] = &[
         example: "gallery",
         args: &["menubar"],
         cols: 56,
-        rows: 12,
-        // Open the File pull-down so the screenshot shows it expanded.
-        keys: &["M-f"],
+        rows: 14,
+        // Open File, move down to the "Recent" item, and open its nested sub-menu.
+        keys: &["M-f", "Down", "Down", "Enter"],
         settle_ms: 700,
     },
     Screen {
@@ -59,6 +59,15 @@ pub const SCREENS: &[Screen] = &[
         args: &["statusline"],
         cols: 56,
         rows: 8,
+        keys: &[],
+        settle_ms: 700,
+    },
+    Screen {
+        name: "contextmenu",
+        example: "gallery",
+        args: &["contextmenu"],
+        cols: 40,
+        rows: 12,
         keys: &[],
         settle_ms: 700,
     },
@@ -276,8 +285,11 @@ fn drive_and_capture(s: &Screen, session: &str) -> Result<String> {
         sleep_ms(s.settle_ms.max(200));
     }
 
+    // `-N` preserves trailing cells: the menu bar and status line fill their
+    // whole row with a colored background, and without `-N` tmux trims those
+    // trailing colored spaces, making the bars look truncated in the capture.
     let captured =
-        tmux(&["capture-pane", "-t", session, "-e", "-p"]).context("capture-pane failed")?;
+        tmux(&["capture-pane", "-t", session, "-e", "-p", "-N"]).context("capture-pane failed")?;
     let ansi = String::from_utf8_lossy(&captured.stdout).into_owned();
 
     // A flaky capture (the app had not painted yet, or it died on launch) comes
