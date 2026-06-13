@@ -9,12 +9,50 @@
 >
 > **Direction:** the 92-class port is ✅ complete and the post-port backlog
 > (`docs/BACKLOG.md`, Phases A/B/C) is exhausted. The work now is the
-> **developer documentation** — content is authored and a user-facing cleanup
-> landed this session; what's left is the docs polish + example gallery in
-> "Next" below. When something lands: add an IMPLEMENTATION-LOG section and
-> update this file.
+> **developer documentation**. Docs Phase 1 (guide Rust-first pass) and Phase 2
+> (the widget gallery) are ✅ done; **the next session's job is Docs Phase 3 —
+> verified docs / doctest gates**, fully specced in "Next" below. When something
+> lands: add an IMPLEMENTATION-LOG section and update this file.
 
-## Current state (2026-06-12, docs content + user-facing cleanup landed)
+## Current state (2026-06-13, Docs Phase 1 + Phase 2 landed — next is Phase 3)
+
+**Code HEAD = `e8ce8ee`; 1183 lib tests green; clippy `--all-targets` + fmt
+clean; `cargo xtask docs` OK + link check clean.** Two docs phases landed since
+the `2e2153b` snapshot below:
+
+- **Docs Phase 1 — guide-page Rust-first pass** (`f36162e`). The 16 narrative
+  pages under `getting-started/`, `apps/`, `internals/` were rewritten so the
+  primary prose reads for a Rust dev with zero Turbo Vision knowledge; C++ demoted
+  to skippable parentheticals or a uniform `> **Turbo Vision heritage:**`
+  blockquote. `port/` (veteran chapter) + `reference/symbol-map`/`deviations` stay
+  C++-aware **by design** — do not "fix" their C++ mentions.
+- **Docs Phase 2 — widget gallery** (`340842a`, `ed08caf`, `17e95e9`, `a6ce0a1`,
+  then `c6dbc4d`/`9cb916d`/`2161782` for determinism+polish). A parameterized
+  `examples/gallery.rs` renders one widget per run (`cargo run --example gallery
+  -- <name>`; no-arg lists names); each widget is a `// ANCHOR: <name>` builder
+  the guide includes verbatim. **21 widgets.** New first-class guide page
+  `docs/book/src/gallery.md` (SUMMARY "Widget Gallery" section) pairs each
+  screenshot with its anchored code; key captures embedded in controls/dialogs/
+  menus. `xtask Screen` gained an `args` field; capture uses `-N` (full-width
+  bars); a committed `examples/gallery_fixture/` makes the file/dir dialogs
+  deterministic; new `ColorPicker::select_tab(Tab)` lib method.
+
+**The Phase-3-relevant artifact:** the gallery's `// ANCHOR:` builders are *real
+compiling code* (they build in the example binary) but they are **`fn`-fragments,
+not whole programs** — see the Phase 3 gotcha in "Next".
+
+### In-flight on `main` (NOT docs, NOT yours): `tv::Splitter`
+A parallel agent landed a `tv::Splitter` foundation directly on `main` without a
+worktree, so commits `c48b976` (spec) and `5ab3ffc` (`src/widgets/splitter/`
+layout solver — which also swept in some gallery Batch-B `examples/gallery.rs`
+edits) are **interleaved** between the gallery commits. It compiles clean; its
+plan (`docs/superpowers/plans/2026-06-13-splitter.md`, untracked) is only
+partially landed. **Leave it alone** for Phase 3; confirm its status with the
+user before touching it. (A rust-analyzer "borrow error" you may see in
+`splitter/layout.rs` is a stale false positive — `cargo build`/`clippy` are clean;
+trust cargo.)
+
+## Previous state (2026-06-12, docs content + user-facing cleanup landed)
 
 **Code HEAD = `2e2153b`; 1177 lib tests + 15 xtask tests green; clippy
 `--all-targets` + fmt clean; `cargo xtask docs` OK + link check clean.**
@@ -227,46 +265,76 @@ This session ran the **backlog run** end to end:
 
 *(none — all paused worktrees integrated this session)*
 
-## Next — docs polish + examples (content + user-facing cleanup DONE)
+## Next — Docs Phase 3: verified docs (doctest / build gates)
 
-The guide prose, the user-facing cleanup/rename/IA/heritage/guide-links pass,
-the guide-page Rust-first pass (Phase 1), **and the example gallery (Phase 2)**
-have all landed. The docs now read for library users, guide and API alike, with
-a screenshot+code gallery of every widget. **Remaining docs work — one phase:**
+Phase 1 (guide Rust-first) and Phase 2 (gallery) are done. **Phase 3's goal:
+make the guide's code self-verifying so it cannot silently drift** — every Rust
+code block in the book either compiles in CI or is *deliberately* marked
+non-compiling, and the gates run in `.github/workflows/docs.yml`.
 
-1. ~~**Guide-page Rust-first pass.**~~ ✅ **DONE this session** (see
-   IMPLEMENTATION-LOG "Docs Phase 1 (guide)"). The 16 narrative pages under
-   `getting-started/`, `apps/`, and `internals/` were rewritten Rust-first:
-   C++-led openings flipped, C++ demoted to skippable parentheticals or a uniform
-   `> **Turbo Vision heritage:**` blockquote. `port/` (the veteran chapter) and
-   `reference/symbol-map` + `deviations` stay C++-aware by design. Invariant grep
-   + `cargo xtask docs` link check clean. **Remaining C++ mentions in those dirs
-   are now all intentional asides** (heritage blockquotes, linked `[deviation Dn]`
-   citations, light parentheticals) — a future `grep 'C++'` will still hit them;
-   that is expected.
-2. ~~**Example gallery (Phase 2) — approach "B".**~~ ✅ **DONE this session**
-   (see IMPLEMENTATION-LOG "Docs Phase 2"). `examples/gallery.rs` renders one
-   widget per CLI arg; 20 widgets each have a `// ANCHOR:` builder + a
-   deterministic screenshot; a new **Widget Gallery** guide page
-   (`gallery.md`) pairs each screenshot with its anchored code, and key captures
-   are embedded into controls/dialogs/menus. `xtask Screen` got the `args` field.
-   **For Phase 3:** the gallery builders are whole `fn`s (Class-B ones include a
-   wrapper `struct`+`impl`) — closer to compilable than the Part I `:setup`/`:main`
-   excerpts, but they are `fn`-fragments, not whole programs, so a `mdbook test`
-   gate still needs them wrapped or switched to doctests.
-3. **Verified docs (Phase 3).** Convert the remaining `rust,ignore` guide snippets
-   to anchored-example / doctest form, then turn ON `mdbook test` + `cargo test
-   --doc` as CI gates. **Gotcha:** the Part I snippets are `rust,ignore` excerpts
-   (e.g. `:setup`/`:main`) — switch to whole-program anchors first or the gate
-   fails on partial includes. The gallery `// ANCHOR:` builders (Phase 2) are the
-   same shape — real code, but `fn`-fragments needing a wrapper to compile as a
-   doctest.
+> **Why this matters (a real Phase-2 bug):** the gallery's `{{#rustdoc_include}}`
+> paths were wrong (`../../` vs `../../../`) so mdbook left the directives
+> **unprocessed** — the page showed the literal directive text — and `cargo xtask
+> docs`' link check did **not** catch it (it validates links, not include
+> resolution). A doctest/build gate would have. Visual review caught it; Phase 3
+> automates that.
 
-**In-flight on `main` (NOT docs work):** a parallel agent landed a `tv::Splitter`
-foundation (`src/widgets/splitter/`, spec `c48b976`, solver `5ab3ffc`) directly
-on `main` (no worktree), interleaving with the gallery commits. It compiles
-clean but the plan (`docs/superpowers/plans/2026-06-13-splitter.md`, untracked)
-is only partially done. Confirm its status with the user before building on it.
+### Inventory (run `grep -rc '```rust' docs/book/src` to refresh)
+- **60 `rust,ignore` blocks** total. Of these:
+  - **25 are example-backed** `{{#rustdoc_include}}`s — **21** of `gallery.rs`
+    (the gallery page) + **4** of `hello.rs` (`getting-started/`, the `:setup` /
+    `:main` / `:run` anchors). These display `fn`-fragments but the **whole
+    example file compiles**, so they are already verifiable by `cargo build
+    --examples` (which CI runs / passes today).
+  - **~35 are inline illustrative fragments** in `apps/` (17), `port/` (10),
+    `internals/` (6), `reference/` (1) — hand-written snippets, mostly partial
+    (no `use`, no `fn main`, reference undeclared locals).
+- **src/ doctests:** ~11 files carry `///`-doctests; `cargo test --doc -p tvision`
+  today = **4 passed, 3 ignored** (check why the 3 are ignored — likely need a
+  backend/Context).
+- **xtask has no test path** — only `docs` and `screens` subcommands.
+
+### Recommended approach (confirm scope with the user first)
+Phase 3 is partly a **policy decision** — "every block must compile" is a large
+conversion; a lighter, high-value gate exists. Recommend:
+
+1. **Lock the example-backed blocks with a cheap gate.** Add `cargo build
+   --examples` (compiles `gallery.rs` + `hello.rs`) to `docs.yml`. That already
+   verifies the 25 most-load-bearing snippets. **Do NOT try to turn the gallery
+   `// ANCHOR:` fragments into doctests** — they are `fn`-fragments referencing
+   gallery-private helpers (`enter_gallery_fixture`, the wrapper structs); the
+   example *build* is their source of truth. Keep them ```rust,ignore.
+2. **Triage the ~35 inline fragments** into:
+   - **(a) convertible** → small self-contained API snippets (build a `Menu`,
+     `Command::custom`, a `Theme`…) that compile with a few hidden `# use tv::…;`
+     lines and `# fn main(){…}` wrapper. Convert these to real ```rust (doctest)
+     blocks, or anchor them into a new tested `examples/snippets.rs`.
+   - **(b) deliberately illustrative** → pseudo-code / partial (e.g. the
+     `pump_once` loop sketch in `internals/event-loop.md`). Keep them compiling-
+     exempt but **label the intent** — `rust,ignore` is fine; consider a one-line
+     "// illustrative — not a complete program" so it's a choice, not an oversight.
+3. **Turn on the gates** in `docs.yml`: `cargo test --doc -p tvision` (src
+   doctests) + `cargo build --examples`. **Optionally** `mdbook test` for the
+   converted (a) blocks — **gotcha:** `mdbook test` compiles each non-`ignore`
+   block as a standalone doctest and needs the `tvision` rlib on the search path
+   (`mdbook test docs/book -L $CARGO_TARGET_DIR/debug/deps`), so it must run
+   *after* `cargo build`, and is easiest wired as a new `cargo xtask test`
+   subcommand (mirror `build::docs`, call `MDBook::load(...).test(vec!["-L", …])`).
+
+### Phase 3 gotchas
+- **`{{#rustdoc_include file:anchor}}` mechanics:** it displays only the anchor
+  but (for doctests) hides the *rest of the file* with `#`. For that to compile
+  as a doctest the file must be a complete program — which `gallery.rs`/`hello.rs`
+  are, but each *block* still only wraps one anchor, so naive `mdbook test` of
+  them fails. This is why (1) gates them via the example **build**, not doctests.
+- **Include-path depth bites silently** (the Phase-2 bug): `gallery.md` is in
+  `src/` → `../../../examples/…`; pages one level deeper (`getting-started/`,
+  `apps/`) → `../../../../examples/…`. After any include edit, **grep the built
+  HTML for leftover `rustdoc_include` directives** (`grep -c rustdoc_include
+  docs/book/book/<page>.html` must be 0) — the link checker won't.
+- Verify on the integrated tree with `CARGO_TARGET_DIR=/home/oetiker/scratch/
+  cargo-target`; `cargo xtask docs` regenerates screenshots (≈40s, deterministic
+  — 0 churn expected) then builds + link-checks.
 
 **Smaller follow-ups:** complete `src/theme/` rustdoc to parity;
 `#![doc(html_logo_url/favicon)]` crate attrs; vendor the real mermaid runtime;
