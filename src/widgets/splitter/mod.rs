@@ -4,7 +4,7 @@ use crate::capture::TrackMask;
 use crate::event::{Event, Key};
 use crate::junction::{Edge, Junction, JunctionMark, Weight, divider_junction};
 use crate::theme::Role;
-use crate::view::{Context, DrawCtx, Group, Point, Rect, View, ViewId, ViewState};
+use crate::view::{Context, DrawCtx, Group, GrowMode, Point, Rect, View, ViewId, ViewState};
 
 pub use layout::{Constraints, Orientation};
 use layout::{Slot, relax_weight, solve};
@@ -61,8 +61,20 @@ pub struct Splitter {
 
 impl Splitter {
     fn new(bounds: Rect, orientation: Orientation) -> Self {
+        let mut group = Group::new(bounds);
+        // A splitter is a layout container: by default it grows with its owner
+        // (bottom-right tracks the owner's resize, top-left stays — keeping any
+        // inset), so its panes fill and resize without the caller wiring grow_mode.
+        // Opt out with `with_grow_mode` (e.g. `GrowMode::default()` for fixed size).
+        // (Harmless when nested: a parent splitter sets child bounds explicitly,
+        // so a sub-splitter's grow_mode is never consulted.)
+        group.state_mut().grow_mode = GrowMode {
+            hi_x: true,
+            hi_y: true,
+            ..Default::default()
+        };
         Splitter {
-            group: Group::new(bounds),
+            group,
             orientation,
             slots: Vec::new(),
             divider_styles: Vec::new(),
@@ -82,6 +94,14 @@ impl Splitter {
     /// the outermost splitter.
     pub fn joined(mut self) -> Self {
         self.set_joined(true);
+        self
+    }
+
+    /// Override the grow mode (how the splitter resizes with its owner). A
+    /// splitter grows to fill by default (`{ hi_x, hi_y }`); pass
+    /// `GrowMode::default()` for a fixed-size splitter, or any custom mode.
+    pub fn with_grow_mode(mut self, grow_mode: GrowMode) -> Self {
+        self.group.state_mut().grow_mode = grow_mode;
         self
     }
 
@@ -797,6 +817,27 @@ impl View for Splitter {
 #[cfg(test)]
 mod divider_tests {
     use super::*;
+
+    #[test]
+    fn splitter_grows_with_owner_by_default() {
+        let sp = Splitter::cols();
+        let gm = sp.state().grow_mode;
+        assert!(gm.hi_x && gm.hi_y, "splitter fills/grows by default");
+        assert!(!gm.lo_x && !gm.lo_y, "top-left stays (keeps any inset)");
+        // rows() too
+        let sp2 = Splitter::rows();
+        assert!(sp2.state().grow_mode.hi_x && sp2.state().grow_mode.hi_y);
+    }
+
+    #[test]
+    fn with_grow_mode_can_disable_growth() {
+        let sp = Splitter::cols().with_grow_mode(GrowMode::default());
+        let gm = sp.state().grow_mode;
+        assert!(
+            !gm.hi_x && !gm.hi_y && !gm.lo_x && !gm.lo_y,
+            "fixed-size opt-out"
+        );
+    }
 
     #[test]
     fn draggability_matrix() {
