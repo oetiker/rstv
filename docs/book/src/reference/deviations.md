@@ -23,54 +23,54 @@ Porting contributors: see the project repository.
 *chosen.* The `T` prefix is dropped and every type lives under the `tv::`
 namespace (`TButton` → `tv::Button`); methods become `snake_case`. The
 `cm*`/`hc*` constant families become type-scoped associated constants on open
-newtypes ([`Command`](../api/tvision/command/struct.Command.html),
-[`HelpCtx`](../api/tvision/help/struct.HelpCtx.html)) so apps can mint their own
+newtypes ([`Command`](../api/rstv/command/struct.Command.html),
+[`HelpCtx`](../api/rstv/help/struct.HelpCtx.html)) so apps can mint their own
 values. → [Constant families](../port/constants.md)
 
 ### D2 · Inheritance → trait + composition {#d2}
 
 *forced.* The class tree becomes a
-[`View`](../api/tvision/view/trait.View.html) trait with default methods plus a
-[`ViewState`](../api/tvision/view/struct.ViewState.html) struct held by
+[`View`](../api/rstv/view/trait.View.html) trait with default methods plus a
+[`ViewState`](../api/rstv/view/struct.ViewState.html) struct held by
 composition; "subclass `TWindow`" becomes embed-and-delegate — hold a
-[`Window`](../api/tvision/window/struct.Window.html), forward the methods you
+[`Window`](../api/rstv/window/struct.Window.html), forward the methods you
 don't change. → [Inheritance](../port/inheritance.md)
 
 ### D3 · Pointers → handles + downward context {#d3}
 
 *forced.* Raw `TView*` pointers become process-global
-[`ViewId`](../api/tvision/view/struct.ViewId.html) handles plus a downward-passed
-[`Context`](../api/tvision/view/struct.Context.html); up/sideways links resolve
+[`ViewId`](../api/rstv/view/struct.ViewId.html) handles plus a downward-passed
+[`Context`](../api/rstv/view/struct.Context.html); up/sideways links resolve
 by tree-walk, never by reference. → [Pointers & infoPtr → handles](../port/handles.md)
 
 ### D4 · Events → enum + match {#d4}
 
 *chosen.* `TEvent`'s tagged union and bitmasks become an
-[`Event`](../api/tvision/event/enum.Event.html) enum that is matched, not masked;
+[`Event`](../api/rstv/event/enum.Event.html) enum that is matched, not masked;
 `message()` splits into a targeted query and an `Event::Broadcast`. `TKey`/`kb*`
-become a closed [`Key`](../api/tvision/event/enum.Key.html) enum plus
-[`KeyModifiers`](../api/tvision/event/struct.KeyModifiers.html). → [Events](../port/events.md)
+become a closed [`Key`](../api/rstv/event/enum.Key.html) enum plus
+[`KeyModifiers`](../api/rstv/event/struct.KeyModifiers.html). → [Events](../port/events.md)
 
 ### D5 · Flag words → struct-of-bools {#d5}
 
 *chosen.* The `ushort` flag words (`state`, `options`, `growMode`, `dragMode`)
 become `#[derive(Default)]` structs of bools, with a verb-enum `set_state` over
-them ([`StateFlag`](../api/tvision/view/enum.StateFlag.html),
-[`Options`](../api/tvision/view/struct.Options.html)). → [Flag words](../port/flags.md)
+them ([`StateFlag`](../api/rstv/view/enum.StateFlag.html),
+[`Options`](../api/rstv/view/struct.Options.html)). → [Flag words](../port/flags.md)
 
 ### D6 · Attribute bytes → typed Color/Style {#d6}
 
 *chosen.* Packed `TColorAttr`/`TColorDesired` bytes become a typed four-variant
-[`Color`](../api/tvision/color/enum.Color.html) enum plus
-[`Style`](../api/tvision/color/struct.Style.html); the per-cell retain-`0`
+[`Color`](../api/rstv/color/enum.Color.html) enum plus
+[`Style`](../api/rstv/color/struct.Style.html); the per-cell retain-`0`
 overloads are dropped. → [The draw model](../port/draw.md)
 
 ### D7 · Palettes & glyphs → Theme {#d7}
 
 *chosen.* Palette chains and scattered glyph literals become a
-[`Theme`](../api/tvision/theme/struct.Theme.html) owning a state→`Role` style map
+[`Theme`](../api/rstv/theme/struct.Theme.html) owning a state→`Role` style map
 and a `Glyphs` set; `getColor`/`getPalette` become
-`ctx.theme.style(`[`Role`](../api/tvision/theme/enum.Role.html)`::…)`. → [Palettes & glyphs → Theme](../port/theme.md)
+`ctx.theme.style(`[`Role`](../api/rstv/theme/enum.Role.html)`::…)`. → [Palettes & glyphs → Theme](../port/theme.md)
 
 ### D8 · Whole-tree redraw + diff {#d8}
 
@@ -88,15 +88,15 @@ press-tracking are handlers, not loops. → [Modal execView](../port/modal.md)
 
 *forced.* Flat-record `memcpy` data transfer (`getData`/`setData`/`dataSize`)
 becomes a typed `value()`/`set_value()` protocol over a
-[`FieldValue`](../api/tvision/data/enum.FieldValue.html). → [Dialogs & data](../apps/dialogs.md)
+[`FieldValue`](../api/rstv/data/enum.FieldValue.html). → [Dialogs & data](../apps/dialogs.md)
 
 ### D11 · Platform layer → Backend trait {#d11}
 
 *chosen.* The platform layer (`THardwareInfo`, ncurses/win32 strategies) becomes
-a small object-safe [`Backend`](../api/tvision/backend/trait.Backend.html) trait,
+a small object-safe [`Backend`](../api/rstv/backend/trait.Backend.html) trait,
 with a production
-[`CrosstermBackend`](../api/tvision/backend/struct.CrosstermBackend.html) and a
-test [`HeadlessBackend`](../api/tvision/backend/struct.HeadlessBackend.html) that
+[`CrosstermBackend`](../api/rstv/backend/struct.CrosstermBackend.html) and a
+test [`HeadlessBackend`](../api/rstv/backend/struct.HeadlessBackend.html) that
 unlocks snapshot testing. → [Drawing & backends](../internals/drawing.md)
 
 ### D12 · Persistence → dropped {#d12}

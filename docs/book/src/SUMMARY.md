@@ -50,6 +50,6 @@
 # Reference
 
 - [How the API docs are organized](reference/api.md)
-- [C++ Turbo Vision → tvision symbol map](reference/symbol-map.md)
+- [C++ Turbo Vision → rstv symbol map](reference/symbol-map.md)
 - [Deviations D1–D13](reference/deviations.md)
 - [The screenshot tooling](reference/screenshots.md)

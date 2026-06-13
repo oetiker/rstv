@@ -24,14 +24,14 @@ gate is exactly what "modal" means.
 
 ## `exec_view` steers the one loop
 
-[`Program::exec_view`](../api/tvision/app/struct.Program.html#method.exec_view) is
+[`Program::exec_view`](../api/rstv/app/struct.Program.html#method.exec_view) is
 the blocking wrapper that replaces `execView`. It inserts the view, makes it
 current, pushes a `ModalFrame`, then runs the *same*
-[`pump_once`](../api/tvision/app/struct.Program.html#method.pump_once) loop until
-the view calls [`end_modal`](../api/tvision/view/struct.Context.html#method.end_modal),
+[`pump_once`](../api/rstv/app/struct.Program.html#method.pump_once) loop until
+the view calls [`end_modal`](../api/rstv/view/struct.Context.html#method.end_modal),
 setting the end state. Then it pops the frame, removes the view, restores the
 previous focus and command set, and returns the chosen
-[`Command`](../api/tvision/command/struct.Command.html). No new loop is spun —
+[`Command`](../api/rstv/command/struct.Command.html). No new loop is spun —
 `exec_view` just steers the one loop that was already running.
 
 See [Dialogs & data](../apps/dialogs.md) for the user-facing recipe, [Event

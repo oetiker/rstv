@@ -2,14 +2,14 @@
 
 ## Add the crate
 
-`tvision` targets a recent stable Rust (the crate uses the 2024 edition, so you
+`rstv` targets a recent stable Rust (the crate uses the 2024 edition, so you
 need Rust 1.85 or newer). Add it to your `Cargo.toml`. The house style is to
 alias the package to `tv`, so import it under that name with Cargo's
 `package` key:
 
 ```toml
 [dependencies]
-tv = { package = "tvision", git = "https://github.com/oetiker/rstv" }
+tv = { package = "rstv", git = "https://github.com/oetiker/rstv" }
 ```
 
 Once a release is published to crates.io you will be able to pin a version
@@ -17,7 +17,7 @@ instead:
 
 ```toml
 [dependencies]
-tv = { package = "tvision", version = "0.1" }
+tv = { package = "rstv", version = "0.1" }
 ```
 
 Now everything is reachable through the `tv::` namespace — the path is the
@@ -25,11 +25,11 @@ namespace the old `T` prefix was faking:
 
 ```rust
 # #![allow(unused_imports)]
-# use tvision as tv;
+# use rstv as tv;
 use tv::{Program, Desktop, MenuBar, StatusLine, CrosstermBackend};
 ```
 
-If you prefer the crate's own name, you can of course `use tvision::…` directly;
+If you prefer the crate's own name, you can of course `use rstv::…` directly;
 the `tv` alias is a convention, not a requirement.
 
 ## Feature flags
@@ -45,7 +45,7 @@ internal rungs, so copy/paste keeps working on capable terminals:
 
 ```toml
 [dependencies]
-tv = { package = "tvision", git = "https://github.com/oetiker/rstv", default-features = false }
+tv = { package = "rstv", git = "https://github.com/oetiker/rstv", default-features = false }
 ```
 
 ## Verify the build
@@ -55,7 +55,7 @@ toolchain:
 
 ```console
 $ cargo build
-   Compiling tvision v0.1.0
+   Compiling rstv v0.1.0
     Finished `dev` profile [unoptimized + debuginfo]
 ```
 

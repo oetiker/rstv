@@ -9,20 +9,20 @@ its cells; keeping terminal I/O bounded is the diff's job.
 
 ## The cell and the draw buffer
 
-The atom is a [`Cell`](../api/tvision/screen/struct.Cell.html): one screen
+The atom is a [`Cell`](../api/rstv/screen/struct.Cell.html): one screen
 position holding a grapheme cluster (its text), a colour
-[`Style`](../api/tvision/color/struct.Style.html), and two flags marking the lead
+[`Style`](../api/rstv/color/struct.Style.html), and two flags marking the lead
 and trailing halves of a double-width glyph. It is the Rust form of magiblot's
 `TScreenCell`.
 
 A view does not poke cells one at a time. It fills a
-[`DrawBuffer`](../api/tvision/screen/struct.DrawBuffer.html) — a single fixed-width
+[`DrawBuffer`](../api/rstv/screen/struct.DrawBuffer.html) — a single fixed-width
 *row* of cells under construction — then blits that row. Writes past the buffer's
 width are clipped automatically. Text goes in through width-aware primitives, so
 truncation and double-width handling are shared with the rest of the renderer.
 
 ```rust
-# use tvision as tv;
+# use rstv as tv;
 # use tv::{DrawBuffer, Style};
 # fn _demo(style: Style) {
 # let width = 10usize;
@@ -40,19 +40,19 @@ b.move_str(0, "Hello", style);
 ## The back buffer and the diff
 
 The full view tree is painted into a
-[`Buffer`](../api/tvision/screen/struct.Buffer.html) — the screen-sized grid,
+[`Buffer`](../api/rstv/screen/struct.Buffer.html) — the screen-sized grid,
 always rooted at `(0, 0)`. Each frame the renderer keeps **two** buffers: the
 *back* buffer (painted this frame) and the *front* buffer (last frame, the diff
-reference). [`Buffer::diff`](../api/tvision/screen/struct.Buffer.html#method.diff)
+reference). [`Buffer::diff`](../api/rstv/screen/struct.Buffer.html#method.diff)
 walks the two grids and returns just the cells that changed, with double-width
 lead/trail cells handled correctly. The algorithm is adapted from ratatui, minus
 its `skip` opt-out — there is nothing to skip when you repaint everything.
 
 ## The Renderer cycle
 
-The [`Renderer`](../api/tvision/backend/struct.Renderer.html) owns the back/front
+The [`Renderer`](../api/rstv/backend/struct.Renderer.html) owns the back/front
 buffer pair and a boxed backend, and runs one frame per call to
-[`render`](../api/tvision/backend/struct.Renderer.html#method.render):
+[`render`](../api/rstv/backend/struct.Renderer.html#method.render):
 
 1. **Reset** the back buffer to blank.
 2. **Paint** the whole view tree into it.
@@ -66,7 +66,7 @@ This runs at the end of every [event-loop pump](event-loop.md).
 
 ## The Backend trait
 
-The terminal seam is the [`Backend`](../api/tvision/backend/trait.Backend.html)
+The terminal seam is the [`Backend`](../api/rstv/backend/trait.Backend.html)
 trait ([deviation D11](../reference/deviations.md#d11)). The app holds a
 `Box<dyn Backend>`, so the trait is **object-safe** and the view tree never
 carries a backend type parameter. Its surface is small: report `size`, `draw` a
@@ -77,8 +77,8 @@ Two implementations ship:
 
 | Backend | Role |
 | ------- | ---- |
-| [`CrosstermBackend`](../api/tvision/backend/struct.CrosstermBackend.html) | Production. Wraps crossterm; sets up raw mode, the alternate screen, and mouse capture, and restores the terminal on `Drop`. |
-| [`HeadlessBackend`](../api/tvision/backend/struct.HeadlessBackend.html) | Tests. An in-memory grid that never blocks: `poll_event` pops a queued event or returns immediately, so tests drive the loop deterministically. |
+| [`CrosstermBackend`](../api/rstv/backend/struct.CrosstermBackend.html) | Production. Wraps crossterm; sets up raw mode, the alternate screen, and mouse capture, and restores the terminal on `Drop`. |
+| [`HeadlessBackend`](../api/rstv/backend/struct.HeadlessBackend.html) | Tests. An in-memory grid that never blocks: `poll_event` pops a queued event or returns immediately, so tests drive the loop deterministically. |
 
 The headless backend is the verification backbone of the whole port: a widget is
 rendered onto it and its grid is compared, via the frozen `screen::snapshot`
@@ -88,7 +88,7 @@ format, against a golden string.
 
 Terminals vary in colour capability, so the backend maps each `Style`'s colours
 down a quantization ladder selected by
-[`ColorDepth`](../api/tvision/backend/enum.ColorDepth.html): `TrueColor` passes
+[`ColorDepth`](../api/rstv/backend/enum.ColorDepth.html): `TrueColor` passes
 24-bit RGB through unchanged, `Xterm256` quantizes RGB to the nearest palette
 entry, `Ansi16` reduces everything to the 16-colour set, and `NoColor` drops
 colour entirely. The ladder itself (`RGB → xterm-256 → xterm-16 → BIOS`) is pure,

@@ -16,7 +16,7 @@ use crate::view::{DrawCtx, Rect, View, ViewState};
 ///
 /// # Example
 /// ```
-/// # use tvision::{Background, Rect};
+/// # use rstv::{Background, Rect};
 /// let _bg = Background::new(Rect::new(0, 0, 80, 25), '▒');
 /// ```
 ///

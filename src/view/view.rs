@@ -637,7 +637,7 @@ fn grow(gm: GrowMode, s: i32, d: i32, i: &mut i32) {
 /// up an owner pointer instead take the downward
 /// [`Context`](crate::view::Context) (deviation D3).
 // MAINTENANCE: when adding a defaulted method to this trait, also add a
-// forwarder entry to `tvision-macros/src/specs.rs` (`view()`) AND the
+// forwarder entry to `rstv-macros/src/specs.rs` (`view()`) AND the
 // `expected` list in `tests/delegate_view.rs`. Required methods (no default)
 // catch omission at compile time; defaulted ones would silently fall back to
 // the default at every `#[delegate]` site if the forwarder is missing.

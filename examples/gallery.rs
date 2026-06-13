@@ -14,7 +14,7 @@
 
 use std::{env, io};
 
-use tvision::{
+use rstv::{
     Button, ButtonFlags, CD_NORMAL, ChDirDialog, CheckBoxes, Color, ColorPicker, Command, Context,
     CrosstermBackend, Desktop, Dialog, EditWindow, Event, FD_OPEN_BUTTON, FileDialog,
     HistoryWindow, InputLine, Key, KeyEvent, Label, ListBox, Memo, Menu, MenuBar, MenuBox, Node,
@@ -504,7 +504,7 @@ impl View for ListBoxShowcase {
                     ],
                     ctx,
                 );
-                tvision::widgets::list_viewer::update_steps(lb, ctx);
+                rstv::widgets::list_viewer::update_steps(lb, ctx);
             }
         }
         self.dialog.handle_event(ev, ctx);

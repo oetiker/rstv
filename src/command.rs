@@ -40,7 +40,7 @@ use std::ops::{AddAssign, BitAndAssign, BitOrAssign, SubAssign};
 /// own dotted prefix:
 ///
 /// ```
-/// const REFRESH: tvision::Command = tvision::Command::custom("myapp.refresh");
+/// const REFRESH: rstv::Command = rstv::Command::custom("myapp.refresh");
 /// ```
 ///
 /// Equality and hashing compare the string *contents*, so two `Command`s with

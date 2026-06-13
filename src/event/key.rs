@@ -126,7 +126,7 @@ impl From<Key> for KeyEvent {
 /// # Examples
 ///
 /// ```
-/// use tvision::event::hot_key;
+/// use rstv::event::hot_key;
 /// assert_eq!(hot_key("~o~k"), Some('O'));  // uppercased
 /// assert_eq!(hot_key("O~k"), Some('K'));  // first char after first '~'
 /// assert_eq!(hot_key("No tilde here"), None);

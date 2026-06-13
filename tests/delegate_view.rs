@@ -8,13 +8,13 @@
 use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
 
-use tvision::backend::{HeadlessBackend, Renderer};
-use tvision::delegate;
-use tvision::screen::Buffer;
-use tvision::theme::Theme;
-use tvision::timer::TimerQueue;
-use tvision::view::Deferred;
-use tvision::{
+use rstv::backend::{HeadlessBackend, Renderer};
+use rstv::delegate;
+use rstv::screen::Buffer;
+use rstv::theme::Theme;
+use rstv::timer::TimerQueue;
+use rstv::view::Deferred;
+use rstv::{
     Command, CommandSet, Context, DrawCtx, Event, FieldValue, HelpCtx, Point, Rect, StateFlag,
     View, ViewId, ViewState,
 };
@@ -316,7 +316,7 @@ fn delegate_forwards_every_known_view_method() {
     // -- Assert every method was reached ------------------------------------
     let seen = d.inner.seen.borrow();
     // MAINTENANCE: keep in sync with trait View's methods and
-    // tvision-macros/src/specs.rs (`view()`). See the note in view.rs.
+    // rstv-macros/src/specs.rs (`view()`). See the note in view.rs.
     let expected: &[&str] = &[
         "state",
         "state_mut",

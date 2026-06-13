@@ -13,19 +13,19 @@ rstv collapses that whole machine into one typed object.
 
 ## One `Theme`, two halves
 
-A [`Theme`](../api/tvision/theme/struct.Theme.html) owns both ends of the old
+A [`Theme`](../api/rstv/theme/struct.Theme.html) owns both ends of the old
 scheme:
 
-- a flat map from a semantic [`Role`](../api/tvision/theme/enum.Role.html) to a
-  [`Style`](../api/tvision/color/struct.Style.html) (a foreground/background
-  [`Color`](../api/tvision/color/enum.Color.html) pair), and
-- a [`Glyphs`](../api/tvision/theme/struct.Glyphs.html) holder for every drawing
+- a flat map from a semantic [`Role`](../api/rstv/theme/enum.Role.html) to a
+  [`Style`](../api/rstv/color/struct.Style.html) (a foreground/background
+  [`Color`](../api/rstv/color/enum.Color.html) pair), and
+- a [`Glyphs`](../api/rstv/theme/struct.Glyphs.html) holder for every drawing
   character the framework uses.
 
 A view never walks a palette chain. It asks the theme for the role it wants:
 
 ```rust
-# use tvision as tv;
+# use rstv as tv;
 # use tv::Role;
 # fn _demo(ctx: &tv::DrawCtx) {
 let _style = ctx.style(Role::FrameActive);
@@ -36,7 +36,7 @@ let _corner = ctx.glyphs().frame_tl; // ┌
 ## `Role` is the palette index, named
 
 Where the C++ said *"the high nibble of `cpButton` slot 6, two owner hops down"*,
-rstv says [`Role::ButtonDefaultShortcut`](../api/tvision/theme/enum.Role.html).
+rstv says [`Role::ButtonDefaultShortcut`](../api/rstv/theme/enum.Role.html).
 Each `getColor` call site in the original maps to exactly one named `Role` here,
 and the *state → role* decision is made once, in the code that draws the widget,
 rather than being implicit in a byte string. The enum covers the state matrices
@@ -56,7 +56,7 @@ port.
 
 ## The default theme *is* the classic blue look
 
-[`Theme::classic_blue()`](../api/tvision/theme/struct.Theme.html#method.classic_blue)
+[`Theme::classic_blue()`](../api/rstv/theme/struct.Theme.html#method.classic_blue)
 (also the `Default`) reproduces the canonical Turbo Vision palette. Every entry
 is derived straight from the literal C++ palette chain — each line in the source
 carries an inline comment tracing the original hops, e.g.
@@ -66,9 +66,9 @@ pinned to canonical true-color RGB (via `Color::bios_rgb`) rather than the
 terminal's own BIOS palette.
 
 Because a theme is just data, recoloring the whole app is one call:
-[`set_style(role, style)`](../api/tvision/theme/struct.Theme.html#method.set_style)
+[`set_style(role, style)`](../api/rstv/theme/struct.Theme.html#method.set_style)
 replaces any role's color, and
-[`style(role)`](../api/tvision/theme/struct.Theme.html#method.style) reads it
+[`style(role)`](../api/rstv/theme/struct.Theme.html#method.style) reads it
 back. See the [Theming & colors](../apps/theming.md) recipe for doing this in a
 running app, and the [drawing chapter](../internals/drawing.md) for how a `Style`
 reaches the screen.
@@ -76,7 +76,7 @@ reaches the screen.
 ## Glyphs, not literals
 
 The CP437 box-drawing and marker characters that magiblot's `tvtext1.cpp` seeds
-live as named fields on [`Glyphs`](../api/tvision/theme/struct.Glyphs.html):
+live as named fields on [`Glyphs`](../api/rstv/theme/struct.Glyphs.html):
 single- and double-line frame pieces (`frame_tl`, `frame_h_d`, …), scrollbar
 arrows and thumb, button-shadow blocks, input-line scroll arrows, and the
 composite frame-icon strings such as the close box `"[~■~]"`. Defaults match the

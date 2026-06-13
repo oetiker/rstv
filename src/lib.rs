@@ -15,11 +15,11 @@
 //!
 //! ```toml
 //! # Cargo.toml
-//! tv = { package = "tvision", version = "0.1" }
+//! tv = { package = "rstv", version = "0.1" }
 //! ```
 //!
 //! ```
-//! # use tvision as tv;
+//! # use rstv as tv;
 //! let _r = tv::Rect::new(0, 0, 80, 25);
 //! ```
 //!
@@ -55,8 +55,8 @@
 //! handles, flag words become structs of bools, and the palette becomes a
 //! [`Theme`] keyed by [`Role`] — are summarized in the project's guide.
 
-// Lets proc-macro-generated `::tvision::Type` paths resolve inside this crate.
-extern crate self as tvision;
+// Lets proc-macro-generated `::rstv::Type` paths resolve inside this crate.
+extern crate self as rstv;
 
 pub mod app;
 pub mod backend;
@@ -110,7 +110,7 @@ pub use screen::{Buffer, Cell, DrawBuffer};
 pub use status::{HelpCtxRange, StatusColors, StatusDef, StatusItem, StatusLine};
 pub use theme::{Role, Theme};
 pub use timer::{Clock, ManualClock, SystemClock, TimerId, TimerQueue};
-pub use tvision_macros::delegate;
+pub use rstv_macros::delegate;
 pub use validate::{
     FilterValidator, LookupValidator, PXPictureValidator, RangeValidator, RegexError,
     RegexValidator, StringLookupValidator, Validator,

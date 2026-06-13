@@ -3,17 +3,17 @@
 The top **menu bar**, the bottom **status line**, and the **context-sensitive
 help** that ties them together are the chrome of every Turbo Vision program. In
 rstv all three are *data trees* you describe with fluent builders, then hand
-to a view. The data lives in [`tv::menu`](../api/tvision/menu/index.html) and
-[`tv::status`](../api/tvision/status/index.html); the help context is
-[`HelpCtx`](../api/tvision/help/struct.HelpCtx.html).
+to a view. The data lives in [`tv::menu`](../api/rstv/menu/index.html) and
+[`tv::status`](../api/rstv/status/index.html); the help context is
+[`HelpCtx`](../api/rstv/help/struct.HelpCtx.html).
 
 ## The menu bar
 
-A menu is a [`Menu`](../api/tvision/menu/struct.Menu.html) — an ordered list of
+A menu is a [`Menu`](../api/rstv/menu/struct.Menu.html) — an ordered list of
 entries plus a default selection. You rarely build one by hand; instead you chain
-a [`MenuBuilder`](../api/tvision/menu/struct.MenuBuilder.html) — a fluent
+a [`MenuBuilder`](../api/rstv/menu/struct.MenuBuilder.html) — a fluent
 builder where each call appends one
-[`MenuItem`](../api/tvision/menu/enum.MenuItem.html) and returns `self`
+[`MenuItem`](../api/rstv/menu/enum.MenuItem.html) and returns `self`
 *(the idiomatic successor to C++'s `operator+` chains)*:
 
 ```rust,ignore
@@ -35,14 +35,14 @@ Three things to notice:
 
 - **`~`-marked labels.** The tildes bracket the hot-letter (`"~F~ile"` highlights
   the `F`). Submenus take an
-  [`alt()`](../api/tvision/menu/fn.alt.html) accelerator — a convenience that
+  [`alt()`](../api/rstv/menu/fn.alt.html) accelerator — a convenience that
   builds an `Alt`+`<char>` key.
 - **Three entry kinds.** `command` / `command_key` append a
-  [`MenuItem::Command`](../api/tvision/menu/enum.MenuItem.html) (the latter adds
+  [`MenuItem::Command`](../api/rstv/menu/enum.MenuItem.html) (the latter adds
   an accelerator key plus the shortcut text shown at the right, like `"F3"`);
   `submenu` appends a nested menu; `separator` appends a divider.
 - **It is just data.** Choosing an item emits its
-  [`Command`](../api/tvision/command/struct.Command.html) as an event — the menu
+  [`Command`](../api/rstv/command/struct.Command.html) as an event — the menu
   never *does* anything itself. See [Commands & events](commands.md) for how that
   command reaches a handler, and for how a greyed-out (`disabled`) item is driven
   by command enable/disable state.
@@ -53,7 +53,7 @@ Three things to notice:
 > label convention and `kbAltF` literals.
 
 Wrap the finished `Menu` in a
-[`MenuBar`](../api/tvision/menu/menu_bar/struct.MenuBar.html) and return it from
+[`MenuBar`](../api/rstv/menu/menu_bar/struct.MenuBar.html) and return it from
 your `init_menu_bar` factory. `F10` enters the bar; the `Alt` accelerators open
 submenus directly. With the `File` menu pulled down it looks like this:
 
@@ -67,10 +67,10 @@ sources are the `menubar` and `statusline` entries in the
 
 ## The status line
 
-A status line is a `Vec<`[`StatusDef`](../api/tvision/status/struct.StatusDef.html)`>`
+A status line is a `Vec<`[`StatusDef`](../api/rstv/status/struct.StatusDef.html)`>`
 — a list of *definitions*, each owning a list of
-[`StatusItem`](../api/tvision/status/struct.StatusItem.html)s, built with
-[`StatusDef::list()`](../api/tvision/status/struct.StatusDefListBuilder.html):
+[`StatusItem`](../api/rstv/status/struct.StatusItem.html)s, built with
+[`StatusDef::list()`](../api/rstv/status/struct.StatusDefListBuilder.html):
 
 ```rust,ignore
 let defs = StatusDef::list()
@@ -84,7 +84,7 @@ let defs = StatusDef::list()
 
 Each item carries display text, an optional accelerator key, and a command —
 clicking the label or pressing the key fires that command. Hand the `defs` to a
-[`StatusLine`](../api/tvision/status/status_line/struct.StatusLine.html) and
+[`StatusLine`](../api/rstv/status/status_line/struct.StatusLine.html) and
 return it from your `init_status_line` factory.
 
 A **hidden hotkey binding** is an item with no text — use the `key_item` builder
@@ -95,15 +95,15 @@ globally — the standard trick for app-wide shortcuts like `Shift-Del` ⇒ Cut
 ## Context-sensitive help
 
 This is what a multiple-`StatusDef` list is *for*. Each def carries a
-[`HelpCtxRange`](../api/tvision/status/enum.HelpCtxRange.html); the status line
+[`HelpCtxRange`](../api/rstv/status/enum.HelpCtxRange.html); the status line
 shows the items of the **first def whose range matches the current help
 context**. Most apps need only one universal def — that is what `def_all`
-([`HelpCtxRange::All`](../api/tvision/status/enum.HelpCtxRange.html)) builds — but
+([`HelpCtxRange::All`](../api/rstv/status/enum.HelpCtxRange.html)) builds — but
 you can register a `def_one_of(...)` whose items appear only while a particular
 context is active, so the bottom line changes as focus moves between an editor, a
 browser, and so on.
 
-The current context is a [`HelpCtx`](../api/tvision/help/struct.HelpCtx.html).
+The current context is a [`HelpCtx`](../api/rstv/help/struct.HelpCtx.html).
 A help context is a namespaced `&'static str`
 (`HelpCtx::custom("myapp.editor")`), so app- and view-defined contexts can never
 collide. Because string identity carries no ordering, context ranges are expressed

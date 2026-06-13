@@ -16,12 +16,12 @@ different costs.
 ## Two layers
 
 1. **In-memory redraw (cheap).** Every update cycle the whole view tree is
-   painted back-to-front into a [`Buffer`](../api/tvision/screen/struct.Buffer.html),
+   painted back-to-front into a [`Buffer`](../api/rstv/screen/struct.Buffer.html),
    the in-memory screen grid. This is RAM only — microseconds, even for a full
    screen.
 2. **Terminal flush (diff-bounded).** The freshly-painted buffer is compared
    against the previous frame with
-   [`Buffer::diff`](../api/tvision/screen/struct.Buffer.html#method.diff), which
+   [`Buffer::diff`](../api/rstv/screen/struct.Buffer.html#method.diff), which
    returns only the cells that changed. Just those cells are turned into escape
    sequences and sent to the terminal.
 
@@ -48,13 +48,13 @@ unnecessary.
 
 ## How a view paints
 
-Views never touch the [`Buffer`](../api/tvision/screen/struct.Buffer.html)
+Views never touch the [`Buffer`](../api/rstv/screen/struct.Buffer.html)
 directly. They fill a scratch row — a
-[`DrawBuffer`](../api/tvision/screen/struct.DrawBuffer.html), the faithful
+[`DrawBuffer`](../api/rstv/screen/struct.DrawBuffer.html), the faithful
 successor to `TDrawBuffer` — one display line at a time using
-[`Cell`](../api/tvision/screen/struct.Cell.html) values, then blit it into the
+[`Cell`](../api/rstv/screen/struct.Cell.html) values, then blit it into the
 draw context. Each `Cell` carries its grapheme and a typed
-[`Style`](../api/tvision/color/struct.Style.html) (see
+[`Style`](../api/rstv/color/struct.Style.html) (see
 [Palettes & glyphs → Theme/Role](theme.md)) instead of the packed attribute byte
 of the original.
 

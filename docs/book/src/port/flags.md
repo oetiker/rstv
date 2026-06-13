@@ -11,7 +11,7 @@ We have the bytes to spare, so rstv turns each flag word into a plain
 struct of named `bool` fields. The bit just becomes a field:
 
 ```rust
-# use tvision as tv;
+# use rstv as tv;
 # use tv::View;
 # fn _demo(view: &dyn tv::View) {
 if view.state().state.focused { /* ... */ }   // was: state & sfFocused
@@ -26,10 +26,10 @@ old `0x0001`-style constant left to a comment:
 
 | C++ word   | rstv type                                                | Example                        |
 | ---------- | -------------------------------------------------------- | ------------------------------ |
-| `state`    | [`State`](../api/tvision/view/struct.State.html)         | `sfFocused` → `focused`        |
-| `options`  | [`Options`](../api/tvision/view/struct.Options.html)     | `ofSelectable` → `selectable`  |
-| `growMode` | [`GrowMode`](../api/tvision/view/struct.GrowMode.html)   | `gfGrowAll` → `grow_all()`     |
-| `dragMode` | [`DragMode`](../api/tvision/view/struct.DragMode.html)   | `dmLimitLoY` → `limit_lo_y`    |
+| `state`    | [`State`](../api/rstv/view/struct.State.html)         | `sfFocused` → `focused`        |
+| `options`  | [`Options`](../api/rstv/view/struct.Options.html)     | `ofSelectable` → `selectable`  |
+| `growMode` | [`GrowMode`](../api/rstv/view/struct.GrowMode.html)   | `gfGrowAll` → `grow_all()`     |
+| `dragMode` | [`DragMode`](../api/rstv/view/struct.DragMode.html)   | `dmLimitLoY` → `limit_lo_y`    |
 
 A combined constant such as `gfGrowAll` (four `gf*` bits OR'd together) becomes
 a constructor — `GrowMode::grow_all()` — rather than a single field, since it
@@ -47,8 +47,8 @@ A bare read is just field access on the snapshot returned by `state()` /
 mattered: it didn't only toggle a bit, it fired side effects — redrawing,
 broadcasting a focus change, cascading into children. rstv keeps that verb
 where the side effects live, as
-[`View::set_state`](../api/tvision/view/trait.View.html#method.set_state) over a
-small [`StateFlag`](../api/tvision/view/enum.StateFlag.html) enum — the named
+[`View::set_state`](../api/rstv/view/trait.View.html#method.set_state) over a
+small [`StateFlag`](../api/rstv/view/enum.StateFlag.html) enum — the named
 subset of `sf*` (`Active`, `Selected`, `Focused`, `Dragging`) that the focus and
 activation machinery propagates. Flags with no propagation (visibility, cursor
 shape) are set directly on the struct, never through this hook.
@@ -61,7 +61,7 @@ which the menus and status line mirror) rather than poking a bit.
 ## Beyond the view: `WindowFlags`
 
 The same treatment reaches the `wf*` decoration word. A window's
-[`WindowFlags`](../api/tvision/window/struct.WindowFlags.html) carries `r#move`
+[`WindowFlags`](../api/rstv/window/struct.WindowFlags.html) carries `r#move`
 (can be dragged — `wfMove`, spelled with a raw identifier because `move` is a
 Rust keyword), `grow`, `close` and `zoom`. A default window sets all four, just
 as the C++ ctor does `flags = wfMove | wfGrow | wfClose | wfZoom`. Those bools

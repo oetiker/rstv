@@ -725,7 +725,7 @@ impl Program {
     ///
     /// # Example
     /// ```rust,no_run
-    /// use tvision::{Color, Command};
+    /// use rstv::{Color, Command};
     /// const CMD_PICK: Command = Command::custom("my_app.pick_color");
     /// // program.run_app(|prog, cmd| {
     /// //     if cmd == CMD_PICK { prog.color_dialog(Color::Default); }

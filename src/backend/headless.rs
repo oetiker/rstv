@@ -33,7 +33,7 @@ use crate::screen::{Buffer, Cell};
 /// The handle outlives that move and lets tests inspect or drive the backend:
 ///
 /// ```
-/// # use tvision::{HeadlessBackend, Renderer};
+/// # use rstv::{HeadlessBackend, Renderer};
 /// let (backend, screen) = HeadlessBackend::new(80, 25);
 /// let mut renderer = Renderer::new(Box::new(backend));
 /// // … render frames …

@@ -1,8 +1,8 @@
 # Theming & colors
 
 In rstv, colors come from a single central, swappable table: a typed map from a
-semantic [`Role`](../api/tvision/theme/enum.Role.html) to a
-[`Style`](../api/tvision/color/struct.Style.html). No widget ever hard-codes a
+semantic [`Role`](../api/rstv/theme/enum.Role.html) to a
+[`Style`](../api/rstv/color/struct.Style.html). No widget ever hard-codes a
 color; every `draw()` asks for a role, and the active theme resolves it. Swapping
 the whole palette is a one-call operation. The narrative behind the design is in
 [Palettes & glyphs](../port/theme.md).
@@ -16,9 +16,9 @@ the whole palette is a one-call operation. The narrative behind the design is in
 
 | Type | What it is |
 | ---- | ---------- |
-| [`Color`](../api/tvision/color/enum.Color.html) | A desired color: terminal `Default`, 4-bit `Bios`, 256-color `Indexed`, or 24-bit `Rgb`. |
-| [`Style`](../api/tvision/color/struct.Style.html) | A foreground `Color`, a background `Color`, and a [`Modifiers`](../api/tvision/color/struct.Modifiers.html) struct-of-bools (bold, italic, underline, blink, reverse, strike). |
-| [`Theme`](../api/tvision/theme/struct.Theme.html) | The whole palette: a `Role → Style` map plus a [`Glyphs`](../api/tvision/theme/struct.Glyphs.html) holder for the box-drawing and marker characters. |
+| [`Color`](../api/rstv/color/enum.Color.html) | A desired color: terminal `Default`, 4-bit `Bios`, 256-color `Indexed`, or 24-bit `Rgb`. |
+| [`Style`](../api/rstv/color/struct.Style.html) | A foreground `Color`, a background `Color`, and a [`Modifiers`](../api/rstv/color/struct.Modifiers.html) struct-of-bools (bold, italic, underline, blink, reverse, strike). |
+| [`Theme`](../api/rstv/theme/struct.Theme.html) | The whole palette: a `Role → Style` map plus a [`Glyphs`](../api/rstv/theme/struct.Glyphs.html) holder for the box-drawing and marker characters. |
 
 A `Role` is a *semantic* slot — `FrameActive`, `ButtonDefault`, `MenuSelected`,
 `Error` — not a color. Widgets ask for roles, never for raw colors, so a single
@@ -28,11 +28,11 @@ grows as new widgets are ported, but applications do not add their own roles.
 ## The default theme
 
 The framework starts on
-[`Theme::classic_blue`](../api/tvision/theme/struct.Theme.html#method.classic_blue) —
+[`Theme::classic_blue`](../api/rstv/theme/struct.Theme.html#method.classic_blue) —
 the canonical Turbo Vision blue look, and the value behind
-[`Theme::default`](../api/tvision/theme/struct.Theme.html#method.default). Each
+[`Theme::default`](../api/rstv/theme/struct.Theme.html#method.default). Each
 role resolves to a definite true-color RGB via
-[`Color::bios_rgb`](../api/tvision/color/enum.Color.html#method.bios_rgb),
+[`Color::bios_rgb`](../api/rstv/color/enum.Color.html#method.bios_rgb),
 so contrast is correct regardless of how the terminal has remapped its own
 16-color palette. The source carries the full per-role derivation inline
 *(each value is anchored to the corresponding entry in the classic C++ palette
@@ -42,11 +42,11 @@ chain)*.
 
 If you are writing a custom `View`, you do not touch the `Theme` directly — the
 draw context hands you the resolved style. Inside `draw()` you have a
-[`DrawCtx`](../api/tvision/view/struct.DrawCtx.html); ask it for the style of a
+[`DrawCtx`](../api/rstv/view/struct.DrawCtx.html); ask it for the style of a
 role and paint with it:
 
 ```rust
-# use tvision as tv;
+# use rstv as tv;
 # struct MyWidget;
 # impl MyWidget {
 fn draw(&self, ctx: &mut tv::DrawCtx) {
@@ -65,13 +65,13 @@ come from `ctx.glyphs()` the same way. See
 
 Re-theming is a whole-theme swap. Take the default, override the roles you care
 about with
-[`set_style`](../api/tvision/theme/struct.Theme.html#method.set_style), and
+[`set_style`](../api/rstv/theme/struct.Theme.html#method.set_style), and
 install it on the running program with
-[`Program::set_theme`](../api/tvision/app/struct.Program.html#method.set_theme),
+[`Program::set_theme`](../api/rstv/app/struct.Program.html#method.set_theme),
 which forces a full repaint:
 
 ```rust
-# use tvision as tv;
+# use rstv as tv;
 # fn _demo(program: &mut tv::Program) {
 let mut theme = tv::Theme::classic_blue();
 theme.set_style(
@@ -83,14 +83,14 @@ program.set_theme(theme);
 ```
 
 You can also build a `Style` with attributes via
-[`Style::with_modifiers`](../api/tvision/color/struct.Style.html#method.with_modifiers),
+[`Style::with_modifiers`](../api/rstv/color/struct.Style.html#method.with_modifiers),
 or flip foreground and background with
-[`reversed`](../api/tvision/color/struct.Style.html#method.reversed) — which
+[`reversed`](../api/rstv/color/struct.Style.html#method.reversed) — which
 swaps concrete colors but toggles the `reverse` flag when one side is
 `Default`, matching Turbo Vision's `reverseAttribute`.
 
 For an interactive way to tweak roles at runtime, the program ships a built-in
 theme-editor dialog
-([`Program::theme_editor`](../api/tvision/app/struct.Program.html#method.theme_editor)):
+([`Program::theme_editor`](../api/rstv/app/struct.Program.html#method.theme_editor)):
 it opens an editor seeded with the current theme and, on **OK**, installs the
 result through `set_theme`.
