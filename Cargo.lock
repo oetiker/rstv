@@ -2093,6 +2093,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
+name = "rstv"
+version = "0.1.0"
+dependencies = [
+ "arboard",
+ "crossterm",
+ "insta",
+ "libc",
+ "regex-automata",
+ "rstv-macros",
+ "signal-hook 0.4.4",
+ "unicode-segmentation",
+ "unicode-width",
+]
+
+[[package]]
+name = "rstv-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "rustc_version"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2685,31 +2710,6 @@ dependencies = [
  "rand 0.9.4",
  "sha1",
  "thiserror",
-]
-
-[[package]]
-name = "tvision"
-version = "0.1.0"
-dependencies = [
- "arboard",
- "crossterm",
- "insta",
- "libc",
- "regex-automata",
- "signal-hook 0.4.4",
- "tvision-macros",
- "unicode-segmentation",
- "unicode-width",
-]
-
-[[package]]
-name = "tvision-macros"
-version = "0.1.0"
-dependencies = [
- "proc-macro-crate",
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -3376,8 +3376,8 @@ dependencies = [
  "mdbook",
  "mdbook-mermaid",
  "notify 6.1.1",
+ "rstv",
  "tiny_http",
- "tvision",
 ]
 
 [[package]]
