@@ -32,11 +32,12 @@ use crate::screen::{Buffer, Cell};
 /// — the backend is then boxed and given to the [`Renderer`](crate::backend::Renderer).
 /// The handle outlives that move and lets tests inspect or drive the backend:
 ///
-/// ```ignore
+/// ```
+/// # use tvision::{HeadlessBackend, Renderer};
 /// let (backend, screen) = HeadlessBackend::new(80, 25);
 /// let mut renderer = Renderer::new(Box::new(backend));
 /// // … render frames …
-/// insta::assert_snapshot!(screen.snapshot());
+/// let _ = screen.snapshot();
 /// ```
 #[derive(Clone)]
 pub struct HeadlessHandle {

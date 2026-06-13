@@ -15,8 +15,9 @@ use crate::view::{DrawCtx, Rect, View, ViewState};
 /// [`Role::Background`] from the active [`Theme`](crate::theme::Theme).
 ///
 /// # Example
-/// ```ignore
-/// let bg = Background::new(Rect::new(0, 0, 80, 25), '▒');
+/// ```
+/// # use tvision::{Background, Rect};
+/// let _bg = Background::new(Rect::new(0, 0, 80, 25), '▒');
 /// ```
 ///
 /// # Turbo Vision heritage

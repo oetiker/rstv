@@ -18,8 +18,9 @@
 //! tv = { package = "tvision", version = "0.1" }
 //! ```
 //!
-//! ```ignore
-//! let r = tv::Rect::new(0, 0, 80, 25);
+//! ```
+//! # use tvision as tv;
+//! let _r = tv::Rect::new(0, 0, 80, 25);
 //! ```
 //!
 //! Public types are therefore re-exported at the crate root below, even though
