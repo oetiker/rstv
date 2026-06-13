@@ -32,7 +32,7 @@ default — plain windows are unchanged. Executed in 7 tasks on `feat/splitter`.
 
 Gated and additive. See spec
 [`docs/superpowers/specs/2026-06-13-splitter-frame-joining-design.md`](docs/superpowers/specs/2026-06-13-splitter-frame-joining-design.md)
-and plan [`docs/superpowers/plans/2026-06-13-splitter.md`](docs/superpowers/plans/2026-06-13-splitter.md).
+and plan [`docs/superpowers/plans/2026-06-13-splitter-frame-joining.md`](docs/superpowers/plans/2026-06-13-splitter-frame-joining.md).
 
 - **Task 8 — relocate the opt-in to `Splitter::joined()` (v5):** the whole-feature
   review found the opt-in inconsistent — `Window::with_joined_lines()` gated only

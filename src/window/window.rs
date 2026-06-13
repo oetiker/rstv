@@ -298,8 +298,10 @@ impl Window {
             .into_iter()
             .filter(|&id| id != frame_id)
             .collect();
+        // Probe-then-reborrow: NLL can't prove the early-return borrow is dropped
+        // on the fall-through path, so we test with one borrow and return with a
+        // fresh one.
         for id in ids {
-            // Probe first so the &mut borrow does not span the loop; re-borrow to return.
             let is_splitter = self
                 .group
                 .child_mut(id)
