@@ -6,6 +6,7 @@ mod linkcheck;
 mod paths;
 mod screens;
 mod serve;
+mod test;
 
 use anyhow::Result;
 
@@ -15,7 +16,8 @@ fn usage() -> ! {
          \n\
          commands:\n\
          \x20 docs [--serve]   build the integrated doc site (guide + api); --serve = watch+serve\n\
-         \x20 screens          regenerate the tmux screenshots only\n"
+         \x20 screens          regenerate the tmux screenshots only\n\
+         \x20 test             run mdbook doctests (compile the guide's rust blocks)\n"
     );
     std::process::exit(2)
 }
@@ -28,6 +30,7 @@ fn main() -> Result<()> {
             if serve { serve::run() } else { build::docs() }
         }
         Some("screens") => screens::regenerate(),
+        Some("test") => test::run(),
         _ => usage(),
     }
 }
