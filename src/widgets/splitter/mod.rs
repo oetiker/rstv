@@ -1,7 +1,7 @@
 pub mod layout;
 
 use crate::capture::TrackMask;
-use crate::event::Event;
+use crate::event::{Event, Key};
 use crate::theme::Role;
 use crate::view::{Context, DrawCtx, Group, Point, Rect, View, ViewId, ViewState};
 
@@ -45,6 +45,8 @@ pub struct Splitter {
     default_style: DividerStyle,
     /// Reconfig-mode selected divider (Task 8). `None` = normal use.
     reconfig: Option<usize>,
+    /// Pre-reconfig weights, for Esc restore (Task 8).
+    saved_weights: Vec<f64>,
     /// Absolute origin captured each `draw`, for the mouse-track capture (Task 6).
     abs_origin: Point,
     /// Active divider being mouse-dragged (Task 6).
@@ -60,6 +62,7 @@ impl Splitter {
             divider_styles: Vec::new(),
             default_style: DividerStyle::Line,
             reconfig: None,
+            saved_weights: Vec::new(),
             abs_origin: bounds.a,
             dragging: None,
         }
@@ -354,6 +357,57 @@ impl Splitter {
         self.slots[i].weight = w;
         self.resolve_layout_local();
     }
+
+    // -- reconfig mode (Task 8) -------------------------------------------------
+
+    /// Enter keyboard reconfig mode: save weights, select the first movable divider.
+    fn enter_reconfig(&mut self) {
+        if self.slots.len() < 2 {
+            return;
+        }
+        self.saved_weights = self.slots.iter().map(|s| s.weight).collect();
+        self.reconfig = self.first_movable_divider();
+    }
+
+    /// Exit reconfig mode. If `restore` is true, rewind to the saved weights (Esc path).
+    fn exit_reconfig(&mut self, restore: bool) {
+        if restore && self.saved_weights.len() == self.slots.len() {
+            for (s, w) in self.slots.iter_mut().zip(&self.saved_weights) {
+                s.weight = *w;
+            }
+        }
+        self.reconfig = None;
+        self.saved_weights.clear();
+        self.resolve_layout_local();
+    }
+
+    /// First divider index that is movable in reconfig mode, or `None`.
+    fn first_movable_divider(&self) -> Option<usize> {
+        (0..self.slots.len().saturating_sub(1)).find(|&i| self.style_of(i).movable_in_reconfig())
+    }
+
+    /// Advance the selected divider forward or backward, skipping non-movable ones.
+    fn step_selection(&mut self, forward: bool) {
+        let n = self.slots.len().saturating_sub(1);
+        if n == 0 {
+            return;
+        }
+        let Some(cur) = self.reconfig else {
+            return;
+        };
+        let mut i = cur;
+        for _ in 0..n {
+            i = if forward {
+                (i + 1) % n
+            } else {
+                (i + n - 1) % n
+            };
+            if self.style_of(i).movable_in_reconfig() {
+                self.reconfig = Some(i);
+                return;
+            }
+        }
+    }
 }
 
 #[crate::delegate(to = group)]
@@ -378,6 +432,57 @@ impl View for Splitter {
 
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         match ev {
+            Event::KeyDown(k) => {
+                // Copy out the key and shift flag before any borrow-conflicting calls.
+                let key = k.key;
+                let shift = k.modifiers.shift;
+                if self.reconfig.is_none() {
+                    if key == Key::F(6) {
+                        self.enter_reconfig();
+                        ev.clear();
+                        return;
+                    }
+                    self.group.handle_event(ev, ctx);
+                    return;
+                }
+                // In reconfig mode:
+                let sel = self.reconfig.unwrap();
+                match key {
+                    Key::Tab if shift => {
+                        self.step_selection(false);
+                        ev.clear();
+                    }
+                    Key::Tab => {
+                        self.step_selection(true);
+                        ev.clear();
+                    }
+                    Key::Left | Key::Up => {
+                        if let Some(p) = self.divider_axis_pos(sel) {
+                            self.drag_divider_to(sel, p - 1);
+                        }
+                        self.request_relayout(ctx);
+                        ev.clear();
+                    }
+                    Key::Right | Key::Down => {
+                        if let Some(p) = self.divider_axis_pos(sel) {
+                            self.drag_divider_to(sel, p + 1);
+                        }
+                        self.request_relayout(ctx);
+                        ev.clear();
+                    }
+                    Key::Enter => {
+                        self.exit_reconfig(false);
+                        ev.clear();
+                    }
+                    Key::Esc => {
+                        self.exit_reconfig(true);
+                        ev.clear();
+                    }
+                    _ => {
+                        self.group.handle_event(ev, ctx);
+                    }
+                }
+            }
             Event::MouseDown(me) => {
                 let local = me.position; // already view-local; copy before ev.clear()
                 if let Some(i) = self.divider_at(local) {
@@ -610,5 +715,46 @@ mod view_tests {
         let sizes = solve(&sp.slots, sp.content_len());
         assert_eq!(sizes.len(), 2);
         assert_eq!(sizes.iter().sum::<i32>(), sp.content_len());
+    }
+
+    #[test]
+    fn reconfig_arrow_moves_selected_divider() {
+        let mut sp = Splitter::cols();
+        sp.change_bounds(Rect::new(0, 0, 21, 1)); // 2 panes, 1 divider, 20 content
+        sp.insert(Fill::boxed('A'), Constraints::flex());
+        sp.insert(Fill::boxed('B'), Constraints::flex());
+        sp.enter_reconfig();
+        assert_eq!(sp.reconfig, Some(0));
+        let before = solve(&sp.slots, sp.content_len());
+        let p = sp.divider_axis_pos(0).unwrap();
+        sp.drag_divider_to(0, p + 2);
+        let after = solve(&sp.slots, sp.content_len());
+        assert!(after[0] > before[0]);
+    }
+
+    #[test]
+    fn reconfig_esc_restores() {
+        let mut sp = Splitter::cols();
+        sp.change_bounds(Rect::new(0, 0, 21, 1));
+        sp.insert(Fill::boxed('A'), Constraints::flex());
+        sp.insert(Fill::boxed('B'), Constraints::flex());
+        let before = solve(&sp.slots, sp.content_len());
+        sp.enter_reconfig();
+        let p = sp.divider_axis_pos(0).unwrap();
+        sp.drag_divider_to(0, p + 4);
+        sp.exit_reconfig(true); // Esc path
+        let after = solve(&sp.slots, sp.content_len());
+        assert_eq!(before, after, "Esc restores the pre-mode layout");
+    }
+
+    #[test]
+    fn reconfig_snapshot_highlights_all_dividers() {
+        let mut sp = Splitter::cols()
+            .default_divider(DividerStyle::Hidden)
+            .pane(Fill::boxed('A'), Constraints::flex())
+            .pane(Fill::boxed('B'), Constraints::flex());
+        sp.change_bounds(Rect::new(0, 0, 13, 1));
+        sp.enter_reconfig(); // a previously-hidden divider should now light up (double-line ║)
+        insta::assert_snapshot!(render(&mut sp, 13, 1));
     }
 }
