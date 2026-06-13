@@ -233,17 +233,22 @@ impl Splitter {
     /// Local (no `Context`) — used at insert/build/resize time.
     fn resolve_layout_local(&mut self) {
         let sizes = solve(&self.slots, self.content_len());
-        let b = self.group.state().get_bounds();
+        // Children are positioned in the splitter's OWN 0-based local space
+        // (Group::draw translates each child by its bounds on top of the
+        // splitter's already-translated context), so use the extent, not the
+        // owner-space bounds — otherwise an inset splitter shifts every pane by
+        // its own origin.
+        let ext = self.group.state().get_extent();
         let mut cursor = match self.orientation {
-            Orientation::Cols => b.a.x,
-            Orientation::Rows => b.a.y,
+            Orientation::Cols => ext.a.x,
+            Orientation::Rows => ext.a.y,
         };
         let ids = self.group.child_ids_in_order();
         for (i, id) in ids.iter().enumerate() {
             let size = sizes.get(i).copied().unwrap_or(0);
             let rect = match self.orientation {
-                Orientation::Cols => Rect::new(cursor, b.a.y, cursor + size, b.b.y),
-                Orientation::Rows => Rect::new(b.a.x, cursor, b.b.x, cursor + size),
+                Orientation::Cols => Rect::new(cursor, ext.a.y, cursor + size, ext.b.y),
+                Orientation::Rows => Rect::new(ext.a.x, cursor, ext.b.x, cursor + size),
             };
             if let Some(child) = self.group.find_mut(*id) {
                 child.change_bounds(rect);
@@ -280,15 +285,18 @@ impl Splitter {
             return Vec::new();
         }
         let mut out = Vec::new();
-        self.collect_frame_marks(frame_bounds, &mut out);
+        let origin = self.group.state().get_bounds().a; // top splitter: frame-space origin
+        self.collect_frame_marks(frame_bounds, origin, &mut out);
         out
     }
 
-    /// Recursive worker for [`frame_junction_marks`]. `frame_bounds` stays in the
-    /// window group's coordinate space across the recursion (the frame and every
-    /// (sub-)splitter share that space).
-    fn collect_frame_marks(&mut self, fb: Rect, out: &mut Vec<JunctionMark>) {
-        let b = self.group.state().get_bounds();
+    /// Recursive worker for [`frame_junction_marks`]. `origin` is this splitter's
+    /// top-left in the frame's coordinate space; children are 0-based local, so a
+    /// sub-splitter's frame-space origin is `origin + child_local_bounds.a`.
+    fn collect_frame_marks(&mut self, fb: Rect, origin: Point, out: &mut Vec<JunctionMark>) {
+        let ext = self.group.state().get_extent();
+        let w = ext.b.x - ext.a.x;
+        let h = ext.b.y - ext.a.y;
         let sizes = solve(&self.slots, self.content_len());
         let stem = if self.reconfig.is_some() {
             Weight::Double
@@ -307,16 +315,16 @@ impl Splitter {
             if draws_full {
                 match self.orientation {
                     Orientation::Cols => {
-                        let off = (b.a.x - fb.a.x) + local;
+                        let off = (origin.x - fb.a.x) + local;
                         let interior = off > 0 && off < fw - 1;
-                        if interior && b.a.y == fb.a.y + 1 {
+                        if interior && origin.y == fb.a.y + 1 {
                             out.push(JunctionMark {
                                 edge: Edge::Top,
                                 offset: off,
                                 stem,
                             });
                         }
-                        if interior && b.b.y == fb.b.y - 1 {
+                        if interior && origin.y + h == fb.b.y - 1 {
                             out.push(JunctionMark {
                                 edge: Edge::Bottom,
                                 offset: off,
@@ -325,16 +333,16 @@ impl Splitter {
                         }
                     }
                     Orientation::Rows => {
-                        let off = (b.a.y - fb.a.y) + local;
+                        let off = (origin.y - fb.a.y) + local;
                         let interior = off > 0 && off < fh - 1;
-                        if interior && b.a.x == fb.a.x + 1 {
+                        if interior && origin.x == fb.a.x + 1 {
                             out.push(JunctionMark {
                                 edge: Edge::Left,
                                 offset: off,
                                 stem,
                             });
                         }
-                        if interior && b.b.x == fb.b.x - 1 {
+                        if interior && origin.x + w == fb.b.x - 1 {
                             out.push(JunctionMark {
                                 edge: Edge::Right,
                                 offset: off,
@@ -347,7 +355,8 @@ impl Splitter {
             cursor += 1; // step over the divider cell
         }
 
-        // Recurse into pane sub-splitters (child_mut → as_any_mut → downcast).
+        // Recurse: a child's frame-space origin = this splitter's origin + the
+        // child's 0-based local position.
         let ids = self.group.child_ids_in_order();
         for id in ids {
             if let Some(sp) = self
@@ -356,7 +365,9 @@ impl Splitter {
                 .and_then(|v| v.as_any_mut())
                 .and_then(|a| a.downcast_mut::<Splitter>())
             {
-                sp.collect_frame_marks(fb, out);
+                let ca = sp.group.state().get_bounds().a; // 0-based local within self
+                let child_origin = Point::new(origin.x + ca.x, origin.y + ca.y);
+                sp.collect_frame_marks(fb, child_origin, out);
             }
         }
     }
@@ -408,17 +419,17 @@ impl Splitter {
     /// Re-flow children to current solved sizes via DEFERRED bounds (loop owns writes).
     fn request_relayout(&mut self, ctx: &mut Context) {
         let sizes = solve(&self.slots, self.content_len());
-        let b = self.group.state().get_bounds();
+        let ext = self.group.state().get_extent();
         let mut cursor = match self.orientation {
-            Orientation::Cols => b.a.x,
-            Orientation::Rows => b.a.y,
+            Orientation::Cols => ext.a.x,
+            Orientation::Rows => ext.a.y,
         };
         let ids = self.group.child_ids_in_order();
         for (i, id) in ids.iter().enumerate() {
             let size = sizes.get(i).copied().unwrap_or(0);
             let rect = match self.orientation {
-                Orientation::Cols => Rect::new(cursor, b.a.y, cursor + size, b.b.y),
-                Orientation::Rows => Rect::new(b.a.x, cursor, b.b.x, cursor + size),
+                Orientation::Cols => Rect::new(cursor, ext.a.y, cursor + size, ext.b.y),
+                Orientation::Rows => Rect::new(ext.a.x, cursor, ext.b.x, cursor + size),
             };
             ctx.request_bounds(*id, rect);
             cursor += size + 1;
@@ -566,7 +577,6 @@ impl Splitter {
         if self.slots.len() < 2 {
             return; // no dividers of our own → nothing to cross
         }
-        let b = self.group.state().get_bounds();
         let weight = if self.reconfig.is_some() {
             Weight::Double
         } else {
@@ -614,13 +624,13 @@ impl Splitter {
                     // Cols outer: vertical dividers; sub is Rows (horizontal). The
                     // crossing's cross-axis is the ROW.
                     Orientation::Cols => {
-                        let row = (cb.a.y - b.a.y) + d;
+                        let row = cb.a.y + d;
                         (row, Junction::TeeLeft, Junction::TeeRight)
                     }
                     // Rows outer: horizontal dividers; sub is Cols (vertical). The
                     // crossing's cross-axis is the COLUMN.
                     Orientation::Rows => {
-                        let col = (cb.a.x - b.a.x) + d;
+                        let col = cb.a.x + d;
                         (col, Junction::TeeUp, Junction::TeeDown)
                     }
                 };
@@ -827,6 +837,15 @@ mod view_tests {
             let (w, h) = (b.b.x - b.a.x, b.b.y - b.a.y);
             ctx.fill(Rect::new(0, 0, w, h), self.0, ctx.style(Role::Normal));
         }
+    }
+
+    fn render_buf(sp: &mut Splitter, w: u16, h: u16) -> crate::screen::Buffer {
+        let theme = crate::theme::Theme::classic_blue();
+        let mut buf = crate::screen::Buffer::new(w, h);
+        let bounds = sp.state().get_bounds();
+        let mut dc = DrawCtx::new(&mut buf, &theme, bounds, bounds.a);
+        sp.draw(&mut dc);
+        buf
     }
 
     fn render(sp: &mut Splitter, w: u16, h: u16) -> String {
@@ -1141,6 +1160,32 @@ mod view_tests {
         outer.insert(Box::new(inner), Constraints::flex());
         let out = render(&mut outer, 20, 7);
         assert!(!out.contains('├'), "no interior tee unless joined:\n{out}");
+    }
+
+    #[test]
+    fn inset_splitter_panes_fill_from_origin() {
+        // Regression: an inset splitter (non-zero origin) must lay its panes out in
+        // 0-based local space, so pane content begins exactly at the splitter's
+        // origin column — NOT shifted right by the origin. Before the fix, pane A
+        // started at column 4 (origin.x + 1), leaving column 3 blank.
+        let mut sp = Splitter::cols();
+        sp.change_bounds(Rect::new(3, 2, 16, 5)); // origin (3,2), width 13, height 3
+        sp.insert(Fill::boxed('A'), Constraints::flex());
+        sp.insert(Fill::boxed('B'), Constraints::flex());
+        let buf = render_buf(&mut sp, 16, 5);
+        // First pane content fills from the splitter's own origin column (3),
+        // on a middle content row (y=3, inside [2,5)).
+        assert_eq!(
+            buf.get(3, 3).symbol(),
+            "A",
+            "pane A must start at the splitter origin column, not be shifted by it"
+        );
+        // And there is no blank gap immediately inside the origin.
+        assert_ne!(
+            buf.get(3, 3).symbol(),
+            " ",
+            "no blank column at the splitter origin"
+        );
     }
 
     #[test]

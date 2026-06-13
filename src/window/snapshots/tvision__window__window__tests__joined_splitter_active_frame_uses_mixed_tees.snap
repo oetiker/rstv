@@ -6,21 +6,21 @@ size: 16x6
 cursor: hidden
 text:
 |╔═[■]═══╤══[↑]═╗|
-|║       │      ║|
-|║ AAAAAA│ BBBBB║|
-|║ AAAAAA│ BBBBB║|
-|║ AAAAAA│ BBBBB║|
+|║AAAAAAA│BBBBBB║|
+|║AAAAAAA│BBBBBB║|
+|║AAAAAAA│BBBBBB║|
+|║AAAAAAA│BBBBBB║|
 |└─══════╧═════─┘|
 attr:
 |aaabaaaaaaaabaaa|
-|aaaaaaaacaaaaaaa|
-|aaddddddcaddddda|
-|aaddddddcaddddda|
-|aaddddddcaddddda|
+|acccccccdcccccca|
+|acccccccdcccccca|
+|acccccccdcccccca|
+|acccccccdcccccca|
 |bbaaaaaaaaaaaabb|
 legend:
   . default
   a fg=RGB(255,255,255) bg=RGB(0,0,170)
   b fg=RGB(85,255,85) bg=RGB(0,0,170)
-  c fg=RGB(170,170,170) bg=RGB(0,0,170)
-  d fg=RGB(0,0,0) bg=RGB(0,170,170)
+  c fg=RGB(0,0,0) bg=RGB(0,170,170)
+  d fg=RGB(170,170,170) bg=RGB(0,0,170)
