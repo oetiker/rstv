@@ -2055,4 +2055,63 @@ mod tests {
             "after un-join, plain frame: {off:?}"
         );
     }
+
+    /// A rows (horizontal-divider) splitter inside an ACTIVE (double-line) window
+    /// frame: the divider's ends abut the LEFT and RIGHT frame edges.  At those
+    /// junctions the frame's double vertical bar (║) meets the divider's single
+    /// horizontal stem — the correct glyphs are ╟ (left, U+255F) and ╢ (right,
+    /// U+2562).  Before the glyph-table fix this test would see ╞/╡ instead.
+    #[test]
+    fn joined_rows_splitter_active_frame_side_tees_are_double_bar_single_stem() {
+        use crate::widgets::{Constraints, Splitter};
+        let theme = Theme::classic_blue();
+        let mut win = Window::new(Rect::new(0, 0, 16, 7), None, 0);
+        // Activate the frame child directly so it draws its double-line box.
+        let fid = win.frame_id();
+        if let Some(v) = win.child_mut(fid) {
+            v.state_mut().state.active = true;
+        }
+        let ext = win.state().get_extent();
+        let interior = Rect::new(1, 1, ext.b.x - 1, ext.b.y - 1);
+        // A rows splitter: two stacked panes with one horizontal divider that
+        // spans the full interior width → its left end meets the LEFT frame edge
+        // and its right end meets the RIGHT frame edge.
+        let split = Splitter::rows()
+            .pane(plain_fill('A'), Constraints::flex())
+            .pane(plain_fill('B'), Constraints::flex())
+            .joined();
+        let sid = win.insert_child(Box::new(split));
+        if let Some(v) = win.child_mut(sid) {
+            v.change_bounds(interior);
+        }
+        // Render into a direct Buffer so we can read individual cells.
+        let mut buf = Buffer::new(16, 7);
+        {
+            let bounds = win.state().get_bounds();
+            let mut dc = DrawCtx::new(&mut buf, &theme, bounds, bounds.a);
+            win.draw(&mut dc);
+        }
+        // Scan interior rows (1..6) for the divider row: the row where the left
+        // frame cell (col 0) is a tee glyph rather than the plain double bar ║.
+        let mut divider_row: Option<u16> = None;
+        for y in 1_u16..6 {
+            let cell = buf.get(0, y).symbol().to_string();
+            if cell != "║" {
+                divider_row = Some(y);
+                break;
+            }
+        }
+        let y =
+            divider_row.expect("a left-frame junction must exist on the horizontal divider row");
+        assert_eq!(
+            buf.get(0, y).symbol(),
+            "╟",
+            "left frame: double bar (║ weight) + single divider stem → ╟ (U+255F)"
+        );
+        assert_eq!(
+            buf.get(15, y).symbol(),
+            "╢",
+            "right frame: double bar (║ weight) + single divider stem → ╢ (U+2562)"
+        );
+    }
 }

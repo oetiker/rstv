@@ -568,9 +568,9 @@ pub struct Glyphs {
     pub frame_tee_t_dh: char,
     /// Double-bar bottom tee, single stem `╧` (U+2567).
     pub frame_tee_b_dh: char,
-    /// Double-bar left tee, single stem `╞` (U+255E).
+    /// Double-bar left tee, single stem `╟` (U+255F).
     pub frame_tee_l_dv: char,
-    /// Double-bar right tee, single stem `╡` (U+2561).
+    /// Double-bar right tee, single stem `╢` (U+2562).
     pub frame_tee_r_dv: char,
     /// Double-bar cross, single horizontal stem `╪` (U+256A).
     pub frame_cross_dh: char,
@@ -582,9 +582,9 @@ pub struct Glyphs {
     pub frame_tee_t_sh: char,
     /// Single-bar bottom tee, double stem `╨` (U+2568).
     pub frame_tee_b_sh: char,
-    /// Single-bar left tee, double stem `╟` (U+255F).
+    /// Single-bar left tee, double stem `╞` (U+255E).
     pub frame_tee_l_sv: char,
-    /// Single-bar right tee, double stem `╢` (U+2562).
+    /// Single-bar right tee, double stem `╡` (U+2561).
     pub frame_tee_r_sv: char,
 
     // --- Frame icon strings — `~`-toggled for `put_cstr` ---
@@ -673,19 +673,19 @@ impl Default for Glyphs {
             frame_tee_b_d: '\u{2569}',
             frame_cross_d: '\u{256C}',
 
-            // Mixed: double bar / single stem: ╤ ╧ ╞ ╡ ╪ ╫
+            // Mixed: double bar / single stem: ╤ ╧ ╟ ╢ ╪ ╫
             frame_tee_t_dh: '\u{2564}',
             frame_tee_b_dh: '\u{2567}',
-            frame_tee_l_dv: '\u{255E}',
-            frame_tee_r_dv: '\u{2561}',
+            frame_tee_l_dv: '\u{255F}', // ╟ — double vertical bar + single right stem
+            frame_tee_r_dv: '\u{2562}', // ╢ — double vertical bar + single left stem
             frame_cross_dh: '\u{256A}',
             frame_cross_dv: '\u{256B}',
 
-            // Mixed: single bar / double stem: ╥ ╨ ╟ ╢
+            // Mixed: single bar / double stem: ╥ ╨ ╞ ╡
             frame_tee_t_sh: '\u{2565}',
             frame_tee_b_sh: '\u{2568}',
-            frame_tee_l_sv: '\u{255F}',
-            frame_tee_r_sv: '\u{2562}',
+            frame_tee_l_sv: '\u{255E}', // ╞ — single vertical bar + double right stem
+            frame_tee_r_sv: '\u{2561}', // ╡ — single vertical bar + double left stem
 
             // Frame icon strings (~ toggles the FrameIcon style for the bright glyph):
             //   close "[~■~]"  zoom "[~↑~]"  unZoom "[~↕~]"
@@ -1028,10 +1028,12 @@ mod tests {
         // mixed: double bar / single stem
         assert_eq!(g.frame_tee_t_dh, '╤');
         assert_eq!(g.frame_tee_b_dh, '╧');
-        assert_eq!(g.frame_tee_l_dv, '╞');
-        assert_eq!(g.frame_tee_r_dv, '╡');
+        assert_eq!(g.frame_tee_l_dv, '╟'); // U+255F — double bar + single right stem
+        assert_eq!(g.frame_tee_r_dv, '╢'); // U+2562 — double bar + single left stem
         // mixed: single bar / double stem
         assert_eq!(g.frame_tee_t_sh, '╥');
         assert_eq!(g.frame_tee_b_sh, '╨');
+        assert_eq!(g.frame_tee_l_sv, '╞'); // U+255E — single bar + double right stem
+        assert_eq!(g.frame_tee_r_sv, '╡'); // U+2561 — single bar + double left stem
     }
 }

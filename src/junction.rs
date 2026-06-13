@@ -162,11 +162,11 @@ mod tests {
         );
         assert_eq!(
             frame_junction(Edge::Left, Weight::Double, Weight::Single, &g),
-            '╞'
+            '╟' // U+255F — double bar + single right stem
         );
         assert_eq!(
             frame_junction(Edge::Right, Weight::Double, Weight::Single, &g),
-            '╡'
+            '╢' // U+2562 — double bar + single left stem
         );
     }
 
@@ -204,11 +204,11 @@ mod tests {
         );
         assert_eq!(
             frame_junction(Edge::Left, Weight::Single, Weight::Double, &g),
-            '╟'
+            '╞' // U+255E — single bar + double right stem
         );
         assert_eq!(
             frame_junction(Edge::Right, Weight::Single, Weight::Double, &g),
-            '╢'
+            '╡' // U+2561 — single bar + double left stem
         );
     }
 
