@@ -50,6 +50,12 @@ forward-looking state lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkou
 **Beyond the ladder:** `RegexValidator` (in `validate`) is an
 **rstv-original extension** — a regex-driven validator alongside the faithful
 `TPXPictureValidator` (62) — not a Turbo Vision class, so it has no row here.
+`Splitter` (in `widgets::splitter`) is likewise an **rstv-original extension**: a
+generic, N-ary, resizable multi-pane view (a `Group` specialization with a pure
+integer flexbox solver, draggable dividers, and an F6 keyboard reconfig mode) —
+no Turbo Vision ancestor, so no row. See spec
+[`docs/superpowers/specs/2026-06-13-splitter-design.md`](docs/superpowers/specs/2026-06-13-splitter-design.md)
+and plan [`docs/superpowers/plans/2026-06-13-splitter.md`](docs/superpowers/plans/2026-06-13-splitter.md).
 
 **Out of scope** (present in `tv.h` but in no guide module): the **help system**
 (`helpbase.cpp`/`help.cpp` → `THelpViewer`/`THelpWindow`/`THelpFile`) and

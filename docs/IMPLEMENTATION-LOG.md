@@ -5,6 +5,48 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## `Splitter` — N-ary resizable multi-pane view (rstv-original, 2026-06-13)
+
+A generic, configurable, N-ary resizable multi-pane view (`widgets::splitter`) —
+a tree | list | form in one window, separated by draggable divider lines. Built
+as a `Group` specialization via D2 embed-and-delegate (`#[delegate(to = group)]`,
+exactly like `Window`). **rstv-original extension**, no Turbo Vision ancestor.
+Executed subagent-driven (implementer + two-stage fresh-subagent review per task)
+on an **isolated worktree/branch `feat/splitter`** to avoid colliding with a
+concurrent gallery-docs agent sharing the main tree.
+
+- **Pure flexbox solver** (`splitter/layout.rs`, view-free, fully unit-tested):
+  `Constraints { weight: u16, min, max }` (authoring unit; `min==max` ⇒ fixed) →
+  `Slot { min, max, weight: f64 }`; `solve(slots, total)` apportions free space by
+  weight honoring `[min,max]` with **largest-remainder** rounding (deterministic,
+  snapshot-stable, sums exactly); `shrink_to_fit` degenerate path; `relax_weight`
+  closed form for position-preserving relax.
+- **The view** (`splitter/mod.rs`): embeds `Group` + parallel `slots`; `cols()`/
+  `rows()`; declarative builder (`pane`/`divider`/`default_divider`) **and**
+  imperative `insert` (returns `ViewId`) + runtime setters (`set_constraints`/
+  `remove`/`relax`/`set_divider_style`); `change_bounds` re-solves; child rects
+  applied through the existing `change_bounds`/`Deferred::ChangeBounds`
+  (`request_bounds`) flow. New thin `pub(crate) Group::child_ids_in_order` (D3
+  insertion-order ids, distinct from the reversed `tileable_ids`) and
+  `Group::remove_child_by_id` (Context-free build/runtime removal that clears a
+  dangling `current`).
+- **`DividerStyle` Line/Handle/Hidden/Locked** drawn frameless into the 1-cell
+  gaps; Hidden is seamless until reconfig, Locked is immovable. (Deviation #3:
+  reuses frame `Role`s `FramePassive`/`FrameDragging` + glyphs `frame_v`/`frame_h`
+  /`frame_v_d`/`frame_h_d` — no new theme entries.)
+- **Live mouse drag** reuses the scrollbar capture loop (`start_mouse_track` +
+  `TrackMask{mouse_move}`); Option-A repartition rewrites only the two flexible
+  neighbors' `f64` weights, sum-preserving, with a fixed neighbor as a hard wall.
+- **Keyboard reconfig mode** (deviation #1: hardcoded `Key::F(6)` in v1, not yet a
+  rebindable command): Tab/Shift-Tab pick a movable divider, arrows nudge by 1,
+  Enter commits, Esc restores pre-mode weights. Normal-mode keys pass straight
+  through to children (only F6 is intercepted).
+- **Verification:** pure unit tests for the solver + drag/relax math; `insta`
+  snapshots for every drawing path (equal columns, each `DividerStyle`, rows
+  orientation, per-divider override, reconfig highlight); `examples/splitter.rs`
+  (tree | list | form, builds clean). Full suite green (1197 lib tests + splitter
+  + delegate spy), clippy `-D warnings` clean, fmt clean.
+
 ## Docs Phase 1 (guide) — Rust-first guide-page pass (2026-06-12)
 
 Pushed the same Rust-first standard the rustdoc got (heritage quarantined,
