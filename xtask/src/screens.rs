@@ -11,6 +11,9 @@ use std::process::Command;
 pub struct Screen {
     pub name: &'static str,
     pub example: &'static str,
+    /// CLI arguments passed to the example after `--` (e.g. the `gallery`
+    /// example takes a widget name). Empty = no arguments.
+    pub args: &'static [&'static str],
     pub cols: u16,
     pub rows: u16,
     /// tmux `send-keys` arguments applied in order (each a single send-keys call).
@@ -19,15 +22,47 @@ pub struct Screen {
     pub settle_ms: u64,
 }
 
-/// The registry. Plan 2 grows this; Plan 1 ships exactly one proof screen.
-pub const SCREENS: &[Screen] = &[Screen {
-    name: "hello",
-    example: "hello",
-    cols: 80,
-    rows: 25,
-    keys: &[],
-    settle_ms: 700,
-}];
+/// The registry: one entry per documented screen. The `hello` proof screen plus
+/// one `gallery` entry per widget (`<name>.html` under `src/screens/`).
+pub const SCREENS: &[Screen] = &[
+    Screen {
+        name: "hello",
+        example: "hello",
+        args: &[],
+        cols: 80,
+        rows: 25,
+        keys: &[],
+        settle_ms: 700,
+    },
+    Screen {
+        name: "button",
+        example: "gallery",
+        args: &["button"],
+        cols: 40,
+        rows: 12,
+        keys: &[],
+        settle_ms: 700,
+    },
+    Screen {
+        name: "menubar",
+        example: "gallery",
+        args: &["menubar"],
+        cols: 56,
+        rows: 12,
+        // Open the File pull-down so the screenshot shows it expanded.
+        keys: &["M-f"],
+        settle_ms: 700,
+    },
+    Screen {
+        name: "statusline",
+        example: "gallery",
+        args: &["statusline"],
+        cols: 56,
+        rows: 8,
+        keys: &[],
+        settle_ms: 700,
+    },
+];
 
 fn tmux(args: &[&str]) -> Result<std::process::Output> {
     let out = Command::new("tmux")
@@ -48,9 +83,14 @@ pub fn capture_one(s: &Screen) -> Result<String> {
     let _ = tmux(&["kill-session", "-t", &session]);
 
     // The example binary path: build it first so launch is instant & stable.
+    let argstr = if s.args.is_empty() {
+        String::new()
+    } else {
+        format!(" -- {}", s.args.join(" "))
+    };
     let run = format!(
-        "cargo run --quiet --example {} ; tmux wait-for -S done_{}",
-        s.example, s.name
+        "cargo run --quiet --example {}{} ; tmux wait-for -S done_{}",
+        s.example, argstr, s.name
     );
     tmux(&[
         "new-session",
@@ -129,8 +169,15 @@ pub fn regenerate() -> Result<()> {
     let dir = paths::screens_dir();
     std::fs::create_dir_all(&dir).context("create screens dir")?;
 
-    // Pre-build all referenced examples once (4-core cap per project policy).
+    // Pre-build each referenced example once (4-core cap per project policy).
+    // Several screens share one example (e.g. every `gallery` widget), so
+    // dedupe to avoid redundant freshness checks.
+    let mut built: Vec<&str> = Vec::new();
     for s in SCREENS {
+        if built.contains(&s.example) {
+            continue;
+        }
+        built.push(s.example);
         let status = Command::new("cargo")
             .args(["build", "--quiet", "--example", s.example])
             .env("CARGO_BUILD_JOBS", "4")
@@ -139,13 +186,34 @@ pub fn regenerate() -> Result<()> {
         anyhow::ensure!(status.success(), "example {} failed to build", s.example);
     }
 
+    // A blank/flaky capture must NEVER clobber a committed screenshot, so
+    // `capture_one` errors rather than writing it. Across a large batch a single
+    // timing flake should not abort the rest — warn, keep the committed file,
+    // and continue; report the count at the end.
+    let mut written = 0usize;
+    let mut skipped: Vec<&str> = Vec::new();
     for s in SCREENS {
         eprintln!("  capturing screen '{}' ({}x{})", s.name, s.cols, s.rows);
-        let html = capture_one(s)?;
-        let path = dir.join(format!("{}.html", s.name));
-        std::fs::write(&path, html).with_context(|| format!("write {}", path.display()))?;
+        match capture_one(s) {
+            Ok(html) => {
+                let path = dir.join(format!("{}.html", s.name));
+                std::fs::write(&path, html).with_context(|| format!("write {}", path.display()))?;
+                written += 1;
+            }
+            Err(e) => {
+                eprintln!("  warning: keeping committed '{}.html' — {e:#}", s.name);
+                skipped.push(s.name);
+            }
+        }
     }
-    eprintln!("  wrote {} screen(s) to {}", SCREENS.len(), dir.display());
+    eprintln!(
+        "  wrote {written} screen(s) to {} ({} kept on flaky capture)",
+        dir.display(),
+        skipped.len()
+    );
+    if !skipped.is_empty() {
+        eprintln!("  flaky (committed file kept): {}", skipped.join(", "));
+    }
     Ok(())
 }
 
