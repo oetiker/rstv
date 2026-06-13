@@ -22,7 +22,7 @@
 //!   - **Alt-X** quits.
 //!
 //! Run it:
-//! `CARGO_TARGET_DIR=/home/oetiker/scratch/cargo-target-splitter cargo run --example splitter`
+//! `cargo run --example splitter`
 
 use std::io;
 
