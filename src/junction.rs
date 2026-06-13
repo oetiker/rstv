@@ -223,6 +223,13 @@ mod tests {
         assert_eq!(divider_junction(Junction::TeeUp, Weight::Single, &g), '┴');
         assert_eq!(divider_junction(Junction::TeeDown, Weight::Single, &g), '┬');
         assert_eq!(divider_junction(Junction::Cross, Weight::Single, &g), '┼');
+        assert_eq!(
+            divider_junction(Junction::TeeRight, Weight::Double, &g),
+            '╠'
+        );
+        assert_eq!(divider_junction(Junction::TeeLeft, Weight::Double, &g), '╣');
+        assert_eq!(divider_junction(Junction::TeeUp, Weight::Double, &g), '╩');
+        assert_eq!(divider_junction(Junction::TeeDown, Weight::Double, &g), '╦');
         assert_eq!(divider_junction(Junction::Cross, Weight::Double, &g), '╬');
     }
 }

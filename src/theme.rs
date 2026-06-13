@@ -476,9 +476,9 @@ impl Role {
 /// glyphs** (single- and double-line corners and edges) plus four icon strings
 /// that carry the `~`-toggle markers consumed by
 /// [`DrawCtx::put_cstr`](crate::view::DrawCtx::put_cstr). The tee/cross glyphs
-/// (`frame_tee_*`, `frame_cross`) are seeded for completeness but unused — they
-/// would feed the sibling tee-join walk that rstv does not reproduce (see the
-/// [`frame`](crate::frame) module docs).
+/// (`frame_tee_*`, `frame_cross`) feed
+/// [`crate::junction::frame_junction`] / [`crate::junction::divider_junction`]
+/// for line-joining.
 ///
 /// Box-drawing pieces:
 /// ```text
@@ -539,16 +539,16 @@ pub struct Glyphs {
     /// Double-line vertical edge `║` (`\xBA`).
     pub frame_v_d: char,
 
-    // --- Frame glyphs — tee/cross joins (unused: sibling walk not reproduced) ---
-    /// Single-line left tee `├` (`\xC3`) — unused.
+    // --- Frame glyphs — single-line tee/cross joins ---
+    /// Single-line left tee `├` (`\xC3`).
     pub frame_tee_l: char,
-    /// Single-line right tee `┤` (`\xB4`) — unused.
+    /// Single-line right tee `┤` (`\xB4`).
     pub frame_tee_r: char,
-    /// Single-line top tee `┬` (`\xC2`) — unused.
+    /// Single-line top tee `┬` (`\xC2`).
     pub frame_tee_t: char,
-    /// Single-line bottom tee `┴` (`\xC1`) — unused.
+    /// Single-line bottom tee `┴` (`\xC1`).
     pub frame_tee_b: char,
-    /// Single-line cross `┼` (`\xC5`) — unused.
+    /// Single-line cross `┼` (`\xC5`).
     pub frame_cross: char,
 
     // --- Frame glyphs — double-line tee/cross joins ---
