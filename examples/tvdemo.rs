@@ -17,7 +17,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use tvision::{
+use rstv::{
     Backend, Button, ButtonFlags, Command, CrosstermBackend, Desktop, Dialog, DrawCtx, Event,
     Frame, Key, KeyEvent, KeyModifiers, Menu, MenuBar, Program, Rect, Role, ScrollBarOptions,
     Scroller, StaticText, StatusDef, StatusLine, SystemClock, Theme, View, ViewId, ViewState,
@@ -255,7 +255,7 @@ impl View for PuzzleView {
         }
     }
 
-    fn handle_event(&mut self, ev: &mut Event, ctx: &mut tvision::Context) {
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut rstv::Context) {
         // If solved: any key/mouse rescrambles.
         if self.solved {
             let triggered = matches!(
@@ -408,7 +408,7 @@ impl View for AsciiTable {
         self.st.set_cursor(self.cursor_x, self.cursor_y);
     }
 
-    fn handle_event(&mut self, ev: &mut Event, ctx: &mut tvision::Context) {
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut rstv::Context) {
         let (sx, sy) = self.size();
         match ev {
             Event::MouseDown(me) => {
@@ -512,7 +512,7 @@ impl View for AsciiReport {
         ctx.put_str(0, 0, &s, color);
     }
 
-    fn handle_event(&mut self, ev: &mut Event, _ctx: &mut tvision::Context) {
+    fn handle_event(&mut self, ev: &mut Event, _ctx: &mut rstv::Context) {
         if let Event::Broadcast { command, .. } = ev {
             // Updates are managed by AsciiWindow which sets ascii_char directly.
             let _ = command;
@@ -574,7 +574,7 @@ impl AsciiWindow {
 
 #[delegate(to = window)]
 impl View for AsciiWindow {
-    fn handle_event(&mut self, ev: &mut Event, ctx: &mut tvision::Context) {
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut rstv::Context) {
         self.window.handle_event(ev, ctx);
 
         // Sync the report when a broadcast arrives.
@@ -771,7 +771,7 @@ impl View for CalendarView {
         }
     }
 
-    fn handle_event(&mut self, ev: &mut Event, _ctx: &mut tvision::Context) {
+    fn handle_event(&mut self, ev: &mut Event, _ctx: &mut rstv::Context) {
         match ev {
             Event::MouseDown(me) => {
                 let pos = me.position;
@@ -1034,7 +1034,7 @@ impl View for CalcDisplay {
         ctx.put_str(i + 1, 0, &self.number, color);
     }
 
-    fn handle_event(&mut self, ev: &mut Event, _ctx: &mut tvision::Context) {
+    fn handle_event(&mut self, ev: &mut Event, _ctx: &mut rstv::Context) {
         match ev {
             Event::KeyDown(ke) => match ke.key {
                 Key::Char(c) => {
@@ -1141,7 +1141,7 @@ impl Calculator {
 
 #[delegate(to = dialog)]
 impl View for Calculator {
-    fn handle_event(&mut self, ev: &mut Event, ctx: &mut tvision::Context) {
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut rstv::Context) {
         self.dialog.handle_event(ev, ctx);
 
         // A button broadcast names the pressed button in `source`; map it to its
@@ -1210,7 +1210,7 @@ impl EventLog {
 
     /// Append a line, cap the backlog, refresh the scroll limits, and follow
     /// the tail so the newest line stays visible.
-    fn push(&mut self, line: String, ctx: &mut tvision::Context) {
+    fn push(&mut self, line: String, ctx: &mut rstv::Context) {
         self.lines.push(line);
         const MAX_LINES: usize = 1000;
         if self.lines.len() > MAX_LINES {
@@ -1287,7 +1287,7 @@ impl EventViewer {
 
 #[delegate(to = window)]
 impl View for EventViewer {
-    fn handle_event(&mut self, ev: &mut Event, ctx: &mut tvision::Context) {
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut rstv::Context) {
         // Describe before forwarding — handling may consume (clear) the event.
         if let Some(desc) = describe_event(ev) {
             self.count += 1;
@@ -1349,7 +1349,7 @@ impl FileViewer {
 
 #[delegate(to = scroller)]
 impl View for FileViewer {
-    fn handle_event(&mut self, ev: &mut Event, ctx: &mut tvision::Context) {
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut rstv::Context) {
         // Publish the content extent on the first event — the ctor has no Context.
         // Faithful to C++ TFileViewer::readFile calling setLimit(maxWidth, lineCount).
         if !self.limit_set {

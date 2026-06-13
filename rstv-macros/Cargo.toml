@@ -1,8 +1,8 @@
 [package]
-name = "tvision-macros"
+name = "rstv-macros"
 version = "0.1.0"
 edition = "2024"
-description = "Delegation proc-macros for the tvision crate."
+description = "Delegation proc-macros for the rstv crate."
 license = "MIT"
 publish = true
 

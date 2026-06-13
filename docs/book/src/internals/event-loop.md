@@ -1,7 +1,7 @@
 # The event loop in depth
 
 rstv runs the entire application on **one** non-recursive event loop in
-[`Program`](../api/tvision/app/struct.Program.html). Every event — keystrokes,
+[`Program`](../api/rstv/app/struct.Program.html). Every event — keystrokes,
 mouse motion, modal dialogs, window drags, mouse hold-tracking — routes through a
 single pass called `pump_once`. Modality and press-and-hold are not separate
 blocking loops; they are *capture handlers* stacked on a LIFO capture stack (see
@@ -18,12 +18,13 @@ loop enforces this structurally.
 
 ## `run` is the only outer loop
 
-[`Program::run`](../api/tvision/app/struct.Program.html#method.run) is the whole
+[`Program::run`](../api/rstv/app/struct.Program.html#method.run) is the whole
 application loop. It pumps until something sets an end command, then asks the
 *tree* to validate that command; if it validates, return, otherwise clear it and
 keep pumping:
 
 ```rust,ignore
+// Illustrative sketch — not a standalone program.
 loop {
     self.end_state = None;
     while self.end_state.is_none() {
@@ -39,8 +40,8 @@ loop {
 > **Turbo Vision heritage:** this mirrors `TGroup::execute`'s
 > `while (!valid(endState))` pattern.
 
-[`run_app`](../api/tvision/app/struct.Program.html#method.run_app) is the same
-loop with one addition: any [`Command`](../api/tvision/command/struct.Command.html)
+[`run_app`](../api/rstv/app/struct.Program.html#method.run_app) is the same
+loop with one addition: any [`Command`](../api/rstv/command/struct.Command.html)
 that survives all view routing is handed to your callback. That is where menu
 commands like "open the color picker" get serviced. You almost always call one of
 these two and never touch the machinery below.
@@ -55,7 +56,7 @@ phases, in order:
 | **Resize** | Query the terminal size; if it changed, relayout the whole tree. There is no `Event::Resize` — the backend is polled live. |
 | **Settle currency** | Apply any pending insert-time focus cascades so the event about to be dispatched sees a fully settled focus state. |
 | **Pick an event** | Drain the internal queue first, else poll the backend with the frame-tick timeout; an idle pick may synthesize a mouse auto-repeat. |
-| **Idle** | No event: fire expired timers as [`Event::Timer`](../api/tvision/event/enum.Event.html), refresh the status line's help context. |
+| **Idle** | No event: fire expired timers as [`Event::Timer`](../api/rstv/event/enum.Event.html), refresh the status line's help context. |
 | **Pre-route** | A `KeyDown` (always) or a `MouseDown` on the status line is offered to the status line first, so accelerators like F10/Alt-X fire even under a modal. |
 | **The dispatch gate** | Drop the event if it is a disabled command; otherwise offer it to the capture stack, then to normal view routing. |
 | **Deferred drain** | Apply every queued effect once, in insertion order. |
@@ -74,12 +75,12 @@ event *is* the modal loop.
 ### The deferred drain
 
 A view is borrowed *downward* during dispatch as `&mut dyn View` plus a
-[`Context`](../api/tvision/view/struct.Context.html); it cannot reach back up to
+[`Context`](../api/rstv/view/struct.Context.html); it cannot reach back up to
 the loop-owned capture stack, command set, or sibling views. So instead of acting
 inline it **queues** the effect, and the pump applies the whole queue in one pass
 *after* dispatch — capture pushes, command enable/disable, bounds changes, modal
 close, focus moves, and the cross-view broker syncs. This is the
-[`Deferred`](../api/tvision/view/enum.Deferred.html) channel; it has its own page,
+[`Deferred`](../api/rstv/view/enum.Deferred.html) channel; it has its own page,
 [Deferred effects](./deferred.md). Two rules matter here: the drain runs even when
 the pre-route consumed the event, and it runs **once** — anything an effect
 re-queues waits for the next pump (a loop-until-empty would risk spinning).
@@ -90,12 +91,12 @@ always separated by at least one pump boundary.
 
 ## The capture stack
 
-The [`CaptureStack`](../api/tvision/capture/struct.CaptureStack.html) is the LIFO
-list of [`CaptureHandler`](../api/tvision/capture/trait.CaptureHandler.html)s that
+The [`CaptureStack`](../api/rstv/capture/struct.CaptureStack.html) is the LIFO
+list of [`CaptureHandler`](../api/rstv/capture/trait.CaptureHandler.html)s that
 implements modality, dragging, press-and-hold, and menu sessions — anything that
 needs to intercept events globally before normal routing. Each handler is offered
 every event and returns a
-[`CaptureFlow`](../api/tvision/capture/enum.CaptureFlow.html):
+[`CaptureFlow`](../api/rstv/capture/enum.CaptureFlow.html):
 
 - `Pass` — not mine; offer it to the next lower handler, then to the view tree.
 - `Consumed` — handled; stop routing, stay on the stack.

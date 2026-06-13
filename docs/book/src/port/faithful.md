@@ -14,7 +14,7 @@ names, control flow, algorithms, and observable behaviour are reproduced as-is.
 The event loop dispatches the same way, modal dialogs nest the same way, the
 draw model paints the same way, and the widgets behave the way Turbo Vision
 widgets have always behaved. `handleEvent` became `handle_event` on the
-[`View`](../api/tvision/view/trait.View.html) trait, but it is called at the same
+[`View`](../api/rstv/view/trait.View.html) trait, but it is called at the same
 moments, receives the same events, and is expected to consume them the same way.
 
 The rule the port follows is simple: **if a behaviour isn't called out as a
@@ -43,10 +43,10 @@ same every time:
 > Recognize each 1991 workaround and replace it with the real feature — then keep
 > everything around it faithful.
 
-`TView` becomes the [`View`](../api/tvision/view/trait.View.html) trait (a
+`TView` becomes the [`View`](../api/rstv/view/trait.View.html) trait (a
 namespace C++ faked with a `T` prefix). `state & sfFocused` becomes a boolean
 field. The `TEvent.what` union becomes an `enum`. A raw `TView*` becomes a
-[`ViewId`](../api/tvision/view/struct.ViewId.html) handle. Each time, the modern
+[`ViewId`](../api/rstv/view/struct.ViewId.html) handle. Each time, the modern
 construct carries the same meaning the workaround was approximating, so the
 surrounding code stays a direct translation — not a redesign.
 
@@ -57,18 +57,18 @@ what the C++ does, what rstv does instead, and how the rest of the faithful port
 plugs back in:
 
 - [Inheritance → trait + composition](inheritance.md) — the `TView` hierarchy
-  becomes the [`View`](../api/tvision/view/trait.View.html) trait plus
-  [`ViewState`](../api/tvision/view/struct.ViewState.html) composition.
+  becomes the [`View`](../api/rstv/view/trait.View.html) trait plus
+  [`ViewState`](../api/rstv/view/struct.ViewState.html) composition.
 - [Pointers & infoPtr → handles](handles.md) — `TView*` becomes a
-  [`ViewId`](../api/tvision/view/struct.ViewId.html) resolved through a
-  downward-borrowed [`Context`](../api/tvision/view/struct.Context.html).
+  [`ViewId`](../api/rstv/view/struct.ViewId.html) resolved through a
+  downward-borrowed [`Context`](../api/rstv/view/struct.Context.html).
 - [Events → enum + match](events.md) — the `TEvent` union becomes a sum type.
 - [Flag words → struct-of-bools](flags.md) — `ofXxx`/`sfXxx` bitmasks become
   named boolean fields.
 - [Constant families → open newtypes](constants.md) — `cmXxx`/`hcXxx` become
   namespaced consts like `Command::OK`.
 - [Palettes & glyphs → Theme/Role](theme.md) — the palette chain becomes a
-  [`Theme`](../api/tvision/theme/struct.Theme.html) keyed by semantic roles.
+  [`Theme`](../api/rstv/theme/struct.Theme.html) keyed by semantic roles.
 - [The draw model](draw.md) — `drawView`/`drawSubViews` becomes whole-tree
   redraw plus a cell-buffer diff.
 - [Modal execView → one loop + capture](modal.md) — nested modal loops collapse

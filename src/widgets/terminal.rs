@@ -25,7 +25,7 @@
 use crate::theme::Role;
 use crate::view::{Context, DrawCtx, GrowMode, Point, Rect, View, ViewId};
 use crate::widgets::Scroller;
-use tvision_macros::delegate;
+use rstv_macros::delegate;
 
 // ---------------------------------------------------------------------------
 // TextDevice — the abstract output trait

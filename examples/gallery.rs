@@ -14,11 +14,13 @@
 
 use std::{env, io};
 
-use tvision::{
-    Button, ButtonFlags, CheckBoxes, Color, ColorPicker, Command, CrosstermBackend, Desktop,
-    Dialog, InputLine, Key, KeyEvent, Label, Memo, Menu, MenuBar, Program, RadioButtons, Rect,
-    ScrollBar, StaticText, StatusDef, StatusLine, SystemClock, THistory, Theme, View, alt,
-    history_add,
+use rstv::{
+    Button, ButtonFlags, CD_NORMAL, ChDirDialog, CheckBoxes, Color, ColorPicker, Command, Context,
+    CrosstermBackend, Desktop, Dialog, EditWindow, Event, FD_OPEN_BUTTON, FileDialog,
+    HistoryWindow, InputLine, Key, KeyEvent, Label, ListBox, Memo, Menu, MenuBar, MenuBox, Node,
+    Outline, OutlineViewer, Program, RadioButtons, Rect, ScrollBar, ScrollBarOptions, StaticText,
+    StatusDef, StatusLine, SystemClock, THistory, Tab, Terminal, TextDevice, Theme, View, ViewId,
+    Window, alt, delegate, history_add, ov_update,
 };
 
 /// How a specimen is shown. Most widgets are leaf controls hosted in a dialog on
@@ -28,6 +30,10 @@ use tvision::{
 enum Specimen {
     /// A view (a dialog or a window) placed on the desktop.
     OnDesktop(fn() -> Box<dyn View>),
+    /// A dialog shown modally via `exec_view` — the faithful path for the
+    /// self-managing file/directory dialogs, whose lists are filled by
+    /// `reset_current` when the modal becomes current.
+    Modal(fn() -> Box<dyn View>),
     /// A rich menu bar (the screenshot opens it with a keystroke).
     Menu(fn() -> Menu),
     /// A rich status line.
@@ -41,6 +47,7 @@ fn specimen(name: &str) -> Option<Specimen> {
         "button" => OnDesktop(button),
         "menubar" => Menu(menubar),
         "statusline" => Status(statusline),
+        "contextmenu" => OnDesktop(contextmenu),
         "checkboxes" => OnDesktop(checkboxes),
         "radiobuttons" => OnDesktop(radiobuttons),
         "inputline" => OnDesktop(inputline),
@@ -51,6 +58,13 @@ fn specimen(name: &str) -> Option<Specimen> {
         "memo" => OnDesktop(memo),
         "colorpicker" => OnDesktop(colorpicker),
         "messagebox" => OnDesktop(messagebox),
+        "window" => OnDesktop(window),
+        "editor" => OnDesktop(editor),
+        "listbox" => OnDesktop(listbox),
+        "terminal" => OnDesktop(terminal),
+        "outline" => OnDesktop(outline),
+        "filedialog" => Modal(filedialog),
+        "chdirdialog" => Modal(chdirdialog),
         _ => return None,
     })
 }
@@ -60,6 +74,7 @@ const NAMES: &[&str] = &[
     "button",
     "menubar",
     "statusline",
+    "contextmenu",
     "checkboxes",
     "radiobuttons",
     "inputline",
@@ -70,6 +85,13 @@ const NAMES: &[&str] = &[
     "memo",
     "colorpicker",
     "messagebox",
+    "window",
+    "editor",
+    "listbox",
+    "terminal",
+    "outline",
+    "filedialog",
+    "chdirdialog",
 ];
 
 // ===========================================================================
@@ -103,6 +125,7 @@ fn button() -> Box<dyn View> {
 // ANCHOR: menubar
 /// A menu bar with `File`, `Edit`, and `Window` pull-downs. Each `~`-marked
 /// letter is the hot-key; `command_key` adds the accelerator shown at the right.
+/// `File ▸ Recent` is a nested sub-menu (a sub-menu inside a sub-menu).
 fn menubar() -> Menu {
     Menu::builder()
         .submenu("~F~ile", alt('f'), |m| {
@@ -118,6 +141,11 @@ fn menubar() -> Menu {
                 KeyEvent::from(Key::F(4)),
                 "F4",
             )
+            .submenu("~R~ecent", alt('r'), |s| {
+                s.command("report.txt", Command::custom("gallery.recent1"))
+                    .command("budget.csv", Command::custom("gallery.recent2"))
+                    .command("notes.md", Command::custom("gallery.recent3"))
+            })
             .separator()
             .command_key("E~x~it", Command::QUIT, alt('x'), "Alt-X")
         })
@@ -152,6 +180,22 @@ fn statusline() -> Vec<StatusDef> {
         .build()
 }
 // ANCHOR_END: statusline
+
+// ANCHOR: contextmenu
+/// A context menu — the pop-up box shown on a right-click, built from the same
+/// `Menu` data as a menu bar and wrapped in a `MenuBox` (which sizes itself to
+/// fit the items). At runtime `popup_menu(pos, menu, …)` opens one at the cursor.
+fn contextmenu() -> Box<dyn View> {
+    let menu = Menu::builder()
+        .command("Cu~t~", Command::CUT)
+        .command("~C~opy", Command::COPY)
+        .command("~P~aste", Command::PASTE)
+        .separator()
+        .command("Select ~A~ll", Command::custom("gallery.select_all"))
+        .build();
+    Box::new(MenuBox::new(Rect::new(6, 2, 40, 16), menu))
+}
+// ANCHOR_END: contextmenu
 
 // ANCHOR: checkboxes
 /// Three independent check boxes hosted in a dialog. `cluster.value` is a
@@ -223,13 +267,14 @@ fn statictext() -> Box<dyn View> {
 // ANCHOR_END: statictext
 
 // ANCHOR: scrollbar
-/// One vertical and one horizontal scroll bar with a visible thumb. The thumb
-/// position is set by writing the public fields before insertion.
+/// A vertical and a horizontal scroll bar with a visible thumb, framing the
+/// right and bottom edges of the dialog the way they sit around a scrollable
+/// view. The thumb position is set by writing the public fields before insertion.
 fn scrollbar() -> Box<dyn View> {
     let mut dlg = Dialog::new(Rect::new(2, 1, 44, 14), Some("Scroll Bars".to_string()));
 
-    // Vertical bar: 1 wide × 10 tall
-    let mut vsb = ScrollBar::new(Rect::new(20, 2, 21, 12));
+    // Vertical bar down the right inner edge.
+    let mut vsb = ScrollBar::new(Rect::new(40, 1, 41, 12));
     vsb.min_value = 0;
     vsb.max_value = 50;
     vsb.value = 10;
@@ -237,8 +282,8 @@ fn scrollbar() -> Box<dyn View> {
     vsb.arrow_step = 1;
     dlg.insert_child(Box::new(vsb));
 
-    // Horizontal bar: 30 wide × 1 tall
-    let mut hsb = ScrollBar::new(Rect::new(5, 5, 35, 6));
+    // Horizontal bar along the bottom inner edge.
+    let mut hsb = ScrollBar::new(Rect::new(1, 11, 40, 12));
     hsb.min_value = 0;
     hsb.max_value = 50;
     hsb.value = 20;
@@ -251,16 +296,26 @@ fn scrollbar() -> Box<dyn View> {
 // ANCHOR_END: scrollbar
 
 // ANCHOR: history
-/// An input line with a `THistory` dropdown icon. Two history entries are
-/// pre-loaded into channel 1 so the recall list is non-empty.
+/// An input line with a `THistory` dropdown icon, shown with its recall list
+/// open. Clicking the `↓` icon drops down a [`HistoryWindow`] over the field;
+/// here one is shown directly, listing the entries pre-loaded into channel 1.
 fn history() -> Box<dyn View> {
-    history_add(1, "previous entry");
-    history_add(1, "another entry");
+    for entry in [
+        "report.txt",
+        "budget.csv",
+        "notes.md",
+        "config.toml",
+        "readme.md",
+    ] {
+        history_add(1, entry);
+    }
 
-    let mut dlg = Dialog::new(Rect::new(2, 1, 50, 9), Some("History".to_string()));
-    let il = InputLine::with_limit(Rect::new(3, 3, 40, 4), 64);
+    let mut dlg = Dialog::new(Rect::new(2, 1, 50, 14), Some("History".to_string()));
+    let il = InputLine::with_limit(Rect::new(3, 2, 40, 3), 64);
     let il_id = dlg.insert_child(Box::new(il));
-    dlg.insert_child(Box::new(THistory::new(Rect::new(40, 3, 43, 4), il_id, 1u8)));
+    dlg.insert_child(Box::new(THistory::new(Rect::new(40, 2, 43, 3), il_id, 1u8)));
+    // The drop-down recall popup, listing channel 1, opened below the field.
+    dlg.insert_child(Box::new(HistoryWindow::new(Rect::new(3, 3, 34, 12), 1u8)));
     Box::new(dlg)
 }
 // ANCHOR_END: history
@@ -331,10 +386,10 @@ fn memo() -> Box<dyn View> {
 /// 56 × 18 content area; the dialog is sized to give it comfortable margins.
 fn colorpicker() -> Box<dyn View> {
     let mut dlg = Dialog::new(Rect::new(1, 0, 63, 23), Some("Select Color".to_string()));
-    dlg.insert_child(Box::new(ColorPicker::new(
-        Rect::new(2, 2, 60, 20),
-        Color::Rgb(30, 144, 255),
-    )));
+    let mut picker = ColorPicker::new(Rect::new(2, 2, 60, 20), Color::Rgb(30, 144, 255));
+    // Open on the visual hue/saturation plane rather than the preset palette.
+    picker.select_tab(Tab::Plane);
+    dlg.insert_child(Box::new(picker));
     dlg.insert_child(Box::new(Button::new(
         Rect::new(8, 20, 20, 22),
         "~O~K",
@@ -376,6 +431,230 @@ fn messagebox() -> Box<dyn View> {
     Box::new(dlg)
 }
 // ANCHOR_END: messagebox
+
+// ANCHOR: window
+/// A titled `Window` with two lines of `StaticText` inside. The inner bounds
+/// are inset by one cell on every side so the text clears the frame.
+fn window() -> Box<dyn View> {
+    let mut win = Window::new(Rect::new(2, 1, 52, 17), Some("Window".to_string()), 1);
+    win.insert_child(Box::new(StaticText::new(
+        Rect::new(2, 2, 47, 8),
+        "This is a plain titled Window.\n\nIt can host any child views,\njust like a Dialog.",
+    )));
+    Box::new(win)
+}
+// ANCHOR_END: window
+
+// ANCHOR: editor
+/// An `EditWindow` opened on a small sample file written to a temp path. The
+/// window includes scroll bars and a line:column indicator in the frame.
+fn editor() -> Box<dyn View> {
+    let path = std::env::temp_dir().join("rstv_gallery_sample.txt");
+    let _ = std::fs::write(
+        &path,
+        "fn main() {\n    println!(\"Hello, rstv!\");\n}\n\n// An editor window with\n// scroll bars and a line:col indicator.\n",
+    );
+    let win = EditWindow::new(Rect::new(1, 0, 71, 22), Some(path), 1);
+    Box::new(win)
+}
+// ANCHOR_END: editor
+
+// ANCHOR: listbox
+/// A `ListBox` with a vertical scroll bar, populated on the first event tick
+/// via a thin wrapper view (the `new_list` call needs `&mut Context`).
+struct ListBoxShowcase {
+    dialog: Dialog,
+    list_id: ViewId,
+    populated: bool,
+}
+
+impl ListBoxShowcase {
+    fn new() -> Self {
+        let mut dlg = Dialog::new(Rect::new(2, 1, 46, 15), Some("List Box".to_string()));
+        let vsb = ScrollBar::new(Rect::new(41, 2, 42, 12));
+        let vsb_id = dlg.insert_child(Box::new(vsb));
+        let lb = ListBox::new(Rect::new(2, 2, 41, 12), 1, None, Some(vsb_id));
+        let list_id = dlg.insert_child(Box::new(lb));
+        ListBoxShowcase {
+            dialog: dlg,
+            list_id,
+            populated: false,
+        }
+    }
+}
+
+#[delegate(to = dialog)]
+impl View for ListBoxShowcase {
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
+        if !self.populated {
+            self.populated = true;
+            if let Some(v) = self.dialog.child_mut(self.list_id)
+                && let Some(lb) = v.as_any_mut().and_then(|a| a.downcast_mut::<ListBox>())
+            {
+                lb.new_list(
+                    vec![
+                        "Alpha".into(),
+                        "Beta".into(),
+                        "Gamma".into(),
+                        "Delta".into(),
+                        "Epsilon".into(),
+                        "Zeta".into(),
+                        "Eta".into(),
+                        "Theta".into(),
+                    ],
+                    ctx,
+                );
+                rstv::widgets::list_viewer::update_steps(lb, ctx);
+            }
+        }
+        self.dialog.handle_event(ev, ctx);
+    }
+}
+
+fn listbox() -> Box<dyn View> {
+    Box::new(ListBoxShowcase::new())
+}
+// ANCHOR_END: listbox
+
+// ANCHOR: terminal
+/// A `Terminal` widget initialized on the first event tick and seeded with two
+/// lines of output. The wrapper pattern lets `init` and `write_bytes` receive
+/// the `&mut Context` they require.
+struct TerminalShowcase {
+    window: Window,
+    term_id: ViewId,
+    initialized: bool,
+}
+
+impl TerminalShowcase {
+    fn new() -> Self {
+        let mut win = Window::new(Rect::new(2, 1, 58, 17), Some("Terminal".to_string()), 1);
+        let term = Terminal::new(Rect::new(1, 1, 54, 15), None, None, 4096);
+        let term_id = win.insert_child(Box::new(term));
+        TerminalShowcase {
+            window: win,
+            term_id,
+            initialized: false,
+        }
+    }
+}
+
+#[delegate(to = window)]
+impl View for TerminalShowcase {
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
+        if !self.initialized {
+            self.initialized = true;
+            if let Some(v) = self.window.child_mut(self.term_id)
+                && let Some(t) = v.as_any_mut().and_then(|a| a.downcast_mut::<Terminal>())
+            {
+                t.init(ctx);
+                t.write_bytes(b"Hello from Terminal!\nLine two.\nLine three.\n", ctx);
+            }
+        }
+        self.window.handle_event(ev, ctx);
+    }
+}
+
+fn terminal() -> Box<dyn View> {
+    Box::new(TerminalShowcase::new())
+}
+// ANCHOR_END: terminal
+
+// ANCHOR: outline
+/// An `Outline` tree viewer with horizontal and vertical scroll bars,
+/// initialized on the first event tick (mirrors `tvdir.rs`'s lazy-init guard).
+struct OutlineShowcase {
+    window: Window,
+    outline_id: ViewId,
+}
+
+impl OutlineShowcase {
+    fn new() -> Self {
+        let mut win = Window::new(Rect::new(2, 1, 46, 21), Some("Outline".to_string()), 1);
+        // Standard scroll bars sit on the window's right and bottom frame edges;
+        // the outline fills the inner area (extent shrunk by one cell each side).
+        let h_id = win.standard_scroll_bar(ScrollBarOptions {
+            vertical: false,
+            handle_keyboard: true,
+        });
+        let v_id = win.standard_scroll_bar(ScrollBarOptions {
+            vertical: true,
+            handle_keyboard: true,
+        });
+        let mut inner = View::state(&win).get_extent();
+        inner.grow(-1, -1);
+        let root = Node::new("Root")
+            .with_expanded(true)
+            .with_children(Box::new(
+                Node::new("Child A")
+                    .with_expanded(true)
+                    .with_children(Box::new(
+                        Node::new("Grandchild A1").with_next(Box::new(Node::new("Grandchild A2"))),
+                    ))
+                    .with_next(Box::new(
+                        Node::new("Child B")
+                            .with_expanded(true)
+                            .with_children(Box::new(Node::new("Grandchild B1"))),
+                    )),
+            ));
+        let ol = Outline::new(inner, Some(h_id), Some(v_id), Some(Box::new(root)));
+        let outline_id = win.insert_child(Box::new(ol));
+        OutlineShowcase {
+            window: win,
+            outline_id,
+        }
+    }
+}
+
+#[delegate(to = window)]
+impl View for OutlineShowcase {
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
+        if let Some(v) = self.window.child_mut(self.outline_id)
+            && let Some(ol) = v.as_any_mut().and_then(|a| a.downcast_mut::<Outline>())
+            && ol.ov().limit.y == 0
+        {
+            ov_update(ol, ctx);
+        }
+        self.window.handle_event(ev, ctx);
+    }
+}
+
+fn outline() -> Box<dyn View> {
+    Box::new(OutlineShowcase::new())
+}
+// ANCHOR_END: outline
+
+// ANCHOR: filedialog
+/// A `FileDialog` with an `Open` button. The file list is read from the current
+/// directory by `reset_current` when the dialog is shown modally. (The gallery
+/// first `cd`s into a small fixture dir so the listing is reproducible; a real
+/// app just builds the dialog.)
+fn filedialog() -> Box<dyn View> {
+    enter_gallery_fixture();
+    let fd = FileDialog::new("*.*", "Open a File", "~N~ame", FD_OPEN_BUTTON, 2);
+    Box::new(fd)
+}
+// ANCHOR_END: filedialog
+
+// ANCHOR: chdirdialog
+/// A `ChDirDialog` (Change Directory). The directory tree reflects the current
+/// directory, read by `reset_current` when the dialog is shown modally. (The
+/// gallery `cd`s into a fixture dir first for a reproducible tree.)
+fn chdirdialog() -> Box<dyn View> {
+    enter_gallery_fixture();
+    let cd = ChDirDialog::new(CD_NORMAL, 3);
+    Box::new(cd)
+}
+// ANCHOR_END: chdirdialog
+
+/// Switch into a committed fixture directory (`examples/gallery_fixture`) so the
+/// file/directory dialogs list fixed, reproducible content instead of whatever
+/// happens to be in the working directory. Gallery scaffolding only — not part
+/// of the widget API.
+fn enter_gallery_fixture() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/gallery_fixture");
+    let _ = std::env::set_current_dir(dir);
+}
 
 // ===========================================================================
 // Default chrome (used whenever a specimen does not replace it).
@@ -467,8 +746,17 @@ fn main() -> io::Result<()> {
         |r| Some(make_status(r, spec)),
         |r| Some(make_menu(r, spec)),
     );
-    // run() idles after painting; the screenshot tooling captures the static
-    // frame and then kills the session (no quit command is ever sent).
-    let _ = program.run();
+    // Both `run` and `exec_view` idle after painting; the screenshot tooling
+    // captures the static frame and then kills the session (no quit/close
+    // command is ever sent). A `Modal` specimen is shown via `exec_view` so its
+    // `reset_current` runs — that is what fills the file/directory lists.
+    match spec {
+        Specimen::Modal(build) => {
+            let _ = program.exec_view(build());
+        }
+        _ => {
+            let _ = program.run();
+        }
+    }
     Ok(())
 }

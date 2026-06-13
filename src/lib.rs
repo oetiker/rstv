@@ -15,11 +15,12 @@
 //!
 //! ```toml
 //! # Cargo.toml
-//! tv = { package = "tvision", version = "0.1" }
+//! tv = { package = "rstv", version = "0.1" }
 //! ```
 //!
-//! ```ignore
-//! let r = tv::Rect::new(0, 0, 80, 25);
+//! ```
+//! # use rstv as tv;
+//! let _r = tv::Rect::new(0, 0, 80, 25);
 //! ```
 //!
 //! Public types are therefore re-exported at the crate root below, even though
@@ -54,8 +55,8 @@
 //! handles, flag words become structs of bools, and the palette becomes a
 //! [`Theme`] keyed by [`Role`] — are summarized in the project's guide.
 
-// Lets proc-macro-generated `::tvision::Type` paths resolve inside this crate.
-extern crate self as tvision;
+// Lets proc-macro-generated `::rstv::Type` paths resolve inside this crate.
+extern crate self as rstv;
 
 pub mod app;
 pub mod backend;
@@ -107,11 +108,11 @@ pub use keymap::{KeyStroke, Keymap, Resolve};
 pub use menu::{
     Menu, MenuBar, MenuBox, MenuBuilder, MenuItem, MenuView, MenuViewState, alt, popup_menu,
 };
+pub use rstv_macros::delegate;
 pub use screen::{Buffer, Cell, DrawBuffer};
 pub use status::{HelpCtxRange, StatusColors, StatusDef, StatusItem, StatusLine};
 pub use theme::{Role, Theme};
 pub use timer::{Clock, ManualClock, SystemClock, TimerId, TimerQueue};
-pub use tvision_macros::delegate;
 pub use validate::{
     FilterValidator, LookupValidator, PXPictureValidator, RangeValidator, RegexError,
     RegexValidator, StringLookupValidator, Validator,

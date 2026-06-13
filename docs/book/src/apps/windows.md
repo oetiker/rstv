@@ -1,11 +1,11 @@
 # Windows & the desktop
 
-[`Desktop`](../api/tvision/desktop/struct.Desktop.html) and
-[`Window`](../api/tvision/window/struct.Window.html) are the two core structural
+[`Desktop`](../api/rstv/desktop/struct.Desktop.html) and
+[`Window`](../api/rstv/window/struct.Window.html) are the two core structural
 views of every rstv program: a full-screen container that holds a patterned
 background and any number of overlapping windows. Both *embed a*
-[`Group`](../api/tvision/view/struct.Group.html) and delegate the
-[`View`](../api/tvision/view/trait.View.html) trait to it (the embed-and-delegate
+[`Group`](../api/rstv/view/struct.Group.html) and delegate the
+[`View`](../api/rstv/view/trait.View.html) trait to it (the embed-and-delegate
 pattern — see [Inheritance → trait + composition](../port/inheritance.md)), so a
 desktop *is* a view and a window *is* a view: you insert windows into a desktop,
 and child controls into a window *(these are the rstv equivalents of the C++
@@ -13,15 +13,15 @@ and child controls into a window *(these are the rstv equivalents of the C++
 
 ## The desktop
 
-You rarely build a [`Desktop`](../api/tvision/desktop/struct.Desktop.html) by hand
+You rarely build a [`Desktop`](../api/rstv/desktop/struct.Desktop.html) by hand
 at runtime — the application skeleton's `init_desktop` factory does it for you. In
 the `hello` example that factory insets the bounds one row below the menu bar and
 one above the status line, then calls
-[`Desktop::new`](../api/tvision/desktop/struct.Desktop.html#method.new) with a
+[`Desktop::new`](../api/rstv/desktop/struct.Desktop.html#method.new) with a
 *background factory*. Pass
-[`Desktop::init_background`](../api/tvision/desktop/struct.Desktop.html#method.init_background)
+[`Desktop::init_background`](../api/rstv/desktop/struct.Desktop.html#method.init_background)
 for the classic light-shade (`░`) fill, which builds a
-[`Background`](../api/tvision/desktop/struct.Background.html). The skeleton wires
+[`Background`](../api/rstv/desktop/struct.Background.html). The skeleton wires
 all three factories into the program at construction:
 
 ```rust,ignore
@@ -30,30 +30,35 @@ all three factories into the program at construction:
 
 ## Opening windows
 
-A [`Window`](../api/tvision/window/struct.Window.html) is constructed with its
+A [`Window`](../api/rstv/window/struct.Window.html) is constructed with its
 bounds, an optional title, and a *window number* (`1`–`9` become the
 `Alt-1`…`Alt-9` selectors; `0` means "no number"). By default it is movable,
 resizable, closable and zoomable — all four
-[`WindowFlags`](../api/tvision/window/struct.WindowFlags.html) start true
+[`WindowFlags`](../api/rstv/window/struct.WindowFlags.html) start true
 *(corresponding to the C++ `wfMove | wfGrow | wfClose | wfZoom` flags)*.
 
 To put a window on screen at construction time, insert it into the desktop. At
 runtime — from inside the run loop — open one through the program, which inserts
 it into the desktop *and* gives it focus in one step:
 
-```rust,ignore
+```rust
+# use rstv as tv;
+# use tv::Window;
+# fn _demo(prog: &mut tv::Program) {
+# let next_num: i16 = 1;
 let r = prog.desktop_rect();
 let win = Window::new(r, Some("Untitled".into()), next_num);
 prog.desktop_insert(Box::new(win));
+# }
 ```
 
 To give a window scroll bars, call
-[`Window::standard_scroll_bar`](../api/tvision/window/struct.Window.html#method.standard_scroll_bar)
-with [`ScrollBarOptions`](../api/tvision/window/struct.ScrollBarOptions.html) — its
+[`Window::standard_scroll_bar`](../api/rstv/window/struct.Window.html#method.standard_scroll_bar)
+with [`ScrollBarOptions`](../api/rstv/window/struct.ScrollBarOptions.html) — its
 `vertical` flag selects the right edge (else the bottom), and `handle_keyboard`
 opts the bar into post-processing of the focused chain's arrow keys. It inserts
 the bar on the correct edge and returns its `ViewId`. For child controls, use
-[`Window::insert_child`](../api/tvision/window/struct.Window.html#method.insert_child).
+[`Window::insert_child`](../api/rstv/window/struct.Window.html#method.insert_child).
 
 ## Z-order, focus and window commands
 
@@ -82,16 +87,20 @@ dedicated `dragView` nested-mouse-loop for this)*.
 ## Tiling and cascading
 
 The desktop can auto-arrange its **tileable** windows.
-[`Desktop::tile`](../api/tvision/desktop/struct.Desktop.html#method.tile) packs
+[`Desktop::tile`](../api/rstv/desktop/struct.Desktop.html#method.tile) packs
 them into a most-equal grid;
-[`Desktop::cascade`](../api/tvision/desktop/struct.Desktop.html#method.cascade)
+[`Desktop::cascade`](../api/rstv/desktop/struct.Desktop.html#method.cascade)
 stacks them stepped down and to the right. Both skip windows that are not visible
 or not marked tileable, and both leave a window's bounds unchanged when it will
 not fit — a safe no-op. Note that `Window` does **not** set the tileable option
 for you; opt a window in explicitly:
 
-```rust,ignore
+```rust
+# use rstv as tv;
+# use tv::View;
+# fn _demo(win: &mut tv::Window) {
 win.state_mut().options.tileable = true;
+# }
 ```
 
 The `hello` example wires `Command::TILE` / `Command::CASCADE` menu items that

@@ -14,7 +14,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use tvision::{
+use rstv::{
     Backend, Button, ButtonFlags, Command, CrosstermBackend, Desktop, Dialog, DrawCtx, Key,
     KeyEvent, Menu, MenuBar, Node, Outline, OutlineViewer, OutlineViewerState, Program, Rect, Role,
     ScrollBar, Scroller, StaticText, StatusDef, StatusLine, SystemClock, Theme, View, ViewId,
@@ -227,7 +227,7 @@ impl FilePane {
         }
     }
 
-    fn update_dir(&mut self, path: &Path, ctx: &mut tvision::Context) {
+    fn update_dir(&mut self, path: &Path, ctx: &mut rstv::Context) {
         self.files = list_files(path);
         let max_w = self
             .files
@@ -321,7 +321,7 @@ impl DirWindow {
 
 #[delegate(to = window)]
 impl View for DirWindow {
-    fn handle_event(&mut self, ev: &mut tvision::Event, ctx: &mut tvision::Context) {
+    fn handle_event(&mut self, ev: &mut rstv::Event, ctx: &mut rstv::Context) {
         // Lazy init: ov_update needs a Context, which is not available at construction.
         if let Some(ol) = self
             .window

@@ -1,6 +1,6 @@
 //! ANSI (SGR) → themed HTML converter. Consumes `tmux capture-pane -e -p`
 //! output and produces a self-contained `<pre class="tv-screen">` fragment.
-//! The 16 base colors resolve through `tvision::Color::BIOS_RGB`, so embedded
+//! The 16 base colors resolve through `rstv::Color::BIOS_RGB`, so embedded
 //! screenshots match the running crate's palette.
 
 use std::fmt::Write as _;
@@ -33,7 +33,7 @@ impl Sgr {
 }
 
 fn bios(i: u8) -> Col {
-    let (r, g, b) = tvision::Color::BIOS_RGB[(i & 0x0f) as usize];
+    let (r, g, b) = rstv::Color::BIOS_RGB[(i & 0x0f) as usize];
     Col::Rgb(r, g, b)
 }
 
@@ -199,7 +199,7 @@ mod tests {
     use super::ansi_to_html;
 
     fn rgb(i: usize) -> String {
-        let (r, g, b) = tvision::Color::BIOS_RGB[i];
+        let (r, g, b) = rstv::Color::BIOS_RGB[i];
         format!("#{r:02x}{g:02x}{b:02x}")
     }
 

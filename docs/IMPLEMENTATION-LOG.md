@@ -87,6 +87,132 @@ concurrent gallery-docs agent sharing the main tree.
   orientation, per-divider override, reconfig highlight); `examples/splitter.rs`
   (tree | list | form, builds clean). Full suite green (1197 lib tests + splitter
   + delegate spy), clippy `-D warnings` clean, fmt clean.
+## Crate rename: `tvision` → `rstv` (2026-06-13)
+
+User call: "go full rstv and drop the tvision crate name — it may lead to
+confusion." With product, repo, and (now) crate sharing one name, the only
+remaining "tvision" was the published crate. Renamed the crate `tvision` → `rstv`
+and the proc-macro crate `tvision-macros` → `rstv-macros`; the short `tv::`
+house-style alias is **kept** (`tv = { package = "rstv" }`), so the namespace and
+all guide snippets are unchanged. (This reverses the prior "crate stays tvision"
+locked decision; CLAUDE.md updated.) Crate was unpublished (v0.1.0) — no crates.io
+disruption.
+
+Mechanical, gate-verified sweep (targeted patterns; the upstream
+`magiblot/tvision` and C++ source paths `source/tvision`/`include/tvision`/
+`scratch/tvision-spec` are deliberately preserved):
+- Code: Cargo package names + dir rename, `extern crate self as rstv`, the
+  delegate macro's `crate_name("rstv")` path resolution, `use tvision`→`use rstv`.
+- insta: 84 snapshot baselines renamed `tvision__*`→`rstv__*` (content is
+  crate-name-agnostic; unchanged — verified).
+- Guide: `../api/tvision/`→`../api/rstv/` links, `use rstv`, prose; rustdoc now
+  builds to `doc/rstv/`. The xtask doctest gate now passes `--extern
+  rstv=librstv.rlib`.
+- Methodology docs (CLAUDE.md locked decision, HANDOVER, PORTING-GUIDE, design/)
+  updated; archived plans + this log's prior entries keep their original wording.
+
+Verified: 1183 lib + 15 xtask + 7 doctests green; clippy `--all-targets` + fmt
+clean; `cargo xtask test` + `cargo xtask docs` (link check + 0 leftover includes)
+clean. Commit `9490dbe` (code+guide) + this doc pass.
+
+## Docs Phase 3 — verified docs / doctest gates (2026-06-13)
+
+Made the guide's code self-verifying so it cannot silently drift. Scope: FULL
+(confirmed with user) — a real compile gate for every guide code block, the src
+rustdoc doctests turned on, and all three gates wired into CI.
+
+- **New `cargo xtask test` gate** (`xtask/src/test.rs`). It compiles every
+  non-`ignore` ```` ```rust ```` block in the guide as a doctest. **Foundation
+  gotcha found + fixed mid-run:** mdBook's `MDBook::test(library_paths)` only
+  forwards `-L` search paths, so a doctest's `use tvision::…;` fails with "no
+  external crate tvision" (the crate never enters the extern prelude), and an
+  `extern crate` form instead trips "multiple candidates" against the shared
+  target dir's many stale `libtvision-*.rlib`. The first cut of the gate appeared
+  to pass only because the book had zero non-`ignore` blocks. Fix: invoke
+  `rustdoc --test <chapter.md> --edition 2024 --extern tvision=<rlib> -L deps`
+  per chapter (chapters enumerated via `Book::iter()`); rustdoc extracts the
+  blocks, honours `ignore`, processes hidden `#` lines, and — unlike mdBook —
+  **surfaces the real rustc error** on failure. The stable unhashed
+  `<target>/debug/libtvision.rlib` is used for `--extern`. Verified the gate
+  fails (exit 1 + E0424 with source line) on a deliberately-broken block.
+- **3 src rustdoc doctests turned on** (`lib.rs`, `backend/headless.rs`,
+  `desktop/background.rs`): `ignore` → compiling via hidden-line scaffolding; the
+  headless one drops the dev-only `insta::assert_snapshot!` (unavailable to
+  doctests). `cargo test --doc -p tvision`: **7 passed, 0 ignored** (was 4/3).
+- **Guide code blocks triaged + converted.** Convention: the book is an external
+  consumer, so a hidden `# use tvision as tv;` plus a hidden, uncalled
+  `# fn _demo(recv: &mut tv::Foo) { … }` wrapper lets a snippet type-check against
+  the real public API without constructing a runtime object or a terminal.
+  Converted **apps/** (14 blocks), **port/** + getting-started/installation
+  (8 blocks), **internals/custom-view** (Banner + delegate) and
+  **internals/drawing** (DrawBuffer). `theme.md` corrected to the public
+  `ctx.style`/`ctx.glyphs` (the `ctx.theme` field is private). Genuinely-internal
+  sketches stay `rust,ignore` with an explicit `// Illustrative sketch — not a
+  standalone program.` label: brokering's pump broker, the Deferred-drain match,
+  the event-loop skeleton, skeleton.md's `Program::new` shape, screenshots.md's
+  xtask `Screen` literal, and inheritance.md's bare trait-method bodies. The
+  example-backed `{{#rustdoc_include}}` blocks (gallery + hello) stay `ignore` —
+  their *example* compiles, which `cargo build --examples` covers.
+- **CI (`docs.yml`):** added `cargo build --examples`, `cargo test --doc -p
+  tvision`, and `cargo xtask test` ahead of `cargo xtask docs`.
+
+State: 1183 lib tests + 15 xtask + 7 doctests green; clippy `--all-targets` + fmt
+clean; `cargo xtask docs` OK + link check clean + 0 leftover include directives.
+
+Commits (oldest→newest): `43daeed` gate · `73b85d2` src doctests · `4b13429`
+gate `--extern` fix · `af7c926` apps/ · `d623bfe` rustfmt · `403e855` port/ +
+installation · `21e09df` internals/custom-view + labels · (this) CI wiring + log.
+
+## Docs Phase 2 — widget gallery (2026-06-13)
+
+Built the example gallery (agreed approach B): every visible widget gets a
+minimal, compiling builder fn that ALSO drives its screenshot, so no documented
+widget line is dead.
+
+- **`examples/gallery.rs`** renders ONE widget per run, chosen by a CLI arg. A
+  `Specimen` dispatcher (`OnDesktop` insert+run / `Modal` exec_view / `Menu` /
+  `Status`) whose three factory closures consult the selection; no-arg run lists
+  the names. Each widget is a `// ANCHOR: <name>` builder the guide includes
+  verbatim. 20 widgets: button, menubar, statusline, checkboxes, radiobuttons,
+  inputline, statictext, scrollbar, history, dialog, memo, colorpicker,
+  messagebox, window, editor, listbox, terminal, outline, filedialog,
+  chdirdialog.
+- **Class-B widgets** (listbox, terminal, outline) need a `&mut Context` to
+  populate, which a plain builder lacks → a thin `#[delegate]` wrapper view runs
+  the `new_list`/`init`+`write_bytes`/`ov_update` on its first `handle_event`
+  (the crate's own deferred-init pattern). **filedialog/chdirdialog** are shown
+  through the `Modal` variant (`exec_view`) so `reset_current` fills their
+  file/directory lists — a desktop insert leaves them empty.
+- **xtask `Screen` gained an `args` field** (passed after `--`); `regenerate`
+  now dedupes pre-builds and, on a flaky blank capture, keeps the committed file
+  and continues instead of aborting the batch. 21 screens (hello + 20),
+  deterministic (0 flaky), committed as colored HTML under `src/screens/`.
+- **New "Widget Gallery" guide page** (`gallery.md` + SUMMARY section): each
+  widget's screenshot + its anchored builder code. Key captures also embedded
+  into their topic pages (button→controls, dialog→dialogs, menubar→menus).
+- Commits: `340842a` foundation+Screen.args · `ed08caf` 10 control specimens ·
+  `17e95e9` windows/lists/dialogs + Modal seam · `a6ce0a1` gallery page+embeds.
+  `cargo xtask docs` OK + link check clean; fmt + clippy --all-targets green.
+- **Determinism + review polish** (`c6dbc4d`, `9cb916d`, `2161782`): a committed
+  `examples/gallery_fixture/` the file/dir dialogs `cd` into (reproducible
+  listings); fixed the gallery `rustdoc_include` depth (`../../../`, was unprocessed
+  so code blocks showed the raw directive — the link checker does not validate
+  include resolution); and a screenshot-polish pass from review — `tmux
+  capture-pane -N` (full-width menu/status bars; tmux was trimming trailing
+  colored cells), scroll bars moved to the right/bottom edges, outline via
+  `standard_scroll_bar`, history shown with its recall drop-down open, color
+  picker opened on the Plane tab (new `ColorPicker::select_tab(Tab)`), a nested
+  `File ▸ Recent` sub-menu, and a new `contextmenu` (`MenuBox`) specimen — 21
+  widgets total.
+
+**Heads-up — interleaved Splitter commits.** A parallel agent working on a new
+`tv::Splitter` feature landed its work on `main` without a worktree, so its
+commits (`c48b976` spec, `5ab3ffc` layout solver — which also swept in the
+gallery Batch B `examples/gallery.rs` edits) are interleaved between the gallery
+commits. The Splitter foundation (`src/widgets/splitter/`) compiles clean; the
+multi-task plan (`docs/superpowers/plans/2026-06-13-splitter.md`, untracked) is
+only partially landed (solver + spec). Not gallery work — flagged so the next
+session knows it is in-flight, not finished.
 
 ## Docs Phase 1 (guide) — Rust-first guide-page pass (2026-06-12)
 

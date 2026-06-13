@@ -9,12 +9,83 @@
 >
 > **Direction:** the 92-class port is ✅ complete and the post-port backlog
 > (`docs/BACKLOG.md`, Phases A/B/C) is exhausted. The work now is the
-> **developer documentation** — content is authored and a user-facing cleanup
-> landed this session; what's left is the docs polish + example gallery in
-> "Next" below. When something lands: add an IMPLEMENTATION-LOG section and
-> update this file.
+> **developer documentation**. Docs Phases 1 (guide Rust-first pass), 2 (the
+> widget gallery) and **3 (verified docs / doctest gates)** are ✅ done. There is
+> **no committed next phase** — see "Next" for the optional follow-ups. When
+> something lands: add an IMPLEMENTATION-LOG section and update this file.
 
-## Current state (2026-06-12, docs content + user-facing cleanup landed)
+## Current state (2026-06-13, Docs Phase 3 landed + crate renamed to `rstv`)
+
+**The crate is now `rstv`** (was `tvision`); the proc-macro crate is `rstv-macros`;
+the `tv::` house-style alias is unchanged (`tv = { package = "rstv" }`). See the
+rename entry at the top of IMPLEMENTATION-LOG. Upstream `magiblot/tvision` and the
+C++ source paths (`source/tvision`, `scratch/tvision-spec`) are NOT renamed.
+
+**Code HEAD ≈ `9490dbe` (rename) + this doc pass; 1183 lib + 15 xtask + 7 doctests
+green; clippy `--all-targets` + fmt clean; `cargo xtask test` + `cargo xtask docs`
+clean (link check + 0 leftover include directives).**
+
+Docs Phase 3 made the guide self-verifying (full IMPLEMENTATION-LOG section at
+top). The keystone is a **`cargo xtask test`** gate: it runs `rustdoc --test`
+per chapter with `--extern rstv=<rlib> -L deps` (NOT mdBook's `book.test`,
+which can only pass `-L` and so can never resolve `use rstv::…`). Guide code
+blocks were triaged — user-facing snippets converted to compiling doctests via a
+hidden `# use rstv as tv;` + uncalled `# fn _demo(recv: &mut tv::Foo){…}`
+wrapper; genuinely-internal sketches kept `rust,ignore` with an explicit
+`// Illustrative sketch …` label. `docs.yml` now runs `cargo build --examples`,
+`cargo test --doc -p rstv`, and `cargo xtask test` before `cargo xtask docs`.
+
+**Phase-3 gotchas for the next editor:**
+- **Doctest convention:** in the book, the crate is `rstv`, NOT `tv`. Any new
+  ```` ```rust ```` guide block must add a hidden `# use rstv as tv;` (or
+  `extern`-free `# use rstv::…;`). For method calls on a live `Program`/
+  `Context`/view, wrap in a hidden uncalled `# fn _demo(recv: &mut tv::Foo){…}`.
+  After editing, run `cargo xtask test` — it prints the real rustc error.
+- **Never silence unused-var warnings with visible `let _ = …` in teaching code**
+  — use a hidden `# #[allow(unused_variables)]` on the wrapper fn.
+- **Example-backed `{{#rustdoc_include}}` blocks stay `rust,ignore`** (their
+  example compiles via `cargo build --examples`; the per-block include is not a
+  standalone program). Do not try to doctest them.
+- **107 pre-existing rustdoc warnings** (broken intra-doc links like
+  `ov_handle_event`, `ov_set_state`, `View::as_any_mut`) surface during `cargo
+  xtask docs`. They are NOT Phase-3 regressions and the build does not fail on
+  them — a separate "complete src rustdoc to parity" pass (below) would clear them.
+
+### Two docs phases landed earlier this session (pre-Phase-3 snapshot `e8ce8ee`):
+
+- **Docs Phase 1 — guide-page Rust-first pass** (`f36162e`). The 16 narrative
+  pages under `getting-started/`, `apps/`, `internals/` were rewritten so the
+  primary prose reads for a Rust dev with zero Turbo Vision knowledge; C++ demoted
+  to skippable parentheticals or a uniform `> **Turbo Vision heritage:**`
+  blockquote. `port/` (veteran chapter) + `reference/symbol-map`/`deviations` stay
+  C++-aware **by design** — do not "fix" their C++ mentions.
+- **Docs Phase 2 — widget gallery** (`340842a`, `ed08caf`, `17e95e9`, `a6ce0a1`,
+  then `c6dbc4d`/`9cb916d`/`2161782` for determinism+polish). A parameterized
+  `examples/gallery.rs` renders one widget per run (`cargo run --example gallery
+  -- <name>`; no-arg lists names); each widget is a `// ANCHOR: <name>` builder
+  the guide includes verbatim. **21 widgets.** New first-class guide page
+  `docs/book/src/gallery.md` (SUMMARY "Widget Gallery" section) pairs each
+  screenshot with its anchored code; key captures embedded in controls/dialogs/
+  menus. `xtask Screen` gained an `args` field; capture uses `-N` (full-width
+  bars); a committed `examples/gallery_fixture/` makes the file/dir dialogs
+  deterministic; new `ColorPicker::select_tab(Tab)` lib method.
+
+**The Phase-3-relevant artifact:** the gallery's `// ANCHOR:` builders are *real
+compiling code* (they build in the example binary) but they are **`fn`-fragments,
+not whole programs** — see the Phase 3 gotcha in "Next".
+
+### In-flight on `main` (NOT docs, NOT yours): `tv::Splitter`
+A parallel agent landed a `tv::Splitter` foundation directly on `main` without a
+worktree, so commits `c48b976` (spec) and `5ab3ffc` (`src/widgets/splitter/`
+layout solver — which also swept in some gallery Batch-B `examples/gallery.rs`
+edits) are **interleaved** between the gallery commits. It compiles clean; its
+plan (`docs/superpowers/plans/2026-06-13-splitter.md`, untracked) is only
+partially landed. **Leave it alone** for Phase 3; confirm its status with the
+user before touching it. (A rust-analyzer "borrow error" you may see in
+`splitter/layout.rs` is a stale false positive — `cargo build`/`clippy` are clean;
+trust cargo.)
+
+## Previous state (2026-06-12, docs content + user-facing cleanup landed)
 
 **Code HEAD = `2e2153b`; 1177 lib tests + 15 xtask tests green; clippy
 `--all-targets` + fmt clean; `cargo xtask docs` OK + link check clean.**
@@ -33,7 +104,7 @@ quality pass** over both doc layers (on top of the Plan 1 tooling machine, merge
   never used Turbo Vision can read it — with all C++ confined to a concise
   `# Turbo Vision heritage` section per item; added **Guide cross-links** from
   all 22 modules into their narrative chapter.
-- **Project renamed to `rstv`** (branding only: crate stays `tvision`, namespace
+- **Project renamed to `rstv`** (branding only: crate stays `rstv`, namespace
   stays `tv::`, C++ origin stays "Turbo Vision").
 - **Guide IA:** `port/faithful.md` = philosophy+gateway; `reference/deviations.md`
   = the canonical "Differences from C++ Turbo Vision" (`#d1`..`#d15` anchors,
@@ -125,7 +196,7 @@ Remaining latent edge notes (not worth fixing now):
   invalidate_all. `libc` dep added. Two-stage reviewed.
 - **C7 ✅ (`8c9bf85` + `20871fd`)** — help-ctx refresh / OneOf status line.
   `View::get_help_ctx()` trait method (default: delegates to
-  `ViewState::get_help_ctx()`); forwarder in `tvision-macros/src/specs.rs`;
+  `ViewState::get_help_ctx()`); forwarder in `rstv-macros/src/specs.rs`;
   `delegate_view` spy updated (27 methods). `Program::pump_once` idle arm wires
   `TStatusLine::update()`: reads `captures.top_modal_view()` as rstv's
   `TheTopView` equivalent, calls `v.get_help_ctx()`, then `sl.set_help_ctx(top_ctx)`
@@ -227,34 +298,35 @@ This session ran the **backlog run** end to end:
 
 *(none — all paused worktrees integrated this session)*
 
-## Next — docs polish + examples (content + user-facing cleanup DONE)
+## Next — no committed phase (optional follow-ups only)
 
-The guide prose, the user-facing cleanup/rename/IA/heritage/guide-links pass,
-**and the guide-page Rust-first pass (Phase 1 below)** have all landed. The docs
-now read for library users, guide and API alike. **Remaining docs work — two
-phases (the user's call on order):**
+Docs Phases 1–3 are done. There is **no next phase queued.** The gates are live;
+the guide's code is self-verifying. Remaining candidates, none committed:
 
-1. ~~**Guide-page Rust-first pass.**~~ ✅ **DONE this session** (see
-   IMPLEMENTATION-LOG "Docs Phase 1 (guide)"). The 16 narrative pages under
-   `getting-started/`, `apps/`, and `internals/` were rewritten Rust-first:
-   C++-led openings flipped, C++ demoted to skippable parentheticals or a uniform
-   `> **Turbo Vision heritage:**` blockquote. `port/` (the veteran chapter) and
-   `reference/symbol-map` + `deviations` stay C++-aware by design. Invariant grep
-   + `cargo xtask docs` link check clean. **Remaining C++ mentions in those dirs
-   are now all intentional asides** (heritage blockquotes, linked `[deviation Dn]`
-   citations, light parentheticals) — a future `grep 'C++'` will still hit them;
-   that is expected.
-2. **Example gallery (Phase 2) — agreed approach "B".** One parameterized
-   `gallery` example binary with a per-widget `// ANCHOR:`-marked setup fn,
-   selected by a CLI arg; each visible widget (~30: Button, CheckBoxes, Cluster,
-   InputLine, ListBox, ScrollBar, Window, Dialog, MenuBar, StatusLine, Memo,
-   Editor, …) gets a minimal example + a tmux screenshot. Needs a small `args`
-   field on `xtask` `Screen`. **Why:** every documented line then compiles.
-3. **Verified docs (Phase 3).** Convert the remaining `rust,ignore` guide snippets
-   to anchored-example / doctest form, then turn ON `mdbook test` + `cargo test
-   --doc` as CI gates. **Gotcha:** the Part I snippets are `rust,ignore` excerpts
-   (e.g. `:setup`/`:main`) — switch to whole-program anchors first or the gate
-   fails on partial includes.
+- **Clear the 107 rustdoc warnings** — broken intra-doc links (`ov_handle_event`,
+  `ov_set_state`, `View::as_any_mut`, …) surfaced by `cargo xtask docs`. These
+  predate Phase 3 and don't fail the build, but fixing them would let `docs.yml`
+  add `RUSTDOCFLAGS=-D warnings` as a stricter gate. Pairs with "complete
+  `src/theme/` rustdoc to parity" below.
+- **Convert remaining illustrative sketches** only if you make the relevant
+  internals public — today they reference `pub(crate)`/pump-local items, so they
+  are correctly labeled `rust,ignore` rather than force-compiled.
+- A new **feature phase** would need its own planning (the porting backlog is
+  exhausted — Phase A+B+C all ✅).
+
+When editing the guide, follow the Phase-3 doctest convention in "Current state"
+(hidden `# use rstv as tv;` + `# fn _demo(recv){…}` wrapper; run
+`cargo xtask test`).
+
+### Verifying docs edits
+- Integrated tree, `CARGO_TARGET_DIR=/home/oetiker/scratch/cargo-target`.
+- `cargo xtask test` (guide doctests — prints the real rustc error), `cargo test
+  --doc -p rstv` (src doctests), `cargo build --examples`, then `cargo xtask
+  docs` (regenerates screenshots ≈40s deterministic; builds + link-checks).
+- After any `{{#rustdoc_include}}` edit, grep the built HTML for leftover
+  directives (`grep -rl rustdoc_include docs/book/book` must be empty) — the link
+  checker won't catch an unresolved include. Include-path depth: `gallery.md` is
+  in `src/` → `../../../examples/…`; pages one level deeper → `../../../../`.
 
 **Smaller follow-ups:** complete `src/theme/` rustdoc to parity;
 `#![doc(html_logo_url/favicon)]` crate attrs; vendor the real mermaid runtime;
@@ -340,6 +412,6 @@ C2/C9 dialogs should follow the same shape rather than inventing new seams.
   out-of-scope changes are a real failure mode (a B2 implementer modified
   the pump unprompted; review caught it and the proper redesign landed).
 - When you add a `View` trait method, add a matching forwarder to
-  `tvision-macros/src/specs.rs` (the `delegate_view` spy test catches
+  `rstv-macros/src/specs.rs` (the `delegate_view` spy test catches
   existing methods, not brand-new defaulted ones). A new `Deferred` variant
   needs NO forwarder. Validator-trait methods are NOT `View` methods.

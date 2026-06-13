@@ -3,7 +3,7 @@
 A scroller needs to know how far its scrollbars have moved; a list box needs to
 push its position back into them. In rstv, ownership is a downward tree of
 `Box<dyn View>`, and every up- or sideways link is a lightweight handle — a
-[`ViewId`](../api/tvision/view/struct.ViewId.html) — rather than a raw pointer.
+[`ViewId`](../api/rstv/view/struct.ViewId.html) — rather than a raw pointer.
 The event loop resolves handles and performs the actual cross-view reads and
 writes at a safe point when no other borrow is active. See
 [Pointers & `infoPtr` → handles](../port/handles.md) for the broader handle
@@ -51,6 +51,7 @@ viewer) is always the same: resolve each participant in its **own**
 type via `as_any_mut()` to call its real method:
 
 ```rust,ignore
+// Illustrative sketch — not a standalone program.
 // At deferred-apply, inside the pump, `group` is the whole tree:
 let dx = h_bar_id
     .and_then(|id| group.find_mut(id))   // resolve one bar

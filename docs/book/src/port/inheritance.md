@@ -10,18 +10,18 @@ for behaviour and **composition** for data.
 
 The `TView` class splits into two pieces:
 
-- [`View`](../api/tvision/view/trait.View.html) — the **trait** that carries the
+- [`View`](../api/rstv/view/trait.View.html) — the **trait** that carries the
   virtual methods. `draw`, `handle_event`, `set_state`, `calc_bounds` and the
   rest live here. Most have a faithful default body, so a widget overrides only
   what differs.
-- [`ViewState`](../api/tvision/view/struct.ViewState.html) — a plain **struct**
+- [`ViewState`](../api/rstv/view/struct.ViewState.html) — a plain **struct**
   holding what were `TView`'s data members: `origin`, `size`, `cursor`, the
   state/option/grow/drag flag sets, the event mask, the help context, and the
   view's own id. The flag words become named-boolean structs —
-  [`State`](../api/tvision/view/struct.State.html) (`sf*`),
-  [`Options`](../api/tvision/view/struct.Options.html) (`of*`),
-  [`GrowMode`](../api/tvision/view/struct.GrowMode.html) (`gf*`),
-  [`DragMode`](../api/tvision/view/struct.DragMode.html) (`dm*`) — see
+  [`State`](../api/rstv/view/struct.State.html) (`sf*`),
+  [`Options`](../api/rstv/view/struct.Options.html) (`of*`),
+  [`GrowMode`](../api/rstv/view/struct.GrowMode.html) (`gf*`),
+  [`DragMode`](../api/rstv/view/struct.DragMode.html) (`dm*`) — see
   [Flag words → struct-of-bools](flags.md).
 
 Every widget *embeds* a `ViewState` and exposes it through the trait's two
@@ -30,6 +30,7 @@ has no sensible base default — are the only methods you *must* write; everythi
 else defaults.
 
 ```rust,ignore
+// Illustrative sketch — not a standalone program.
 fn state(&self) -> &ViewState { &self.state }
 fn state_mut(&mut self) -> &mut ViewState { &mut self.state }
 ```
@@ -44,7 +45,10 @@ also derives from *concrete* widgets: an "About" box is `class AboutDialog :
 public TDialog`, reusing all of `TDialog`'s behaviour and overriding only
 `draw`. With no inheritance, you can't extend `Dialog`; you **embed** one:
 
-```rust,ignore
+```rust
+# use rstv as tv;
+# use tv::Dialog;
+# #[allow(dead_code)]
 struct AboutDialog { dialog: Dialog }
 ```
 
@@ -56,11 +60,15 @@ composition.
 
 ## `#[delegate]` removes the boilerplate
 
-The `#[delegate]` attribute macro (from the `tvision-macros` crate, re-exported
+The `#[delegate]` attribute macro (from the `rstv-macros` crate, re-exported
 as `tv::delegate`) fills the gap automatically. You write only the methods that
 differ; the macro injects a forwarder for the rest:
 
-```rust,ignore
+```rust
+# use rstv as tv;
+# use tv::{delegate, Dialog, View, DrawCtx};
+# #[allow(dead_code)]
+# struct AboutDialog { dialog: Dialog }
 #[delegate(to = dialog)]
 impl View for AboutDialog {
     fn draw(&mut self, ctx: &mut DrawCtx) { /* custom paint */ }

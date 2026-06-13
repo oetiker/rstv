@@ -123,7 +123,7 @@ pub struct SearchRec {
 /// The sign of every branch matters — do not "tidy" it.
 ///
 /// ```
-/// use tvision::dialog::{SearchRec, search_rec_compare, FA_DIREC};
+/// use rstv::dialog::{SearchRec, search_rec_compare, FA_DIREC};
 /// use core::cmp::Ordering;
 ///
 /// let a = SearchRec { attr: 0,        time: 0, size: 0, name: "..".into() };
