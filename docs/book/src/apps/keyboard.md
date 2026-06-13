@@ -39,7 +39,8 @@ two for a prefix sequence in the classic `Ctrl-K`/`Ctrl-Q` editor style. You
 describe chords as strings: space-separated strokes, each a `+`-joined list of
 modifiers ending in a key name.
 
-```rust,ignore
+```rust
+# use tvision as tv;
 let mut km = tv::keymap::Keymap::new();
 km.bind("ctrl+s", tv::Command::CHAR_LEFT)        // single stroke
   .bind("ctrl+k ctrl+c", tv::Command::COPY)      // two-stroke prefix chord
@@ -73,7 +74,8 @@ as `word_star()`. Swap it once at startup with
 [`set_global`](../api/tvision/keymap/fn.set_global.html), and the editor and every
 input field follow:
 
-```rust,ignore
+```rust
+# use tvision as tv;
 tv::keymap::set_global(tv::keymap::Keymap::cua());
 ```
 

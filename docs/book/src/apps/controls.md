@@ -17,10 +17,14 @@ broadcast. The default button additionally responds to `Enter`. A keyboard press
 does not fire instantly: the button flashes its pressed look for a moment (a
 short one-shot timer) and then fires, so the click is visible.
 
-```rust,ignore
+```rust
+# use tvision as tv;
+# use tv::Command;
+# let bounds = tv::Rect::new(0, 0, 10, 3);
 use tv::widgets::{Button, ButtonFlags};
 // bounds, title (~ marks the hotkey), command, flags — then insert into the dialog.
 let ok = Button::new(bounds, "~O~K", Command::OK, ButtonFlags { default: true, ..Default::default() });
+# let _ = ok;
 ```
 
 {{#include ../screens/button.html}}

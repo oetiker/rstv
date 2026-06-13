@@ -27,9 +27,16 @@ hidden) horizontal and vertical scrollbars and the line/column indicator, wires
 a [`FileEditor`](../api/tvision/widgets/struct.FileEditor.html) to them, and
 titles the window after the file (or `"Untitled"`):
 
-```rust,ignore
+```rust
+# use tvision as tv;
+# use tv::widgets::EditWindow;
+# fn _demo(desktop: &mut tv::Group) {
+# let bounds = tv::Rect::new(0, 0, 80, 24);
+# let path = std::path::PathBuf::from("my_file.txt");
+# let window_number: i16 = 1;
 let win = EditWindow::new(bounds, Some(path), window_number);
 desktop.insert(Box::new(win));
+# }
 ```
 
 ## Files: loading, saving, and the modified prompt

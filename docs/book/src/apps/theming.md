@@ -45,11 +45,15 @@ draw context hands you the resolved style. Inside `draw()` you have a
 [`DrawCtx`](../api/tvision/view/struct.DrawCtx.html); ask it for the style of a
 role and paint with it:
 
-```rust,ignore
+```rust
+# use tvision as tv;
+# struct MyWidget;
+# impl MyWidget {
 fn draw(&self, ctx: &mut tv::DrawCtx) {
     let style = ctx.style(tv::Role::Normal);
     ctx.put_str(0, 0, "hello", style);
 }
+# }
 ```
 
 `ctx.style(role)` is a thin pass-through to `Theme::style`, so it is total and
@@ -66,13 +70,16 @@ install it on the running program with
 [`Program::set_theme`](../api/tvision/app/struct.Program.html#method.set_theme),
 which forces a full repaint:
 
-```rust,ignore
+```rust
+# use tvision as tv;
+# fn _demo(program: &mut tv::Program) {
 let mut theme = tv::Theme::classic_blue();
 theme.set_style(
     tv::Role::Background,
     tv::Style::new(tv::Color::Rgb(20, 20, 30), tv::Color::Default),
 );
 program.set_theme(theme);
+# }
 ```
 
 You can also build a `Style` with attributes via

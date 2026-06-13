@@ -41,10 +41,15 @@ To put a window on screen at construction time, insert it into the desktop. At
 runtime — from inside the run loop — open one through the program, which inserts
 it into the desktop *and* gives it focus in one step:
 
-```rust,ignore
+```rust
+# use tvision as tv;
+# use tv::Window;
+# fn _demo(prog: &mut tv::Program) {
+# let next_num: i16 = 1;
 let r = prog.desktop_rect();
 let win = Window::new(r, Some("Untitled".into()), next_num);
 prog.desktop_insert(Box::new(win));
+# }
 ```
 
 To give a window scroll bars, call
@@ -90,8 +95,12 @@ or not marked tileable, and both leave a window's bounds unchanged when it will
 not fit — a safe no-op. Note that `Window` does **not** set the tileable option
 for you; opt a window in explicitly:
 
-```rust,ignore
+```rust
+# use tvision as tv;
+# use tv::View;
+# fn _demo(win: &mut tv::Window) {
 win.state_mut().options.tileable = true;
+# }
 ```
 
 The `hello` example wires `Command::TILE` / `Command::CASCADE` menu items that

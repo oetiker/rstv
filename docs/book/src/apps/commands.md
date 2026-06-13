@@ -19,16 +19,21 @@ the C++ `cm*` constants)*. Mint your own with
 [`Command::custom`](../api/tvision/command/struct.Command.html#method.custom),
 under a dotted prefix of your own:
 
-```rust,ignore
+```rust
+# use tvision as tv;
 const REFRESH: tv::Command = tv::Command::custom("myapp.refresh");
 ```
 
 Commands reach the tree as events. A view emits one through its
 [`Context`](../api/tvision/view/struct.Context.html):
 
-```rust,ignore
+```rust
+# use tvision as tv;
+# const REFRESH: tv::Command = tv::Command::custom("myapp.refresh");
+# fn _demo(ctx: &mut tv::Context) {
 // a targeted command, like cmXxx — handled by one view up the tree
 ctx.post(REFRESH);
+# }
 ```
 
 The command then rides the event loop as an
@@ -47,10 +52,13 @@ the top-level handle (an app `main`, startup, a test), call
 `ctx.enable_command(cmd)`. A view can ask whether a command is currently live
 with `ctx.command_enabled(cmd)`, which answers from a per-pump snapshot.
 
-```rust,ignore
+```rust
+# use tvision as tv;
+# fn _demo(app: &mut tv::Program) {
 app.disable_command(tv::Command::SAVE);   // Save menu item / button grays out
 // ...later, once there is something to save:
 app.enable_command(tv::Command::SAVE);
+# }
 ```
 
 Internally `Program` stores the *disabled* set (a denylist), so a brand-new
@@ -73,8 +81,11 @@ A targeted command goes to whoever handles it; a **broadcast** is offered to
 scrollbar tells its scroller it moved, a list tells its dialog an item was
 chosen. Emit one through the context:
 
-```rust,ignore
+```rust
+# use tvision as tv;
+# fn _demo(ctx: &mut tv::Context, my_id: tv::ViewId) {
 ctx.broadcast(tv::Command::SCROLL_BAR_CHANGED, Some(my_id));
+# }
 ```
 
 A broadcast is an

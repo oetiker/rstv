@@ -14,7 +14,10 @@ Construct the dialog with a rectangle and an optional title, then populate it
 with child views — buttons, input lines, checkboxes, labels — via
 [`insert_child`](../api/tvision/dialog/struct.Dialog.html#method.insert_child):
 
-```rust,ignore
+```rust
+# use tvision as tv;
+# use tv::{Command, Dialog, Rect};
+# use tv::widgets::{Button, ButtonFlags, InputLine};
 let mut dialog = Dialog::new(Rect::new(0, 0, 40, 11), Some("Sign in".into()));
 
 // insert_child returns the child's ViewId, so you can reach it later.
@@ -28,6 +31,7 @@ dialog.insert_child(Box::new(Button::new(
     Command::OK,
     ButtonFlags { default: true, ..Default::default() },
 )));
+# let _ = name;
 ```
 
 `InputLine::new` takes a validator and a [`LimitMode`](../api/tvision/widgets/enum.LimitMode.html)
@@ -54,12 +58,16 @@ It inserts the dialog at the top of the tree, marks it modal, gives it focus,
 and spins the **same** event loop until the dialog ends itself — then removes it
 and hands back the closing command:
 
-```rust,ignore
+```rust
+# use tvision as tv;
+# use tv::{Command, Dialog};
+# fn _demo(program: &mut tv::Program, dialog: Dialog) {
 match program.exec_view(Box::new(dialog)) {
     Command::OK     => { /* read the fields back, act on them */ }
     Command::CANCEL => { /* user backed out */ }
     _ => {}
 }
+# }
 ```
 
 There is no separate "modal loop." rstv runs a single event loop plus a
