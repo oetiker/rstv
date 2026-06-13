@@ -1,5 +1,6 @@
 pub mod layout;
 
+use crate::capture::TrackMask;
 use crate::event::Event;
 use crate::theme::Role;
 use crate::view::{Context, DrawCtx, Group, Point, Rect, View, ViewId, ViewState};
@@ -45,8 +46,9 @@ pub struct Splitter {
     /// Reconfig-mode selected divider (Task 8). `None` = normal use.
     reconfig: Option<usize>,
     /// Absolute origin captured each `draw`, for the mouse-track capture (Task 6).
-    #[allow(dead_code)]
     abs_origin: Point,
+    /// Active divider being mouse-dragged (Task 6).
+    dragging: Option<usize>,
 }
 
 impl Splitter {
@@ -59,6 +61,7 @@ impl Splitter {
             default_style: DividerStyle::Line,
             reconfig: None,
             abs_origin: bounds.a,
+            dragging: None,
         }
     }
 
@@ -200,6 +203,87 @@ impl Splitter {
             cursor += size + 1; // +1 for the divider cell that follows
         }
     }
+
+    /// Local axis coordinate of divider `i` (the gap cell after pane `i`).
+    /// `None` if `i` is out of range.
+    fn divider_axis_pos(&self, i: usize) -> Option<i32> {
+        if i + 1 >= self.slots.len() {
+            return None;
+        }
+        let sizes = solve(&self.slots, self.content_len());
+        let mut pos = 0;
+        for k in 0..=i {
+            pos += sizes.get(k).copied().unwrap_or(0);
+            if k < i {
+                pos += 1; // earlier divider cells
+            }
+        }
+        Some(pos)
+    }
+
+    /// Hit-test a **local** point to the divider index whose cell it lands on.
+    fn divider_at(&self, local: Point) -> Option<usize> {
+        let along = match self.orientation {
+            Orientation::Cols => local.x,
+            Orientation::Rows => local.y,
+        };
+        (0..self.slots.len().saturating_sub(1)).find(|&i| self.divider_axis_pos(i) == Some(along))
+    }
+
+    /// Move divider `i` so its boundary local axis position becomes `target`.
+    /// Option A: rewrite only the two flexible neighbors' f64 weights, preserving
+    /// their sum; a fixed (`min==max`) neighbor is a hard wall (clamped). Callers
+    /// must gate `Locked` at the event layer.
+    fn drag_divider_to(&mut self, i: usize, target: i32) {
+        if i + 1 >= self.slots.len() {
+            return;
+        }
+        let sizes = solve(&self.slots, self.content_len());
+        let (a, b) = (i, i + 1);
+        let cur_boundary = self.divider_axis_pos(i).unwrap_or(0);
+        let mut delta = target - cur_boundary; // +delta grows pane a, shrinks b
+        let (size_a, size_b) = (sizes[a], sizes[b]);
+        let max_grow_a = (self.slots[a].max - size_a).max(0);
+        let max_shrink_b = (size_b - self.slots[b].min).max(0);
+        let max_pos = max_grow_a.min(max_shrink_b);
+        let max_shrink_a = (size_a - self.slots[a].min).max(0);
+        let max_grow_b = (self.slots[b].max - size_b).max(0);
+        let max_neg = max_shrink_a.min(max_grow_b);
+        delta = delta.clamp(-max_neg, max_pos);
+        if delta == 0 {
+            return;
+        }
+        let new_a = size_a + delta;
+        let new_b = size_b - delta;
+        let free_a = (new_a - self.slots[a].min).max(0) as f64;
+        let free_b = (new_b - self.slots[b].min).max(0) as f64;
+        let pair_w = self.slots[a].weight + self.slots[b].weight;
+        let free_sum = free_a + free_b;
+        if pair_w > 0.0 && free_sum > 0.0 {
+            self.slots[a].weight = pair_w * free_a / free_sum;
+            self.slots[b].weight = pair_w * free_b / free_sum;
+        }
+    }
+
+    /// Re-flow children to current solved sizes via DEFERRED bounds (loop owns writes).
+    fn request_relayout(&mut self, ctx: &mut Context) {
+        let sizes = solve(&self.slots, self.content_len());
+        let b = self.group.state().get_bounds();
+        let mut cursor = match self.orientation {
+            Orientation::Cols => b.a.x,
+            Orientation::Rows => b.a.y,
+        };
+        let ids = self.group.child_ids_in_order();
+        for (i, id) in ids.iter().enumerate() {
+            let size = sizes.get(i).copied().unwrap_or(0);
+            let rect = match self.orientation {
+                Orientation::Cols => Rect::new(cursor, b.a.y, cursor + size, b.b.y),
+                Orientation::Rows => Rect::new(b.a.x, cursor, b.b.x, cursor + size),
+            };
+            ctx.request_bounds(*id, rect);
+            cursor += size + 1;
+        }
+    }
 }
 
 #[crate::delegate(to = group)]
@@ -223,8 +307,47 @@ impl View for Splitter {
     }
 
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
-        // Task 6 adds mouse drag; Task 8 adds reconfig. For now, pass through.
-        self.group.handle_event(ev, ctx);
+        match ev {
+            Event::MouseDown(me) => {
+                let local = me.position; // already view-local; copy before ev.clear()
+                if let Some(i) = self.divider_at(local) {
+                    let style = self.style_of(i);
+                    // Live drag allowed for Line/Handle (draggable_live); in reconfig
+                    // mode any movable divider can be grabbed. Locked never moves.
+                    let allowed = (style.draggable_live() || self.reconfig.is_some())
+                        && style.movable_in_reconfig();
+                    if let (true, Some(id)) = (allowed, self.state().id()) {
+                        self.dragging = Some(i);
+                        ctx.start_mouse_track(
+                            id,
+                            self.abs_origin,
+                            TrackMask {
+                                mouse_move: true,
+                                ..Default::default()
+                            },
+                        );
+                        ev.clear();
+                        return;
+                    }
+                }
+                self.group.handle_event(ev, ctx);
+            }
+            Event::MouseMove(me) if self.dragging.is_some() => {
+                let i = self.dragging.unwrap();
+                let target = match self.orientation {
+                    Orientation::Cols => me.position.x,
+                    Orientation::Rows => me.position.y,
+                };
+                self.drag_divider_to(i, target);
+                self.request_relayout(ctx);
+                ev.clear();
+            }
+            Event::MouseUp(_) if self.dragging.is_some() => {
+                self.dragging = None;
+                ev.clear();
+            }
+            _ => self.group.handle_event(ev, ctx),
+        }
     }
 }
 
@@ -348,5 +471,44 @@ mod view_tests {
             .divider(1, DividerStyle::Line); // seam after pane 1 (B|C) visible; others hidden
         sp.change_bounds(Rect::new(0, 0, 14, 1)); // 3 panes, 2 dividers, 12 content => 4/4/4
         insta::assert_snapshot!(render(&mut sp, 14, 1)); // AAAA BBBB│CCCC
+    }
+
+    #[test]
+    fn drag_repartitions_two_neighbors_sum_preserved() {
+        let mut sp = Splitter::cols();
+        sp.change_bounds(Rect::new(0, 0, 31, 1)); // 3 panes, 2 dividers, 29 content
+        sp.insert(Fill::boxed('A'), Constraints::flex());
+        sp.insert(Fill::boxed('B'), Constraints::flex());
+        sp.insert(Fill::boxed('C'), Constraints::flex());
+        let w_before_c = sp.slots[2].weight;
+        let pair_before = sp.slots[0].weight + sp.slots[1].weight;
+        let d0 = sp.divider_axis_pos(0).unwrap();
+        sp.drag_divider_to(0, d0 + 3);
+        assert!(
+            (sp.slots[2].weight - w_before_c).abs() < 1e-9,
+            "pane C weight untouched (locality)"
+        );
+        assert!(
+            (sp.slots[0].weight + sp.slots[1].weight - pair_before).abs() < 1e-9,
+            "pair sum preserved"
+        );
+        let sizes = super::layout::solve(&sp.slots, sp.content_len());
+        assert!(sizes[0] > sizes[1], "pane 0 grew, pane 1 shrank");
+    }
+
+    #[test]
+    fn drag_against_fixed_neighbor_is_a_wall() {
+        let mut sp = Splitter::cols();
+        sp.change_bounds(Rect::new(0, 0, 31, 1));
+        sp.insert(Fill::boxed('A'), Constraints::fixed(10)); // pinned
+        sp.insert(Fill::boxed('B'), Constraints::flex());
+        let before = super::layout::solve(&sp.slots, sp.content_len());
+        let d0 = sp.divider_axis_pos(0).unwrap();
+        sp.drag_divider_to(0, d0 + 5); // try to grow the fixed pane
+        let after = super::layout::solve(&sp.slots, sp.content_len());
+        assert_eq!(
+            before, after,
+            "fixed pane is immovable — divider does not move"
+        );
     }
 }
