@@ -1126,11 +1126,17 @@ mod tests {
                 offset: 3,
                 stem: Weight::Single,
             },
+            JunctionMark {
+                edge: Edge::Left,
+                offset: 3,
+                stem: Weight::Single,
+            },
         ]);
         let buf = render_frame(&mut f, 20, 6);
         assert_eq!(buf.get(8, 0).symbol(), "┬", "top-edge mark → ┬");
         assert_eq!(buf.get(8, 5).symbol(), "┴", "bottom-edge mark → ┴");
         assert_eq!(buf.get(19, 3).symbol(), "┤", "right-edge mark → ┤");
+        assert_eq!(buf.get(0, 3).symbol(), "├", "left-edge mark → ├");
         assert_eq!(buf.get(5, 0).symbol(), "─", "unmarked top stays ─");
         assert_eq!(buf.get(0, 0).symbol(), "┌");
         assert_eq!(buf.get(19, 0).symbol(), "┐");
