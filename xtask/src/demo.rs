@@ -37,17 +37,22 @@ const fn scene(keys: &'static [&'static str], hold_cs: u16) -> Scene {
 ///   - F5 zooms/restores the top window.
 fn tour() -> Vec<Scene> {
     vec![
-        scene(&[], 110),                   // the desktop
-        scene(&["F10"], 60),               // menu bar active
-        scene(&["Down"], 130),             // system menu (incl. Color Picker + Splitter)
-        scene(&["Enter"], 160),            // About dialog (hero)
-        scene(&["Escape"], 50),            // dismiss
-        scene(&["F10", "Down", "c"], 100), // Calculator window
-        // press buttons: 6 * 7 = → 42
-        scene(&["6"], 35),
-        scene(&["*"], 35),
-        scene(&["7"], 35),
-        scene(&["="], 130),
+        scene(&[], 110),                  // the desktop
+        scene(&["F10"], 60),              // menu bar active
+        scene(&["Down"], 130),            // system menu (incl. Color Picker + Splitter)
+        scene(&["Enter"], 160),           // About dialog (hero)
+        scene(&["Escape"], 50),           // dismiss
+        scene(&["F10", "Down", "c"], 90), // Calculator window
+        // Click the keypad with the mouse: each press depresses the button
+        // (its drop-shadow vanishes), release fires it. 7 × 6 = 42.
+        scene(&["\x1b[<0;10;11M"], 30),  // press 7  (button depressed)
+        scene(&["\x1b[<0;10;11m"], 35),  // release  → 7
+        scene(&["\x1b[<0;25;13M"], 30),  // press ×
+        scene(&["\x1b[<0;25;13m"], 35),  // release
+        scene(&["\x1b[<0;20;13M"], 30),  // press 6
+        scene(&["\x1b[<0;20;13m"], 35),  // release
+        scene(&["\x1b[<0;20;17M"], 30),  // press =
+        scene(&["\x1b[<0;20;17m"], 120), // release  → 42
         // drag the calculator (size/move mode)
         scene(&["C-F5"], 60),
         scene(&["Left"], 26),
