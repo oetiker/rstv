@@ -33,6 +33,18 @@ impl DividerStyle {
     }
 }
 
+/// Color role for a divider line: being-moved beats everything, then the line
+/// matches the owning window frame (active vs passive).
+fn divider_role(moving: bool, active: bool) -> Role {
+    if moving {
+        Role::FrameDragging
+    } else if active {
+        Role::FrameActive
+    } else {
+        Role::FramePassive
+    }
+}
+
 /// A generic, N-ary, resizable multi-pane view. One axis, N child panes, N−1
 /// dividers in 1-cell gaps. Embeds a `Group` and delegates the un-overridden
 /// `View` methods to it. See `docs/superpowers/specs/2026-06-13-splitter-design.md`.
@@ -172,6 +184,12 @@ impl Splitter {
             .unwrap_or(self.default_style)
     }
 
+    /// True while divider `i` is being moved (mouse drag or the active keyboard
+    /// resize target) — drives the FrameDragging highlight.
+    fn is_moving(&self, i: usize) -> bool {
+        self.dragging == Some(i) || self.reconfig == Some(i)
+    }
+
     /// Paint the N−1 dividers into the 1-cell gaps. Called by `draw` AFTER the
     /// group paints its children. `ctx` is the splitter's own draw context
     /// (origin == splitter bounds origin), so coordinates are local (0-based).
@@ -179,9 +197,9 @@ impl Splitter {
         let b = self.group.state().get_bounds();
         let sizes = solve(&self.slots, self.content_len());
         // Extract glyph chars before any mutable put_char borrow.
-        let (frame_v, frame_h, frame_v_d, frame_h_d) = {
+        let (frame_v, frame_h) = {
             let g = ctx.glyphs();
-            (g.frame_v, g.frame_h, g.frame_v_d, g.frame_h_d)
+            (g.frame_v, g.frame_h)
         };
         // `run` = length of the divider line across the cross-axis (local).
         let run = match self.orientation {
@@ -192,19 +210,16 @@ impl Splitter {
         for i in 0..self.slots.len().saturating_sub(1) {
             cursor += sizes.get(i).copied().unwrap_or(0);
             let style = self.style_of(i);
-            let active = self.reconfig.is_some();
-            let role = if active && self.reconfig == Some(i) {
-                Role::FrameDragging
-            } else {
-                Role::FramePassive
-            };
+            let moving = self.is_moving(i);
+            let role = divider_role(moving, self.state().state.active);
             let st = ctx.style(role);
+            // Single-line always (match frame COLOR, not weight).
             let (line_glyph, nub_glyph) = match self.orientation {
-                Orientation::Cols => (if active { frame_v_d } else { frame_v }, frame_v),
-                Orientation::Rows => (if active { frame_h_d } else { frame_h }, frame_h),
+                Orientation::Cols => (frame_v, frame_v),
+                Orientation::Rows => (frame_h, frame_h),
             };
-            let draw_full = matches!(style, DividerStyle::Line) || active;
-            let draw_handle = matches!(style, DividerStyle::Handle) && !active;
+            let draw_full = matches!(style, DividerStyle::Line) || moving;
+            let draw_handle = matches!(style, DividerStyle::Handle) && !moving;
             for k in 0..run {
                 let (x, y) = match self.orientation {
                     Orientation::Cols => (cursor, k),
@@ -320,11 +335,7 @@ impl Splitter {
         let w = ext.b.x - ext.a.x;
         let h = ext.b.y - ext.a.y;
         let sizes = solve(&self.slots, self.content_len());
-        let stem = if self.reconfig.is_some() {
-            Weight::Double
-        } else {
-            Weight::Single
-        };
+        let stem = Weight::Single; // dividers are single-line; frame tee weight unchanged at rest
         let fw = fb.b.x - fb.a.x; // frame width
         let fh = fb.b.y - fb.a.y; // frame height
 
@@ -332,8 +343,7 @@ impl Splitter {
         for i in 0..self.slots.len().saturating_sub(1) {
             cursor += sizes.get(i).copied().unwrap_or(0);
             let local = cursor; // this divider's local axis position
-            let draws_full =
-                matches!(self.style_of(i), DividerStyle::Line) || self.reconfig.is_some();
+            let draws_full = matches!(self.style_of(i), DividerStyle::Line) || self.is_moving(i);
             if draws_full {
                 match self.orientation {
                     Orientation::Cols => {
@@ -628,11 +638,7 @@ impl Splitter {
         if self.slots.len() < 2 {
             return; // no dividers of our own → nothing to cross
         }
-        let weight = if self.reconfig.is_some() {
-            Weight::Double
-        } else {
-            Weight::Single
-        };
+        let weight = Weight::Single;
         let ids = self.group.child_ids_in_order();
         for (p, id) in ids.iter().enumerate() {
             // Owned (sub bounds, perpendicular divider local positions) or None.
@@ -647,8 +653,8 @@ impl Splitter {
                         let mut c = 0i32;
                         for i in 0..sub.slots.len().saturating_sub(1) {
                             c += csizes.get(i).copied().unwrap_or(0);
-                            let full = matches!(sub.style_of(i), DividerStyle::Line)
-                                || sub.reconfig.is_some();
+                            let full =
+                                matches!(sub.style_of(i), DividerStyle::Line) || sub.is_moving(i);
                             if full {
                                 pos.push(c);
                             }
@@ -702,11 +708,8 @@ impl Splitter {
     /// Overlay one crossing glyph at (outer-divider axis pos, cross-axis pos),
     /// mapped to (x, y) by orientation. Local 0-based coords (same as `draw_dividers`).
     fn put_crossing(&self, ctx: &mut DrawCtx, axis: i32, cross: i32, glyph: char) {
-        let role = if self.reconfig.is_some() {
-            Role::FrameDragging
-        } else {
-            Role::FramePassive
-        };
+        // Crossings are never the moved target, so moving=false.
+        let role = divider_role(false, self.state().state.active);
         let st = ctx.style(role);
         let (x, y) = match self.orientation {
             Orientation::Cols => (axis, cross), // vertical divider: column=axis, row=cross
@@ -761,10 +764,9 @@ impl View for Splitter {
                 let local = me.position; // already view-local; copy before ev.clear()
                 if let Some(i) = self.divider_at(local) {
                     let style = self.style_of(i);
-                    // Live drag allowed for Line/Handle (draggable_live); in reconfig
-                    // mode any movable divider can be grabbed. Locked never moves.
-                    let allowed = (style.draggable_live() || self.reconfig.is_some())
-                        && style.movable_in_reconfig();
+                    // Any non-Locked divider is mouse-draggable (incl. Hidden, which
+                    // becomes visible in FrameDragging while dragged) — deliberate per spec.
+                    let allowed = style.movable_in_reconfig();
                     if let (true, Some(id)) = (allowed, self.state().id()) {
                         self.dragging = Some(i);
                         ctx.start_mouse_track(
@@ -803,6 +805,42 @@ impl View for Splitter {
 #[cfg(test)]
 mod divider_tests {
     use super::*;
+    use crate::backend::{HeadlessBackend, Renderer};
+    use crate::screen::Buffer;
+    use crate::theme::{Role, Theme};
+
+    // Minimal fill view for snapshot tests.
+    struct Fill(char, ViewState);
+    impl Fill {
+        fn boxed(ch: char) -> Box<dyn View> {
+            Box::new(Fill(ch, ViewState::new(Rect::new(0, 0, 1, 1))))
+        }
+    }
+    impl View for Fill {
+        fn state(&self) -> &ViewState {
+            &self.1
+        }
+        fn state_mut(&mut self) -> &mut ViewState {
+            &mut self.1
+        }
+        fn draw(&mut self, ctx: &mut DrawCtx) {
+            let b = self.1.get_bounds();
+            let (w, h) = (b.b.x - b.a.x, b.b.y - b.a.y);
+            ctx.fill(Rect::new(0, 0, w, h), self.0, ctx.style(Role::Normal));
+        }
+    }
+
+    fn render_splitter(sp: &mut Splitter, w: u16, h: u16) -> String {
+        let theme = Theme::classic_blue();
+        let (backend, screen) = HeadlessBackend::new(w, h);
+        let mut r = Renderer::new(Box::new(backend));
+        r.render(|buf: &mut Buffer| {
+            let bounds = sp.state().get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            sp.draw(&mut dc);
+        });
+        screen.snapshot()
+    }
 
     #[test]
     fn splitter_grows_with_owner_by_default() {
@@ -859,9 +897,9 @@ mod divider_tests {
     fn three_pane_cols() -> Splitter {
         let mut sp = Splitter::cols();
         sp.change_bounds(Rect::new(0, 0, 30, 5));
-        sp.insert(Leaf::boxed(), Constraints::flex());
-        sp.insert(Leaf::boxed(), Constraints::flex());
-        sp.insert(Leaf::boxed(), Constraints::flex());
+        sp.insert(Fill::boxed('A'), Constraints::flex());
+        sp.insert(Fill::boxed('B'), Constraints::flex());
+        sp.insert(Fill::boxed('C'), Constraints::flex());
         // Give the splitter a stable ViewId so begin_resize_session can include it.
         sp.state_mut().id = Some(ViewId::next());
         sp
@@ -931,6 +969,40 @@ mod divider_tests {
         assert_eq!(sp.reconfig, Some(1));
         sp.set_active_divider(None);
         assert_eq!(sp.reconfig, None);
+    }
+
+    #[test]
+    fn divider_role_rule() {
+        use crate::theme::Role;
+        // moving wins over everything.
+        assert_eq!(divider_role(true, true), Role::FrameDragging);
+        assert_eq!(divider_role(true, false), Role::FrameDragging);
+        // not moving: active window -> FrameActive, else FramePassive.
+        assert_eq!(divider_role(false, true), Role::FrameActive);
+        assert_eq!(divider_role(false, false), Role::FramePassive);
+    }
+
+    #[test]
+    fn divider_inactive_is_single_line_passive() {
+        let mut sp = three_pane_cols(); // default state: not active
+        let snap = render_splitter(&mut sp, 30, 5);
+        insta::assert_snapshot!("divider_inactive", snap);
+    }
+
+    #[test]
+    fn divider_dragging_highlight_on_mouse() {
+        let mut sp = three_pane_cols();
+        sp.dragging = Some(0); // simulate mid-drag (plain field, no ctx needed)
+        let snap = render_splitter(&mut sp, 30, 5);
+        insta::assert_snapshot!("divider_dragging_highlight_on_mouse", snap);
+    }
+
+    #[test]
+    fn divider_active_is_single_line_active() {
+        let mut sp = three_pane_cols();
+        sp.state_mut().state.active = true; // owning window is active
+        let snap = render_splitter(&mut sp, 30, 5);
+        insta::assert_snapshot!("divider_active", snap);
     }
 
     #[test]

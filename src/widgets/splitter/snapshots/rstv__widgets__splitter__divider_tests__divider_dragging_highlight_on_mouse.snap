@@ -1,0 +1,23 @@
+---
+source: src/widgets/splitter/mod.rs
+expression: snap
+---
+size: 30x5
+cursor: hidden
+text:
+|AAAAAAAAAA│BBBBBBBBB│CCCCCCCCC|
+|AAAAAAAAAA│BBBBBBBBB│CCCCCCCCC|
+|AAAAAAAAAA│BBBBBBBBB│CCCCCCCCC|
+|AAAAAAAAAA│BBBBBBBBB│CCCCCCCCC|
+|AAAAAAAAAA│BBBBBBBBB│CCCCCCCCC|
+attr:
+|aaaaaaaaaabaaaaaaaaacaaaaaaaaa|
+|aaaaaaaaaabaaaaaaaaacaaaaaaaaa|
+|aaaaaaaaaabaaaaaaaaacaaaaaaaaa|
+|aaaaaaaaaabaaaaaaaaacaaaaaaaaa|
+|aaaaaaaaaabaaaaaaaaacaaaaaaaaa|
+legend:
+  . default
+  a fg=RGB(0,0,0) bg=RGB(0,170,170)
+  b fg=RGB(85,255,85) bg=RGB(0,0,170)
+  c fg=RGB(170,170,170) bg=RGB(0,0,170)
