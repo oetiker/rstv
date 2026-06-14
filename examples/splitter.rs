@@ -17,11 +17,13 @@
 //!   - **Mouse:** drag a `Line` divider seam to resize the panes on either
 //!     side. There are four seams: two vertical (between the three columns) and
 //!     one horizontal seam in each outer column (left and right).
-//!   - **F6:** enter divider-reconfig mode. Then:
-//!       - `Tab` / `Shift-Tab` pick which divider to move,
-//!       - arrow keys nudge the selected divider,
+//!   - **Ctrl-F5:** enter resize mode. Then:
+//!       - `Tab` / `Shift-Tab` cycle the resize target (the window, then each
+//!         splitter divider),
+//!       - arrow keys move the active target (resize the window, or nudge the
+//!         selected divider),
 //!       - `Enter` commits, `Esc` cancels.
-//!   - **Tab** (outside reconfig) moves focus between panes / form fields.
+//!   - **Tab** (outside resize mode) moves focus between panes / form fields.
 //!   - **Alt-X** quits.
 //!
 //! Run it:
@@ -31,9 +33,19 @@ use std::io;
 
 use rstv::{
     Backend, Button, ButtonFlags, Command, Constraints, Context, CrosstermBackend, Desktop, Event,
-    Group, InputLine, Key, KeyEvent, Label, ListBox, Menu, MenuBar, Node, Outline, Program, Rect,
-    Splitter, StatusDef, StatusLine, SystemClock, Theme, View, alt, delegate,
+    Group, InputLine, Key, KeyEvent, KeyModifiers, Label, ListBox, Menu, MenuBar, Node, Outline,
+    Program, Rect, Splitter, StatusDef, StatusLine, SystemClock, Theme, View, alt, delegate,
 };
+
+fn ctrl_f5() -> KeyEvent {
+    KeyEvent::new(
+        Key::F(5),
+        KeyModifiers {
+            ctrl: true,
+            ..Default::default()
+        },
+    )
+}
 
 // ---------------------------------------------------------------------------
 // List pane — a ListBox that populates itself on first event.
@@ -234,9 +246,9 @@ impl SplitterApp {
         let defs = StatusDef::list()
             .def_all(|d| {
                 d.item(
-                    "~F6~ Resize panes",
-                    KeyEvent::from(Key::F(6)),
-                    Command::custom("noop"),
+                    "~Ctrl-F5~ Resize",
+                    ctrl_f5(),
+                    Command::RESIZE,
                 )
                 .item("~Alt-X~ Exit", alt('x'), Command::QUIT)
             })

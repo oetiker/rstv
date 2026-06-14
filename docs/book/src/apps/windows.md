@@ -153,19 +153,19 @@ how a seam looks and behaves:
 | --- | --- | --- |
 | `Line` (default) | Always-visible `│` / `─` | Yes |
 | `Handle` | Clean — only a grab nub at midpoint | Yes |
-| `Hidden` | Invisible in normal use | Only in reconfig mode |
+| `Hidden` | Invisible in normal use | Only in resize mode |
 | `Locked` | Invisible and immovable | Never |
 
 Set a per-seam style with `.divider(i, style)` or a blanket default with
 `.default_divider(style)`.
 
-### Live drag and `F6` reconfig
+### Live drag and keyboard resize
 
 Dragging a `Line` or `Handle` seam with the mouse resizes immediately. Pressing
-`F6` (or whatever key you bind to `Command::NEXT`) enters *reconfig mode*: the
-selected seam is highlighted and arrow keys move it; `Tab` cycles between seams;
-`Esc` restores the pre-reconfig weights; `Enter` confirms. `Locked` seams are
-skipped in reconfig mode.
+`Ctrl-F5` (bound to `Command::RESIZE`) enters *resize mode*: `Tab` / `Shift-Tab`
+cycle the resize target between the window itself and each splitter divider; arrow
+keys move the active target (resize the window, or nudge the selected divider);
+`Enter` commits; `Esc` cancels. `Locked` seams are skipped when cycling.
 
 ### Nested splitters
 

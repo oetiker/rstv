@@ -451,7 +451,8 @@ fn window() -> Box<dyn View> {
 /// A `Splitter` laying out three panes inside a window, with `.joined()` so the
 /// divider lines connect to the window frame (`┬ ┴ ┤`) and to each other (`├`).
 /// The left column is a fixed-width sidebar; the right column is itself split
-/// into two stacked rows. Drag a seam to resize; `F6` enters keyboard reconfig.
+/// into two stacked rows. Drag a seam to resize; or enter resize mode (Ctrl-F5)
+/// and Tab to a divider, then arrow-keys to move it.
 fn splitter() -> Box<dyn View> {
     let mut win = Window::new(Rect::new(2, 1, 56, 17), Some("Splitter".to_string()), 1);
     let ext = win.state().get_extent();
