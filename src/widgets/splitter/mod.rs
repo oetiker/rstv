@@ -1,7 +1,7 @@
 pub mod layout;
 
 use crate::capture::TrackMask;
-use crate::event::{Event, Key};
+use crate::event::Event;
 use crate::junction::{Edge, Junction, JunctionMark, Weight, divider_junction};
 use crate::theme::Role;
 use crate::view::{Context, DrawCtx, Group, GrowMode, Point, Rect, View, ViewId, ViewState};
@@ -44,9 +44,11 @@ pub struct Splitter {
     /// Per-divider styles (len ≤ panes−1); `default_style` fills any gap.
     divider_styles: Vec<DividerStyle>,
     default_style: DividerStyle,
-    /// Reconfig-mode selected divider (Task 8). `None` = normal use.
+    /// Active resize-target divider index; set externally via [`Splitter::set_active_divider`].
+    /// `None` = no active target (normal use).
     reconfig: Option<usize>,
-    /// Pre-reconfig weights, for Esc restore (Task 8).
+    /// Weight snapshot taken at [`Splitter::begin_resize_session`]; restored on Esc cancel.
+    #[allow(dead_code)] // written/read by the resize session API (next task wires the caller)
     saved_weights: Vec<f64>,
     /// Absolute origin captured each `draw`, for the mouse-track capture (Task 6).
     abs_origin: Point,
@@ -526,20 +528,70 @@ impl Splitter {
         self.resolve_layout_local();
     }
 
-    // -- reconfig mode (Task 8) -------------------------------------------------
+    // -- keyboard resize session (driven by the window's resize capture via the
+    //    SplitterDivider broker; see docs/.../splitter-resize-unification-design.md)
 
-    /// Enter keyboard reconfig mode: save weights, select the first movable divider.
-    fn enter_reconfig(&mut self) {
-        if self.slots.len() < 2 {
-            return;
-        }
+    /// Begin a keyboard resize session: snapshot every slot weight (for Esc
+    /// restore) and clear the active-target highlight (the capture sets it via
+    /// [`set_active_divider`]). Recurses into pane children that are themselves
+    /// splitters so a nested grid resizes too. Returns every movable divider as
+    /// `(splitter_id, divider_index, orientation)` in depth-first axis order — this
+    /// splitter's dividers first, then each sub-splitter's.
+    ///
+    /// Precondition: the splitter must already be inserted (have a [`ViewId`]) for
+    /// its own dividers to appear in the list — `self.state().id()` is `None` before
+    /// insertion, and its own dividers would then be silently omitted (recursion into
+    /// inserted sub-splitters is unaffected).
+    #[allow(dead_code)] // pub(crate) API called by the window resize capture (next task)
+    pub(crate) fn begin_resize_session(&mut self) -> Vec<(ViewId, usize, Orientation)> {
         self.saved_weights = self.slots.iter().map(|s| s.weight).collect();
-        self.reconfig = self.first_movable_divider();
+        self.reconfig = None;
+        let mut out = Vec::new();
+        if let Some(id) = self.state().id() {
+            for i in 0..self.slots.len().saturating_sub(1) {
+                if self.style_of(i).movable_in_reconfig() {
+                    out.push((id, i, self.orientation));
+                }
+            }
+        }
+        let ids = self.group.child_ids_in_order();
+        for cid in ids {
+            if let Some(sub) = self
+                .group
+                .child_mut(cid)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_mut::<Splitter>())
+            {
+                out.extend(sub.begin_resize_session());
+            }
+        }
+        out
     }
 
-    /// Exit reconfig mode. If `restore` is true, rewind to the saved weights (Esc path).
-    fn exit_reconfig(&mut self, restore: bool) {
-        if restore && self.saved_weights.len() == self.slots.len() {
+    /// Set (or clear) which divider is the active resize target. Drives the
+    /// `FrameDragging` highlight in `draw_dividers`. Per-splitter (not recursive):
+    /// the broker addresses each splitter by id.
+    #[allow(dead_code)] // pub(crate) API called by the window resize capture (next task)
+    pub(crate) fn set_active_divider(&mut self, sel: Option<usize>) {
+        self.reconfig = sel;
+    }
+
+    /// Move divider `index` by `delta` cells along the split axis, then re-flow
+    /// children synchronously (no `ctx` at broker-apply time — `resolve_layout_local`
+    /// writes child bounds directly).
+    #[allow(dead_code)] // pub(crate) API called by the window resize capture (next task)
+    pub(crate) fn nudge_divider(&mut self, index: usize, delta: i32) {
+        if let Some(p) = self.divider_axis_pos(index) {
+            self.drag_divider_to(index, p + delta);
+        }
+        self.resolve_layout_local();
+    }
+
+    /// End the resize session. On `!commit` restore the snapshotted weights (Esc).
+    /// Clears the highlight and the snapshot. Per-splitter (not recursive).
+    #[allow(dead_code)] // pub(crate) API called by the window resize capture (next task)
+    pub(crate) fn end_resize_session(&mut self, commit: bool) {
+        if !commit && self.saved_weights.len() == self.slots.len() {
             for (s, w) in self.slots.iter_mut().zip(&self.saved_weights) {
                 s.weight = *w;
             }
@@ -549,32 +601,11 @@ impl Splitter {
         self.resolve_layout_local();
     }
 
-    /// First divider index that is movable in reconfig mode, or `None`.
-    fn first_movable_divider(&self) -> Option<usize> {
-        (0..self.slots.len().saturating_sub(1)).find(|&i| self.style_of(i).movable_in_reconfig())
-    }
-
-    /// Advance the selected divider forward or backward, skipping non-movable ones.
-    fn step_selection(&mut self, forward: bool) {
-        let n = self.slots.len().saturating_sub(1);
-        if n == 0 {
-            return;
-        }
-        let Some(cur) = self.reconfig else {
-            return;
-        };
-        let mut i = cur;
-        for _ in 0..n {
-            i = if forward {
-                (i + 1) % n
-            } else {
-                (i + n - 1) % n
-            };
-            if self.style_of(i).movable_in_reconfig() {
-                self.reconfig = Some(i);
-                return;
-            }
-        }
+    /// True if this splitter has ≥1 movable divider (used by the window to decide
+    /// whether to enable Command::RESIZE / offer divider targets).
+    #[allow(dead_code)] // pub(crate) API called by the window resize capture (next task)
+    pub(crate) fn has_movable_divider(&self) -> bool {
+        (0..self.slots.len().saturating_sub(1)).any(|i| self.style_of(i).movable_in_reconfig())
     }
 
     // -- interior crossings (Site 2) --------------------------------------------
@@ -720,56 +751,11 @@ impl View for Splitter {
 
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         match ev {
-            Event::KeyDown(k) => {
-                // Copy out the key and shift flag before any borrow-conflicting calls.
-                let key = k.key;
-                let shift = k.modifiers.shift;
-                if self.reconfig.is_none() {
-                    if key == Key::F(6) {
-                        self.enter_reconfig();
-                        ev.clear();
-                        return;
-                    }
-                    self.group.handle_event(ev, ctx);
-                    return;
-                }
-                // In reconfig mode:
-                let sel = self.reconfig.unwrap();
-                match key {
-                    Key::Tab if shift => {
-                        self.step_selection(false);
-                        ev.clear();
-                    }
-                    Key::Tab => {
-                        self.step_selection(true);
-                        ev.clear();
-                    }
-                    Key::Left | Key::Up => {
-                        if let Some(p) = self.divider_axis_pos(sel) {
-                            self.drag_divider_to(sel, p - 1);
-                        }
-                        self.request_relayout(ctx);
-                        ev.clear();
-                    }
-                    Key::Right | Key::Down => {
-                        if let Some(p) = self.divider_axis_pos(sel) {
-                            self.drag_divider_to(sel, p + 1);
-                        }
-                        self.request_relayout(ctx);
-                        ev.clear();
-                    }
-                    Key::Enter => {
-                        self.exit_reconfig(false);
-                        ev.clear();
-                    }
-                    Key::Esc => {
-                        self.exit_reconfig(true);
-                        ev.clear();
-                    }
-                    _ => {
-                        self.group.handle_event(ev, ctx);
-                    }
-                }
+            Event::KeyDown(_) => {
+                // No splitter-owned keys: keyboard divider resize is driven by the
+                // window's resize capture (Command::RESIZE → Tab cycles dividers). F6 etc.
+                // fall through to the normal group/program handling (e.g. cmNext).
+                self.group.handle_event(ev, ctx);
             }
             Event::MouseDown(me) => {
                 let local = me.position; // already view-local; copy before ev.clear()
@@ -848,6 +834,144 @@ mod divider_tests {
 
         assert!(DividerStyle::Hidden.movable_in_reconfig());
         assert!(!DividerStyle::Locked.movable_in_reconfig());
+    }
+
+    // Minimal view used by resize-session tests (no rendering needed here).
+    struct Leaf(ViewState);
+    impl Leaf {
+        fn boxed() -> Box<dyn View> {
+            Box::new(Leaf(ViewState::new(Rect::new(0, 0, 1, 1))))
+        }
+    }
+    impl View for Leaf {
+        fn state(&self) -> &ViewState {
+            &self.0
+        }
+        fn state_mut(&mut self) -> &mut ViewState {
+            &mut self.0
+        }
+        fn draw(&mut self, _ctx: &mut DrawCtx) {}
+    }
+
+    /// Three-pane column splitter laid out in a 30×5 box (2 dividers → 28 content
+    /// cols → the largest-remainder solver gives the extra cell to the first pane,
+    /// e.g. [10, 9, 9]). `divider_axis_pos` is well-defined after this.
+    fn three_pane_cols() -> Splitter {
+        let mut sp = Splitter::cols();
+        sp.change_bounds(Rect::new(0, 0, 30, 5));
+        sp.insert(Leaf::boxed(), Constraints::flex());
+        sp.insert(Leaf::boxed(), Constraints::flex());
+        sp.insert(Leaf::boxed(), Constraints::flex());
+        // Give the splitter a stable ViewId so begin_resize_session can include it.
+        sp.state_mut().id = Some(ViewId::next());
+        sp
+    }
+
+    #[test]
+    fn begin_resize_session_lists_movable_dividers_and_snapshots() {
+        // Three panes → two dividers (indices 0 and 1), both movable (default Line style).
+        let mut sp = three_pane_cols(); // helper below; 3 panes → dividers 0 and 1
+        let targets = sp.begin_resize_session();
+        let id = sp.state().id().unwrap();
+        assert_eq!(
+            targets,
+            vec![(id, 0, Orientation::Cols), (id, 1, Orientation::Cols)],
+            "movable dividers enumerated in axis order with this splitter's id"
+        );
+        assert_eq!(sp.reconfig, None, "begin does NOT auto-select a divider");
+        assert_eq!(
+            sp.saved_weights.len(),
+            sp.slots.len(),
+            "weights snapshotted"
+        );
+    }
+
+    #[test]
+    fn nudge_divider_moves_then_end_commit_keeps_position() {
+        let mut sp = three_pane_cols();
+        sp.begin_resize_session();
+        let before = sp.divider_axis_pos(0).unwrap();
+        sp.nudge_divider(0, 1);
+        let after = sp.divider_axis_pos(0).unwrap();
+        assert_eq!(
+            after,
+            before + 1,
+            "nudge moves the divider one cell along the axis"
+        );
+        sp.end_resize_session(true); // commit
+        assert_eq!(
+            sp.divider_axis_pos(0).unwrap(),
+            after,
+            "commit keeps the new position"
+        );
+        assert!(sp.saved_weights.is_empty(), "session ended");
+        assert_eq!(sp.reconfig, None);
+    }
+
+    #[test]
+    fn end_resize_session_cancel_restores_weights() {
+        let mut sp = three_pane_cols();
+        sp.begin_resize_session();
+        let before = sp.divider_axis_pos(0).unwrap();
+        sp.nudge_divider(0, 2);
+        assert_ne!(sp.divider_axis_pos(0).unwrap(), before);
+        sp.end_resize_session(false); // Esc / cancel
+        assert_eq!(
+            sp.divider_axis_pos(0).unwrap(),
+            before,
+            "cancel restores pre-session position"
+        );
+    }
+
+    #[test]
+    fn set_active_divider_drives_reconfig_field() {
+        let mut sp = three_pane_cols();
+        sp.begin_resize_session();
+        sp.set_active_divider(Some(1));
+        assert_eq!(sp.reconfig, Some(1));
+        sp.set_active_divider(None);
+        assert_eq!(sp.reconfig, None);
+    }
+
+    #[test]
+    fn begin_resize_session_recurses_into_sub_splitter() {
+        // OUTER cols splitter (1 divider) with a SUB rows splitter (1 divider) as
+        // its second pane. begin_resize_session enumerates the outer's dividers
+        // first, then recurses depth-first into the sub.
+        let sub = Splitter::rows()
+            .pane(Leaf::boxed(), Constraints::flex())
+            .pane(Leaf::boxed(), Constraints::flex());
+        let mut outer = Splitter::cols();
+        outer.change_bounds(Rect::new(0, 0, 30, 10));
+        outer.insert(Leaf::boxed(), Constraints::flex());
+        // insert() stamps the child's own ViewId, so the sub-splitter is addressable.
+        let sub_id = outer.insert(Box::new(sub), Constraints::flex());
+        // The outer splitter needs its own id for its dividers to be listed.
+        outer.state_mut().id = Some(ViewId::next());
+        let outer_id = outer.state().id().unwrap();
+
+        let targets = outer.begin_resize_session();
+        assert_eq!(
+            targets,
+            vec![
+                (outer_id, 0, Orientation::Cols), // outer's divider first
+                (sub_id, 0, Orientation::Rows),   // then the sub's, depth-first
+            ],
+            "depth-first: outer's dividers (outer id/orientation) then the sub's (sub id/orientation)"
+        );
+
+        // The recursion must have begun the sub's session too (its weights snapshotted).
+        let sub = outer
+            .group
+            .child_mut(sub_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<Splitter>())
+            .expect("sub pane is a Splitter");
+        assert_eq!(
+            sub.saved_weights.len(),
+            sub.slots.len(),
+            "sub-splitter's weights snapshotted by the recursive begin"
+        );
     }
 }
 
@@ -1033,47 +1157,6 @@ mod view_tests {
         let sizes = solve(&sp.slots, sp.content_len());
         assert_eq!(sizes.len(), 2);
         assert_eq!(sizes.iter().sum::<i32>(), sp.content_len());
-    }
-
-    #[test]
-    fn reconfig_arrow_moves_selected_divider() {
-        let mut sp = Splitter::cols();
-        sp.change_bounds(Rect::new(0, 0, 21, 1)); // 2 panes, 1 divider, 20 content
-        sp.insert(Fill::boxed('A'), Constraints::flex());
-        sp.insert(Fill::boxed('B'), Constraints::flex());
-        sp.enter_reconfig();
-        assert_eq!(sp.reconfig, Some(0));
-        let before = solve(&sp.slots, sp.content_len());
-        let p = sp.divider_axis_pos(0).unwrap();
-        sp.drag_divider_to(0, p + 2);
-        let after = solve(&sp.slots, sp.content_len());
-        assert!(after[0] > before[0]);
-    }
-
-    #[test]
-    fn reconfig_esc_restores() {
-        let mut sp = Splitter::cols();
-        sp.change_bounds(Rect::new(0, 0, 21, 1));
-        sp.insert(Fill::boxed('A'), Constraints::flex());
-        sp.insert(Fill::boxed('B'), Constraints::flex());
-        let before = solve(&sp.slots, sp.content_len());
-        sp.enter_reconfig();
-        let p = sp.divider_axis_pos(0).unwrap();
-        sp.drag_divider_to(0, p + 4);
-        sp.exit_reconfig(true); // Esc path
-        let after = solve(&sp.slots, sp.content_len());
-        assert_eq!(before, after, "Esc restores the pre-mode layout");
-    }
-
-    #[test]
-    fn reconfig_snapshot_highlights_all_dividers() {
-        let mut sp = Splitter::cols()
-            .default_divider(DividerStyle::Hidden)
-            .pane(Fill::boxed('A'), Constraints::flex())
-            .pane(Fill::boxed('B'), Constraints::flex());
-        sp.change_bounds(Rect::new(0, 0, 13, 1));
-        sp.enter_reconfig(); // a previously-hidden divider should now light up (double-line ║)
-        insta::assert_snapshot!(render(&mut sp, 13, 1));
     }
 
     #[test]
