@@ -1518,7 +1518,7 @@ impl TVDemo {
         let mut r = r;
         r.b.y = r.a.y + 1;
         let menu = Menu::builder()
-            .submenu("~\u{f0}~", alt(' '), |m| {
+            .submenu("~≡~", alt(' '), |m| {
                 m.command("~A~bout…", CMD_ABOUT)
                     .separator()
                     .command("~P~uzzle", CMD_PUZZLE)

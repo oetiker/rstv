@@ -127,7 +127,7 @@ impl Renderer {
     /// arms run edge-to-centre and cross at the junction, so mixed connectors
     /// (`╤ ╢ ╪ …`) join cleanly and adjacent cells tile with no gap.
     fn draw_box(&self, img: &mut RgbaImage, x0: u32, y0: u32, spec: [u8; 4], fg: (u8, u8, u8)) {
-        const T: i32 = 2; // stroke thickness
+        const T: i32 = 1; // stroke thickness (1px, like a real terminal)
         const OFF: i32 = 2; // double-stroke offset from the centre line
         let [up, right, down, left] = spec;
         let (cw, ch) = (self.cell_w as i32, self.cell_h as i32);

@@ -423,7 +423,7 @@ impl TDirApp {
         let mut r = r;
         r.b.y = r.a.y + 1;
         let menu = Menu::builder()
-            .submenu("~\u{f0}~", alt(' '), |m| m.command("~A~bout…", CMD_ABOUT))
+            .submenu("~≡~", alt(' '), |m| m.command("~A~bout…", CMD_ABOUT))
             .submenu("~F~ile", alt('f'), |m| {
                 m.command("~N~ew Window…", CMD_NEW_WINDOW)
                     .separator()
