@@ -33,6 +33,22 @@ use unicode_width::UnicodeWidthChar;
 // Deferred — an effect on loop-owned state requested through Context
 // ---------------------------------------------------------------------------
 
+/// One operation on a splitter's keyboard-resize session, brokered by id from
+/// the window's resize capture (which knows the splitter only by [`ViewId`]).
+///
+/// Used as the payload of [`Deferred::SplitterDivider`] (the D3 sibling-broker
+/// for the splitter resize path, exactly like
+/// [`Deferred::SyncScrollerDelta`](Deferred::SyncScrollerDelta) for the scroller).
+#[derive(Debug, Clone)]
+pub enum DividerOp {
+    /// Set (or clear) the active-target divider highlight.
+    SetActive(Option<usize>),
+    /// Move divider `index` by `delta` cells along the split axis.
+    Nudge { index: usize, delta: i32 },
+    /// End the session; `commit=false` restores the snapshotted weights.
+    EndSession { commit: bool },
+}
+
 /// An effect on loop-owned state that a downward-borrowed view / capture handler
 /// cannot perform inline. During dispatch the view tree is a live `&mut`
 /// borrow stack (root → desktop → window → frame): a view cannot reach *up* or
@@ -132,6 +148,19 @@ pub enum Deferred {
     /// redrawn each frame, so visibility carries no side effects), so it is set
     /// directly on the [`ViewState`](crate::view::ViewState).
     SetVisible(ViewId, bool),
+
+    // -- the splitter keyboard-resize broker (D3 sibling-broker) -------
+    /// Apply a [`DividerOp`] to the splitter named by `splitter`. The pump
+    /// resolves it via `group.find_mut(splitter).as_any_mut()` → `Splitter`.
+    /// Touches the **view-tree** deferred family (same as the scroller ops), so
+    /// the insertion-order drain stays order-equivalent: a single dispatch never
+    /// co-queues conflicting ops on the same splitter.
+    SplitterDivider {
+        /// The splitter whose divider session to update.
+        splitter: ViewId,
+        /// The operation to apply to the splitter's keyboard-resize session.
+        op: DividerOp,
+    },
 
     // -- the list-viewer cross-view scrollbar read-sync ----------
     /// **Read direction for a list viewer**: on a scrollbar-changed broadcast,
@@ -1209,6 +1238,14 @@ impl<'a> Context<'a> {
     /// (which the scroller, a leaf, cannot reach inline).
     pub fn request_set_visible(&mut self, id: ViewId, visible: bool) {
         self.deferred.push(Deferred::SetVisible(id, visible));
+    }
+
+    /// Broker a [`DividerOp`] to a splitter by id — **deferred**
+    /// ([`Deferred::SplitterDivider`]). Used by the window resize capture,
+    /// which cannot touch the splitter inline (holds only `&mut Context`).
+    pub fn splitter_divider(&mut self, splitter: ViewId, op: DividerOp) {
+        self.deferred
+            .push(Deferred::SplitterDivider { splitter, op });
     }
 
     /// Request the list viewer `list` re-read its scrollbars' values and update

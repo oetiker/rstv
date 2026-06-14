@@ -2009,6 +2009,32 @@ impl Program {
                                     s.apply_delta(Point::new(dx, dy));
                                 }
                             }
+                            // -- Splitter keyboard-resize broker (D3) -------
+                            //
+                            // The window resize capture holds only &mut Context;
+                            // it cannot reach the splitter (a sibling in the
+                            // window's group) inline. It queues this; the pump
+                            // resolves and downcasts to `Splitter` (same
+                            // `as_any_mut` pattern as the Scroller broker above).
+                            Deferred::SplitterDivider { splitter, op } => {
+                                use crate::view::DividerOp;
+                                use crate::widgets::Splitter;
+                                if let Some(sp) = group
+                                    .find_mut(splitter)
+                                    .and_then(|view| view.as_any_mut())
+                                    .and_then(|a| a.downcast_mut::<Splitter>())
+                                {
+                                    match op {
+                                        DividerOp::SetActive(sel) => sp.set_active_divider(sel),
+                                        DividerOp::Nudge { index, delta } => {
+                                            sp.nudge_divider(index, delta)
+                                        }
+                                        DividerOp::EndSession { commit } => {
+                                            sp.end_resize_session(commit)
+                                        }
+                                    }
+                                }
+                            }
                             // Outline viewer read-sync: like
                             // SyncScrollerDelta — read both bars' `value`s,
                             // write the delta into the viewer's `OutlineViewerState`
@@ -10806,5 +10832,158 @@ mod tests {
                 "no OpenSaveAsDialog leaks after inline drive"
             );
         }
+    }
+
+    // -- SplitterDivider deferred broker ------------------------------------
+    //
+    // Proves the D3 sibling-broker arm in the deferred drain:
+    // `Deferred::SplitterDivider { splitter, op: DividerOp::Nudge }` reaches
+    // the splitter via `find_mut → as_any_mut → downcast_mut::<Splitter>` and
+    // calls `nudge_divider`, changing the first pane's bounds.
+
+    /// Build a `Program` whose desktop holds a window whose body is a 3-pane
+    /// cols `Splitter`. Returns the program and `(splitter_id, pane0_id)`.
+    ///
+    /// The window is 32-wide × 10-tall at (2, 2). The splitter body fills
+    /// the window's interior (30 × 8 after the 1-cell frame), so its content
+    /// length is 30: three equal panes of ≈9 cells each, with 2 divider gaps.
+    fn program_with_splitter_window(
+        w: u16,
+        h: u16,
+    ) -> (Program, crate::view::ViewId, crate::view::ViewId) {
+        use crate::widgets::{Constraints, Splitter};
+
+        let ids: Rc<RefCell<Option<(crate::view::ViewId, crate::view::ViewId)>>> =
+            Rc::new(RefCell::new(None));
+        let ids_cap = ids.clone();
+
+        let (backend, _handle) = HeadlessBackend::new(w, h);
+        let theme = Theme::classic_blue();
+        let clock = Rc::new(ManualClock::new(0));
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            theme,
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                let mut win = Window::new(Rect::new(2, 2, 34, 12), Some("S".into()), 1);
+
+                // 3-pane cols splitter; window interior is 30×8 after frame.
+                let mut sp = Splitter::cols();
+                // Probe views as pane content (just need any view).
+                let p0 = sp.insert(
+                    Box::new(Probe::new(
+                        Rect::new(0, 0, 0, 0),
+                        'A',
+                        Rc::new(RefCell::new(Vec::new())),
+                    )),
+                    Constraints::flex(),
+                );
+                sp.insert(
+                    Box::new(Probe::new(
+                        Rect::new(0, 0, 0, 0),
+                        'B',
+                        Rc::new(RefCell::new(Vec::new())),
+                    )),
+                    Constraints::flex(),
+                );
+                sp.insert(
+                    Box::new(Probe::new(
+                        Rect::new(0, 0, 0, 0),
+                        'C',
+                        Rc::new(RefCell::new(Vec::new())),
+                    )),
+                    Constraints::flex(),
+                );
+
+                let sp_id = win.insert_child(Box::new(sp));
+                // Size the splitter to the window interior (1-cell frame inset on
+                // each side), so `content_len` > 0 and pane bounds are non-zero.
+                let ext = win.state().get_extent();
+                let interior = Rect::new(1, 1, ext.b.x - 1, ext.b.y - 1);
+                if let Some(v) = win.child_mut(sp_id) {
+                    v.change_bounds(interior);
+                }
+                desktop.insert_view(Box::new(win));
+                *ids_cap.borrow_mut() = Some((sp_id, p0));
+                Some(Box::new(desktop))
+            },
+            |_r| None,
+            |_r| None,
+        );
+        program.out_events.clear();
+
+        let (sp_id, p0) = ids.borrow().expect("splitter inserted");
+        (program, sp_id, p0)
+    }
+
+    /// Return the right edge (`bounds.b.x`) of the view named by `id`.
+    fn pane_right(program: &mut Program, id: crate::view::ViewId) -> i32 {
+        program
+            .group_mut()
+            .find_mut(id)
+            .map(|v| v.state().get_bounds().b.x)
+            .expect("pane resolves")
+    }
+
+    /// The `SplitterDivider` broker arm must resolve the splitter, downcast, and
+    /// call `nudge_divider`, shifting the first pane's right boundary by `delta`.
+    #[test]
+    fn splitter_divider_broker_nudge_changes_pane_bounds() {
+        use crate::view::DividerOp;
+        use crate::widgets::Splitter;
+
+        let (mut program, sp_id, p0) = program_with_splitter_window(80, 25);
+
+        // Begin a resize session to mirror the production call sequence (the
+        // window capture always does this before queuing a Nudge); it also
+        // populates saved_weights so cancel-path tests work.
+        program
+            .group_mut()
+            .find_mut(sp_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<Splitter>())
+            .expect("splitter resolves")
+            .begin_resize_session();
+
+        // Record the first pane's right boundary before brokering the nudge.
+        let before = pane_right(&mut program, p0);
+
+        // Push the broker op directly onto the deferred queue (the same path the
+        // window resize capture will use). The deferred drain runs only when the
+        // pump picks an event, so inject a dummy broadcast that nobody handles
+        // (it just gets dispatched and cleared, allowing the drain to run).
+        program.deferred.push(Deferred::SplitterDivider {
+            splitter: sp_id,
+            op: DividerOp::Nudge { index: 0, delta: 1 },
+        });
+        program.out_events.push_back(noop_broadcast());
+        program.pump_once();
+
+        let after = pane_right(&mut program, p0);
+        assert_eq!(
+            after,
+            before + 1,
+            "SplitterDivider broker must call nudge_divider, shifting pane[0] right by 1"
+        );
+    }
+
+    /// The broker arm is a no-op when the splitter id cannot be resolved
+    /// (already closed or never inserted) — must not panic.
+    #[test]
+    fn splitter_divider_broker_missing_id_is_no_op() {
+        use crate::view::DividerOp;
+
+        let (mut program, _h, _c) = program_with_desktop(48, 14);
+        // Allocate a fresh ViewId then immediately discard the owning view; the id
+        // will never appear in the program's tree.
+        let phantom = crate::view::ViewId::next();
+        program.deferred.push(Deferred::SplitterDivider {
+            splitter: phantom,
+            op: DividerOp::Nudge { index: 0, delta: 1 },
+        });
+        program.out_events.push_back(noop_broadcast());
+        // Must not panic; the pump simply skips the missing id.
+        program.pump_once();
     }
 }
