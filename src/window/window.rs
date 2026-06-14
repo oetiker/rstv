@@ -5,9 +5,9 @@ use crate::command::Command;
 use crate::event::{Event, Key};
 use crate::frame::Frame;
 use crate::view::{
-    Context, DragMode, DrawCtx, Group, GrowMode, Point, Rect, StateFlag, View, ViewId,
+    Context, DividerOp, DragMode, DrawCtx, Group, GrowMode, Point, Rect, StateFlag, View, ViewId,
 };
-use crate::widgets::ScrollBar;
+use crate::widgets::{Orientation, ScrollBar};
 
 // ---------------------------------------------------------------------------
 // WindowFlags
@@ -484,6 +484,30 @@ impl Window {
             mode,
         }));
     }
+
+    /// Begin a resize session on the body splitter (if any) and return its
+    /// divider targets. The body is the first non-frame child that is a `Splitter`.
+    fn begin_body_splitter_session(&mut self) -> Vec<ResizeTarget> {
+        self.interior_splitter_mut()
+            .map(|sp| {
+                sp.begin_resize_session()
+                    .into_iter()
+                    .map(|(splitter, index, orientation)| ResizeTarget::Divider {
+                        splitter,
+                        index,
+                        orientation,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// True if the body splitter has ≥1 movable divider.
+    fn body_has_movable_divider(&mut self) -> bool {
+        self.interior_splitter_mut()
+            .map(|sp| sp.has_movable_divider())
+            .unwrap_or(false)
+    }
 }
 
 /// Clamp `val` into `[min, max]`, pinning `min` to `max` if inverted.
@@ -637,6 +661,18 @@ impl CaptureHandler for DragCapture {
 /// Each arrow key produces a delta; if the mode allows moving, the delta shifts
 /// the origin, and if it allows growing, the delta changes the size. Plain arrows
 /// map to a 1-cell delta; Ctrl variants to `(±8, 0)` / `(0, ±4)`.
+/// A keyboard-resize target: the window itself, or one divider of a splitter
+/// in the window body. Dividers are addressed only by id (the capture never
+/// touches the `Splitter` inline — it brokers via `DividerOp`).
+enum ResizeTarget {
+    Window,
+    Divider {
+        splitter: ViewId,
+        index: usize,
+        orientation: Orientation,
+    },
+}
+
 struct KeyboardResizeCapture {
     window_id: ViewId,
     /// Bounds at entry — restored by Esc.
@@ -653,6 +689,9 @@ struct KeyboardResizeCapture {
     origin: Point,
     /// Current window size, updated by each arrow.
     size: Point,
+    /// Cycle targets: `targets[current]` is live. Tab/Shift+Tab move `current`.
+    targets: Vec<ResizeTarget>,
+    current: usize,
 }
 
 impl KeyboardResizeCapture {
@@ -680,6 +719,102 @@ impl KeyboardResizeCapture {
         self.size = r.b - r.a;
         ctx.request_bounds(self.window_id, r);
     }
+
+    fn current_is_window(&self) -> bool {
+        matches!(self.targets.get(self.current), Some(ResizeTarget::Window))
+    }
+
+    /// Turn the current target's highlight on/off.
+    fn set_highlight(&self, on: bool, ctx: &mut Context) {
+        match self.targets.get(self.current) {
+            Some(ResizeTarget::Window) => {
+                ctx.request_set_state(self.window_id, StateFlag::Dragging, on);
+            }
+            Some(ResizeTarget::Divider {
+                splitter, index, ..
+            }) => {
+                ctx.splitter_divider(*splitter, DividerOp::SetActive(on.then_some(*index)));
+            }
+            None => {}
+        }
+    }
+
+    /// Tab/Shift+Tab: hand the highlight from the old target to the next.
+    fn cycle(&mut self, forward: bool, ctx: &mut Context) {
+        let n = self.targets.len();
+        if n < 2 {
+            return;
+        }
+        self.set_highlight(false, ctx);
+        self.current = if forward {
+            (self.current + 1) % n
+        } else {
+            (self.current + n - 1) % n
+        };
+        self.set_highlight(true, ctx);
+    }
+
+    /// An arrow on the current target: window resize, or a ±1 divider nudge along
+    /// the divider's axis (cross-axis arrows are ignored for dividers).
+    fn arrow(&mut self, key: Key, ctx: &mut Context) {
+        match self.targets.get(self.current) {
+            Some(ResizeTarget::Window) | None => {
+                let d = match key {
+                    Key::Left => Point::new(-1, 0),
+                    Key::Right => Point::new(1, 0),
+                    Key::Up => Point::new(0, -1),
+                    Key::Down => Point::new(0, 1),
+                    _ => return,
+                };
+                self.apply_delta(d, ctx);
+            }
+            Some(ResizeTarget::Divider {
+                splitter,
+                index,
+                orientation,
+            }) => {
+                let delta = match (orientation, key) {
+                    (Orientation::Cols, Key::Left) => -1,
+                    (Orientation::Cols, Key::Right) => 1,
+                    (Orientation::Rows, Key::Up) => -1,
+                    (Orientation::Rows, Key::Down) => 1,
+                    _ => 0,
+                };
+                if delta != 0 {
+                    ctx.splitter_divider(
+                        *splitter,
+                        DividerOp::Nudge {
+                            index: *index,
+                            delta,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    /// Enter (commit) / Esc (cancel): clear every highlight and end every session.
+    fn finish(&self, commit: bool, ctx: &mut Context) {
+        let mut seen: Vec<ViewId> = Vec::new();
+        let mut window_in_targets = false;
+        for t in &self.targets {
+            match t {
+                ResizeTarget::Window => window_in_targets = true,
+                ResizeTarget::Divider { splitter, .. } => {
+                    if !seen.contains(splitter) {
+                        seen.push(*splitter);
+                        ctx.splitter_divider(*splitter, DividerOp::EndSession { commit });
+                    }
+                }
+            }
+        }
+        if window_in_targets {
+            if !commit {
+                ctx.request_bounds(self.window_id, self.save_bounds);
+            }
+            ctx.request_set_state(self.window_id, StateFlag::Dragging, false);
+        }
+    }
 }
 
 impl CaptureHandler for KeyboardResizeCapture {
@@ -692,43 +827,28 @@ impl CaptureHandler for KeyboardResizeCapture {
             return CaptureFlow::Consumed;
         };
         match k.key {
-            Key::Left if !k.modifiers.ctrl => {
-                self.apply_delta(Point::new(-1, 0), ctx);
+            Key::Tab => {
+                // Tab cycles the resize target forward; Shift+Tab backward.
+                self.cycle(!k.modifiers.shift, ctx);
                 CaptureFlow::Consumed
             }
-            Key::Right if !k.modifiers.ctrl => {
-                self.apply_delta(Point::new(1, 0), ctx);
+            Key::Left | Key::Right | Key::Up | Key::Down => {
+                if k.modifiers.ctrl && self.current_is_window() {
+                    // Ctrl+arrow: the larger window step ({±8, 0} / {0, ±4}).
+                    let d = match k.key {
+                        Key::Left => Point::new(-8, 0),
+                        Key::Right => Point::new(8, 0),
+                        Key::Up => Point::new(0, -4),
+                        Key::Down => Point::new(0, 4),
+                        _ => Point::new(0, 0),
+                    };
+                    self.apply_delta(d, ctx);
+                } else {
+                    self.arrow(k.key, ctx);
+                }
                 CaptureFlow::Consumed
             }
-            Key::Up if !k.modifiers.ctrl => {
-                self.apply_delta(Point::new(0, -1), ctx);
-                CaptureFlow::Consumed
-            }
-            Key::Down if !k.modifiers.ctrl => {
-                self.apply_delta(Point::new(0, 1), ctx);
-                CaptureFlow::Consumed
-            }
-            Key::Left => {
-                // Ctrl+Left — delta {-8, 0}.
-                self.apply_delta(Point::new(-8, 0), ctx);
-                CaptureFlow::Consumed
-            }
-            Key::Right => {
-                // Ctrl+Right — delta {+8, 0}.
-                self.apply_delta(Point::new(8, 0), ctx);
-                CaptureFlow::Consumed
-            }
-            Key::Up => {
-                // Ctrl+Up — delta {0, -4}.
-                self.apply_delta(Point::new(0, -4), ctx);
-                CaptureFlow::Consumed
-            }
-            Key::Down => {
-                // Ctrl+Down — delta {0, +4}.
-                self.apply_delta(Point::new(0, 4), ctx);
-                CaptureFlow::Consumed
-            }
-            Key::Home => {
+            Key::Home if self.current_is_window() => {
                 // Home: snap the left edge to the owner's left.
                 // p.x = limits.a.x
                 self.origin.x = self.limits.a.x;
@@ -745,7 +865,7 @@ impl CaptureHandler for KeyboardResizeCapture {
                 ctx.request_bounds(self.window_id, r);
                 CaptureFlow::Consumed
             }
-            Key::End => {
+            Key::End if self.current_is_window() => {
                 // End: snap the right edge to the owner's right.
                 // p.x = limits.b.x - s.x
                 self.origin.x = self.limits.b.x - self.size.x;
@@ -762,7 +882,7 @@ impl CaptureHandler for KeyboardResizeCapture {
                 ctx.request_bounds(self.window_id, r);
                 CaptureFlow::Consumed
             }
-            Key::PageUp => {
+            Key::PageUp if self.current_is_window() => {
                 // PageUp: snap the top edge to the owner's top.
                 // p.y = limits.a.y
                 self.origin.y = self.limits.a.y;
@@ -779,7 +899,7 @@ impl CaptureHandler for KeyboardResizeCapture {
                 ctx.request_bounds(self.window_id, r);
                 CaptureFlow::Consumed
             }
-            Key::PageDown => {
+            Key::PageDown if self.current_is_window() => {
                 // PageDown: snap the bottom edge to the owner's bottom.
                 // p.y = limits.b.y - s.y
                 self.origin.y = self.limits.b.y - self.size.y;
@@ -797,14 +917,13 @@ impl CaptureHandler for KeyboardResizeCapture {
                 CaptureFlow::Consumed
             }
             Key::Enter => {
-                // Accept — clear the Dragging flag and pop.
-                ctx.request_set_state(self.window_id, StateFlag::Dragging, false);
+                // Accept — clear every highlight + end every session, then pop.
+                self.finish(true, ctx);
                 CaptureFlow::ConsumedPop
             }
             Key::Esc => {
-                // Cancel — restore save_bounds, clear the Dragging flag, pop.
-                ctx.request_bounds(self.window_id, self.save_bounds);
-                ctx.request_set_state(self.window_id, StateFlag::Dragging, false);
+                // Cancel — restore window bounds + divider weights, then pop.
+                self.finish(false, ctx);
                 CaptureFlow::ConsumedPop
             }
             _ => {
@@ -956,37 +1075,64 @@ impl View for Window {
                 }
             }
         }
-        // Resize command: push a KeyboardResizeCapture that handles arrow keys
-        // until Enter/Esc.
+        // Resize command: begin a session on the body splitter (if any) and push
+        // a unified KeyboardResizeCapture whose Tab cycles the resize target
+        // (window then each divider). Arrow keys move the active target; Enter
+        // commits, Esc cancels. Runs whenever the window is movable/growable OR
+        // the body splitter has a movable divider (a fixed window can still
+        // resize its dividers).
         if let Event::Command(c) = *ev
             && c == Command::RESIZE
-            && (self.flags.r#move || self.flags.grow)
             && let Some(id) = self.group.state().id()
         {
-            let owner_size = ctx.owner_size();
-            let limits = Rect::new(0, 0, owner_size.x, owner_size.y);
-            let (min, max) = View::size_limits(self, owner_size);
-            let save_bounds = self.group.state().get_bounds();
-            let origin = save_bounds.a;
-            let size = save_bounds.b - save_bounds.a;
-            // Build a DragMode that carries the window's limit bits AND the
-            // move/grow bits from the decoration flags.
-            let mut mode = self.group.state().drag_mode; // limit bits
-            mode.drag_move = self.flags.r#move;
-            mode.drag_grow = self.flags.grow;
-            // Set the Dragging flag directly, same as start_drag.
-            View::set_state(self, StateFlag::Dragging, true, ctx);
-            ctx.push_capture(Box::new(KeyboardResizeCapture {
-                window_id: id,
-                save_bounds,
-                limits,
-                min,
-                max,
-                mode,
-                origin,
-                size,
-            }));
-            ev.clear();
+            let can_window = self.flags.r#move || self.flags.grow;
+            let div_targets = self.begin_body_splitter_session();
+            if can_window || !div_targets.is_empty() {
+                let mut targets = Vec::new();
+                if can_window {
+                    targets.push(ResizeTarget::Window);
+                }
+                targets.extend(div_targets);
+
+                let owner_size = ctx.owner_size();
+                let limits = Rect::new(0, 0, owner_size.x, owner_size.y);
+                let (min, max) = View::size_limits(self, owner_size);
+                let save_bounds = self.group.state().get_bounds();
+                let origin = save_bounds.a;
+                let size = save_bounds.b - save_bounds.a;
+                // Build a DragMode that carries the window's limit bits AND the
+                // move/grow bits from the decoration flags.
+                let mut mode = self.group.state().drag_mode; // limit bits
+                mode.drag_move = self.flags.r#move;
+                mode.drag_grow = self.flags.grow;
+
+                // Initial highlight for targets[0].
+                match targets.first() {
+                    Some(ResizeTarget::Window) => {
+                        View::set_state(self, StateFlag::Dragging, true, ctx);
+                    }
+                    Some(ResizeTarget::Divider {
+                        splitter, index, ..
+                    }) => {
+                        ctx.splitter_divider(*splitter, DividerOp::SetActive(Some(*index)));
+                    }
+                    None => {}
+                }
+
+                ctx.push_capture(Box::new(KeyboardResizeCapture {
+                    window_id: id,
+                    save_bounds,
+                    limits,
+                    min,
+                    max,
+                    mode,
+                    origin,
+                    size,
+                    targets,
+                    current: 0,
+                }));
+                ev.clear();
+            }
         }
         if let Event::KeyDown(k) = *ev
             && k.key == Key::Tab
@@ -1053,6 +1199,8 @@ impl View for Window {
     ///   - resize: if move or grow is allowed (handled in `handle_event` →
     ///     [`KeyboardResizeCapture`]).
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
+        // Compute BEFORE the closure borrows `ctx` (and `self` immutably).
+        let has_div = flag == StateFlag::Selected && self.body_has_movable_divider();
         self.group.set_state(flag, enable, ctx);
         if flag == StateFlag::Selected {
             self.group.set_state(StateFlag::Active, enable, ctx);
@@ -1082,7 +1230,10 @@ impl View for Window {
             };
             toggle(Command::CLOSE, self.flags.close);
             toggle(Command::ZOOM, self.flags.zoom);
-            toggle(Command::RESIZE, self.flags.r#move || self.flags.grow);
+            toggle(
+                Command::RESIZE,
+                self.flags.r#move || self.flags.grow || has_div,
+            );
         }
     }
 
@@ -2112,6 +2263,186 @@ mod tests {
             buf.get(15, y).symbol(),
             "╢",
             "right frame: double bar (║ weight) + single divider stem → ╢ (U+2562)"
+        );
+    }
+
+    // -- unified keyboard resize: Tab cycles window <-> dividers --------------
+
+    /// Build a parent `Group` holding a movable/growable `Window` whose body is a
+    /// 3-pane cols `Splitter`. Returns `(parent, window_id, splitter_id, pane0_id)`.
+    /// The splitter fills the window interior so its panes have non-zero bounds.
+    fn window_with_splitter_body() -> (Group, ViewId, ViewId, ViewId) {
+        use crate::widgets::{Constraints, Splitter};
+
+        let mut parent = Group::new(Rect::new(0, 0, 80, 25));
+        let mut win = Window::new(Rect::new(2, 2, 42, 14), Some("S".into()), 1); // 40x12
+
+        let mut sp = Splitter::cols();
+        let p0 = sp.insert(Probe::boxed(Rect::new(0, 0, 0, 0)), Constraints::flex());
+        sp.insert(Probe::boxed(Rect::new(0, 0, 0, 0)), Constraints::flex());
+        sp.insert(Probe::boxed(Rect::new(0, 0, 0, 0)), Constraints::flex());
+
+        let sp_id = win.insert_child(Box::new(sp));
+        // Size the splitter to the window interior (1-cell frame inset each side).
+        let ext = win.state().get_extent();
+        let interior = Rect::new(1, 1, ext.b.x - 1, ext.b.y - 1);
+        if let Some(v) = win.child_mut(sp_id) {
+            v.change_bounds(interior);
+        }
+
+        let id = parent.insert(Box::new(win));
+        (parent, id, sp_id, p0)
+    }
+
+    /// Read pane `id`'s right boundary (`bounds.b.x`) by resolving it in `parent`.
+    fn pane_right(parent: &mut Group, id: ViewId) -> i32 {
+        parent
+            .find_mut(id)
+            .map(|v| v.state().get_bounds().b.x)
+            .expect("pane resolves")
+    }
+
+    /// Apply every `Deferred::SplitterDivider` op in `deferred` to the splitter,
+    /// mirroring the pump's D3 broker arm (downcast → `Splitter` → method).
+    ///
+    /// NOTE: this intentionally applies ONLY `SplitterDivider` ops. All other
+    /// deferred effects (`request_bounds`, `request_set_state`, `push_capture`,
+    /// …) are silently ignored — so a future test that asserts on window bounds
+    /// or the `Dragging` flag through this helper would NOT observe them; such a
+    /// test must drain those deferreds itself (or drive a real pump).
+    fn apply_divider_ops(parent: &mut Group, deferred: &[crate::view::Deferred]) {
+        use crate::view::{Deferred, DividerOp};
+        use crate::widgets::Splitter;
+        for d in deferred {
+            if let Deferred::SplitterDivider { splitter, op } = d
+                && let Some(sp) = parent
+                    .find_mut(*splitter)
+                    .and_then(|v| v.as_any_mut())
+                    .and_then(|a| a.downcast_mut::<Splitter>())
+            {
+                match op {
+                    DividerOp::SetActive(sel) => sp.set_active_divider(*sel),
+                    DividerOp::Nudge { index, delta } => sp.nudge_divider(*index, *delta),
+                    DividerOp::EndSession { commit } => sp.end_resize_session(*commit),
+                }
+            }
+        }
+    }
+
+    /// Drive `handle_event` on the window resolved by `id`, returning the drained
+    /// deferred Vec (so the caller can inspect/apply the queued ops).
+    fn drive_collect(
+        parent: &mut Group,
+        id: ViewId,
+        ev: &mut Event,
+        owner_size: Point,
+    ) -> Vec<crate::view::Deferred> {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut deferred: Vec<crate::view::Deferred> = Vec::new();
+        {
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
+            ctx.set_owner_size(owner_size);
+            let win = parent.find_mut(id).expect("window resolves");
+            win.handle_event(ev, &mut ctx);
+        }
+        deferred
+    }
+
+    /// Feed `ev` to `cap` (a pushed capture) with a fresh `Context`; apply the
+    /// queued divider ops to `parent` and return the `CaptureFlow`.
+    fn feed_capture(
+        parent: &mut Group,
+        cap: &mut dyn CaptureHandler,
+        mut ev: Event,
+    ) -> CaptureFlow {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut deferred: Vec<crate::view::Deferred> = Vec::new();
+        let flow = {
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
+            ctx.set_owner_size(Point::new(80, 25));
+            cap.handle(&mut ev, &mut ctx)
+        };
+        apply_divider_ops(parent, &deferred);
+        flow
+    }
+
+    fn key(k: Key) -> Event {
+        Event::KeyDown(KeyEvent::new(k, KeyModifiers::default()))
+    }
+
+    /// Extract the (single) `PushCapture` handler from a drained deferred Vec.
+    fn take_capture(deferred: Vec<crate::view::Deferred>) -> Box<dyn CaptureHandler> {
+        for d in deferred {
+            if let crate::view::Deferred::PushCapture(h) = d {
+                return h;
+            }
+        }
+        panic!("RESIZE must push a capture");
+    }
+
+    #[test]
+    fn resize_mode_tab_cycles_to_divider_and_arrow_moves_it() {
+        let (mut parent, id, sp_id, p0) = window_with_splitter_body();
+
+        // 1+2) deliver Command::RESIZE -> enters resize mode, target = Window.
+        let mut ev = Event::Command(Command::RESIZE);
+        let deferred = drive_collect(&mut parent, id, &mut ev, Point::new(80, 25));
+        apply_divider_ops(&mut parent, &deferred); // no divider op for target[0]=Window
+        let mut cap = take_capture(deferred);
+
+        // Record divider-0 pane width before moving it.
+        let before = pane_right(&mut parent, p0);
+
+        // 3) Tab -> target = divider 0 (window Dragging cleared, divider 0 active).
+        let f = feed_capture(&mut parent, cap.as_mut(), key(Key::Tab));
+        assert!(matches!(f, CaptureFlow::Consumed), "Tab is consumed");
+
+        // 4) Right -> divider 0 moves +1 along the cols axis.
+        let f = feed_capture(&mut parent, cap.as_mut(), key(Key::Right));
+        assert!(matches!(f, CaptureFlow::Consumed), "arrow is consumed");
+
+        // 5) Enter -> commit.
+        let f = feed_capture(&mut parent, cap.as_mut(), key(Key::Enter));
+        assert!(
+            matches!(f, CaptureFlow::ConsumedPop),
+            "Enter commits + pops"
+        );
+
+        let after = pane_right(&mut parent, p0);
+        assert_eq!(
+            after,
+            before + 1,
+            "Tab→divider 0, Right nudges its right boundary +1 (committed)"
+        );
+        let _ = sp_id;
+    }
+
+    #[test]
+    fn resize_mode_esc_restores_divider() {
+        let (mut parent, id, _sp_id, p0) = window_with_splitter_body();
+
+        let mut ev = Event::Command(Command::RESIZE);
+        let deferred = drive_collect(&mut parent, id, &mut ev, Point::new(80, 25));
+        apply_divider_ops(&mut parent, &deferred);
+        let mut cap = take_capture(deferred);
+
+        let before = pane_right(&mut parent, p0);
+
+        feed_capture(&mut parent, cap.as_mut(), key(Key::Tab)); // -> divider 0
+        feed_capture(&mut parent, cap.as_mut(), key(Key::Right));
+        feed_capture(&mut parent, cap.as_mut(), key(Key::Right));
+        // moved by +2 before cancel
+        assert_eq!(pane_right(&mut parent, p0), before + 2, "moved before Esc");
+
+        let f = feed_capture(&mut parent, cap.as_mut(), key(Key::Esc));
+        assert!(matches!(f, CaptureFlow::ConsumedPop), "Esc cancels + pops");
+
+        assert_eq!(
+            pane_right(&mut parent, p0),
+            before,
+            "Esc restores divider-0 to its pre-mode position"
         );
     }
 }

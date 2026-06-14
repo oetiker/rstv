@@ -554,7 +554,15 @@ impl Splitter {
     /// inserted sub-splitters is unaffected).
     #[allow(dead_code)] // pub(crate) API called by the window resize capture (next task)
     pub(crate) fn begin_resize_session(&mut self) -> Vec<(ViewId, usize, Orientation)> {
-        self.saved_weights = self.slots.iter().map(|s| s.weight).collect();
+        // Only splitters that contribute a movable divider take a snapshot — they
+        // are the only ones that appear in the capture's target list and thus the
+        // only ones that receive a matching end_resize_session. A divider-less
+        // splitter would otherwise leave a dangling snapshot that is never cleared.
+        self.saved_weights = if self.has_movable_divider() {
+            self.slots.iter().map(|s| s.weight).collect()
+        } else {
+            Vec::new()
+        };
         self.reconfig = None;
         let mut out = Vec::new();
         if let Some(id) = self.state().id() {
