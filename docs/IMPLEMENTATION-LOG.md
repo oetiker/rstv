@@ -5,6 +5,81 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Dialog layout guide + `TabBar` + `PageStack` + color-picker rebuild (2026-06-15)
+
+Codified rstv's dialog layout language and added two composable rstv-original
+widgets — a cluster-shaped **`TabBar`** selector and a **`PageStack`** content
+multiplexer coupled by a D3 pump broker — then rebuilt the color picker on them
+with gray chrome. Built on branch `dialog-design-guide`, subagent-driven
+(implementer + two-stage fresh-subagent review per piece), 13 commits across four
+pieces. Spec
+[`docs/superpowers/specs/2026-06-15-dialog-design-guide-and-tabbar-design.md`](docs/superpowers/specs/2026-06-15-dialog-design-guide-and-tabbar-design.md),
+plan
+[`docs/superpowers/plans/2026-06-15-dialog-design-guide-and-tabbar.md`](docs/superpowers/plans/2026-06-15-dialog-design-guide-and-tabbar.md).
+
+- **Piece 1 — guide + constants + helper** (`9dbb9ed`, `ec273ea`, `ca7ad0d`,
+  `5ffc95d`, `e86d2c9`): `Command::TAB_BAR_CHANGED`; `src/dialog/layout.rs` with
+  the recovered classic-TV metrics as named constants (`STD_BUTTON` 10×2,
+  `BUTTON_GAP` 2, margins 3/2/2, `BUTTON_ROW_FROM_BOTTOM` 3) + `ButtonRowAlign`;
+  `Dialog::button_row(&[(title, Command, ButtonFlags)], Center|Right)` (centered
+  for message boxes, right-grouped for action dialogs); and the
+  [`docs/design/dialog-layout.md`](design/dialog-layout.md) guide (margins, button
+  row, the **"no blue-window roles `FramePassive`/`ScrollerNormal` inside a gray
+  dialog"** rule — the exact picker bug — and the `TabBar`/`PageStack` extensions).
+- **Piece 2a — `TabBar`** (`dd477a8`, `d29c3aa`): `src/widgets/tab_bar.rs`, a
+  focusable single-row selector **cluster-shaped** (the `TMonoSelector : public
+  TCluster` precedent, NOT `ScrollBar`): `selected`/`find_sel`/`press`,
+  press-on-release mouse via `ctx.start_mouse_track`, `value`/`set_value` (D10)
+  transfer, corner-cap active tab `┌Label┐` (`LabelLight`/`LabelNormal` roles, no
+  fill), `~X~` hotkeys + ←/→ wrap, broadcasts `TAB_BAR_CHANGED` (source = self id)
+  on change. `label_len` uses display width (`text::width`) like `cluster.rs`.
+- **Piece 2b — `PageStack` + the broker** (`24e8f0b`, `9f7f696`):
+  `src/widgets/page_stack.rs`, a `#[delegate(to = group)]` wrapper holding N page
+  Views with exactly one `sfVisible`. **New cross-cutting seam — the third
+  instance of the D3 sibling-broker pattern** (after scroller↔scrollbar and
+  listviewer↔scrollbar): `Deferred::PageStackSync { page_stack, tab_bar }` +
+  `Context::request_sync_page_stack` + a pump arm beside `SyncScrollerDelta` that
+  reads `tab_bar.value()` → `PageStack::set_active(idx, ctx)`. `PageStack`'s
+  `handle_event` filters `TAB_BAR_CHANGED` from its bound bar and queues the sync;
+  the bar and stack are siblings in a `Group`, so a tab click/arrow auto-switches
+  the page through the pump. Program-level integration test mirrors the
+  scroller-sync test end-to-end.
+- **Piece 3 — color-picker rebuild** (`0e4ba54`, `a03b941`): `ColorPicker` stops
+  being a monolithic `View` and becomes a `Group` = `TabBar` + `PageStack` (the
+  four surfaces wrapped as `SurfacePage<S>` page Views over one shared
+  `Rc<RefCell<ColorModel>>`) + an always-visible `InfoColumn`. The bespoke drag
+  broker is **retired** (`ColorDragCapture` + `Deferred::ColorPickerDrag` +
+  `Context::request_color_drag` + its pump arm + the old end-to-end test all
+  removed); draggable surfaces now self-drive via the standard `ctx.start_mouse_track`
+  capture (`SurfacePage` caches `abs_origin` in `draw`). Gray chrome — the tab row
+  and info-column fill move off the blue `FramePassive`/`ScrollerNormal` roles onto
+  gray `StaticText`/Label roles (the surfaces keep their own colorful content,
+  incl. the presets list's blue `ScrollerNormal` body — explicitly out of the
+  chrome scope). Tabs renamed **Plane→`Hue/Sat`**, **6→`Xterm`** (hotkeys P/R/H/X).
+  Public API preserved (`new`/`color`/`select_tab`/`as_any_mut` + the `Tab` enum
+  with its variant names) so `color_dialog`, `open_color_dialog_for_role`, and the
+  example embeds keep working. `select_tab` (called pre-modal, no `Context`)
+  stashes `pending_tab` + sets the bar value, then applies the page switch via the
+  broker on the first `handle_event`.
+- **Piece 3 demo re-lay** (`5ab651a`): `examples/tvdemo.rs` `color_window()` +
+  `examples/gallery.rs` `colorpicker()` re-laid via `Dialog::button_row`
+  (right-grouped, one blank row above OK/Cancel); regenerated
+  `docs/book/src/screens/colorpicker.html` (gray chrome, renamed corner-cap tabs).
+
+**Side-effect noted:** the global `cargo xtask screens` pass also re-captured
+`docs/book/src/screens/splitter.html` — the pane divider `│` is now active-frame
+white `#ffffff` (was a stale gray `#aaaaaa`); this is a pre-existing capture drift
+from the earlier splitter-resize work, not a change from this effort.
+
+**Deliberately not done (noted, not deferred):** `docs/demo/tvdemo.webp` (the demo
+movie) covers the color-picker scene but `cargo xtask demo` has no per-scene
+targeting — a full movie regen is a separate large task. Migrating
+`msgbox`/`inputbox`/`filedlg`/theme-editor onto the `layout.rs` constants +
+`button_row` (they already conform behaviorally); `TabBar` tab-overflow scrolling;
+a true `ClusterKind::Tabs` branch of the shared `Cluster` engine — all out-of-scope
+follow-ups recorded in the spec. **No new `View` trait method** was introduced
+anywhere, so `rstv-macros/src/specs.rs` needed no forwarder.
+
 ## Splitter resize unification — keyboard resize via the window mode + frame-matching color (2026-06-15)
 
 Replaced the splitter's bespoke **F6 "reconfig" mode** (which collided with

@@ -17,66 +17,54 @@
 
 ## Current state (2026-06-15)
 
-**`main` HEAD = `dc02f63`; 1236 lib tests green; clippy `--all-targets` + fmt
-clean.** The porting + docs phases are behind us; work now proceeds on small
-feature/UX branches off `main` (branch-first, fast-forward merge, two-stage
-review per task).
+**Branch `dialog-design-guide` HEAD = `5ab651a` (NOT yet on `main`); 1258 lib
+tests green; clippy `--all-targets` + fmt clean; examples build.** The porting +
+docs phases are behind us; work now proceeds on small feature/UX branches off
+`main` (branch-first, fast-forward merge, two-stage review per task).
 
 Most recently landed (rstv-original UI; **full narrative in IMPLEMENTATION-LOG**):
-the `Splitter` widget + `joined()` line-joining + the generated demo movie, then
-an **interactive-resize pass** — splitter divider resize is now folded into the
-window keyboard resize mode (Ctrl-F5 → Tab cycles window↔dividers; plain arrows
-move, Shift+arrows resize). New cross-cutting seam worth knowing:
-`Deferred::SplitterDivider` (the D3 broker that drives a `Splitter`'s resize
-session by `ViewId`), with a target-cycling `KeyboardResizeCapture`.
+the `Splitter` widget + interactive-resize pass (`Deferred::SplitterDivider`
+broker + target-cycling `KeyboardResizeCapture`), then the **dialog layout guide +
+`TabBar` + `PageStack` + color-picker rebuild** (below).
 
-### In flight (NOT on `main` yet): branch `dialog-design-guide`
-A **dialog design guide + `TabBar` + `PageStack` + color-picker rebuild** effort.
-**Spec AND implementation plan are both written** (the plan is uncommitted on the
-working tree; the spec was revised — see below — but that revision is also
-uncommitted). NO code yet — next step is **execution** (subagent-driven, the plan
-is task-by-task with two-stage review). Files:
-- Spec: `docs/superpowers/specs/2026-06-15-dialog-design-guide-and-tabbar-design.md`
-- Plan: `docs/superpowers/plans/2026-06-15-dialog-design-guide-and-tabbar.md`
-
-**The design grew during review (a TV-spirit pass + a "where do the switchable
-views live" question) from a single `TabBar` into a selector+container pair —
-read the revised spec, the original git-committed spec is stale.** Model B, four
+### Landed on `dialog-design-guide` (ready to merge to `main`)
+The **dialog design guide + `TabBar` + `PageStack` + color-picker rebuild** is
+**complete** — 13 commits (`9dbb9ed`..`5ab651a`), all two-stage reviewed, gate
+green. Spec
+`docs/superpowers/specs/2026-06-15-dialog-design-guide-and-tabbar-design.md`,
+plan `docs/superpowers/plans/2026-06-15-dialog-design-guide-and-tabbar.md`. Four
 pieces:
 1. **Guide + constants + helper** — `docs/design/dialog-layout.md`; layout
    constants in `src/dialog/layout.rs` (`STD_BUTTON` 10×2, `BUTTON_GAP` 2, margins
-   3/2/2, `BUTTON_ROW_FROM_BOTTOM` 3) + `ButtonRowAlign`; a `Dialog::button_row`
-   helper.
-2. **`TabBar`** (`src/widgets/tab_bar.rs`) — a focusable single-row selector,
-   **cluster-shaped** (the `TMonoSelector : public TCluster` precedent — NOT
-   modelled on `ScrollBar`): `value`/`selected`/`press`/`find_sel`, press-on-
-   release, `value`/`set_value` transfer; corner-cap active tab `┌Label┐`;
-   broadcasts `Command::TAB_BAR_CHANGED` (source = self id).
-3. **`PageStack`** (`src/widgets/page_stack.rs`) — a content multiplexer (a
-   `#[delegate(to=group)]` wrapper holding N page Views, one `sfVisible`). The key
-   new seam: **`TabBar` ↔ `PageStack` are siblings coupled by the D3 pump broker,
-   a 1:1 clone of scroller↔scrollbar** — new `Deferred::PageStackSync { page_stack,
-   tab_bar }` + `Context::request_sync_page_stack` + a pump arm beside
-   `SyncScrollerDelta` that reads `tab_bar.value()` → `PageStack::set_active(idx,
-   ctx)`. (This is the third instance of the D3 sibling-broker pattern.)
-4. **Color-picker rebuild** (`src/dialog/colorpick/`) — `ColorPicker` becomes a
-   `Group` container: `TabBar` + `PageStack` (the four surfaces become page Views
-   sharing one `Rc<RefCell<ColorModel>>`) + an always-visible info column.
-   Draggable surfaces self-drive via the standard `ctx.start_mouse_track` capture,
-   **retiring the bespoke `drag.rs`** (`ColorDragCapture` + `Deferred::ColorPickerDrag`;
-   keep only the `ColorDragRegion` enum). Drop the **blue chrome** (it wrongly used
-   blue-window roles `FramePassive`/`ScrollerNormal` in a *gray* dialog → use gray
-   field roles), blank line above OK/Cancel (via `button_row`), rename tabs
-   **`Plane W`→`Hue/Sat`** and **`6`→`Xterm`** (hotkeys P/R/H/X). Public API
-   preserved (`new`/`color`/`select_tab`/`as_any_mut`) so `color_dialog`,
-   `open_color_dialog_for_role`, and the example embeds keep working.
+   3/2/2, `BUTTON_ROW_FROM_BOTTOM` 3) + `ButtonRowAlign`; `Dialog::button_row`.
+2. **`TabBar`** (`src/widgets/tab_bar.rs`) — cluster-shaped single-row selector
+   (the `TMonoSelector : public TCluster` precedent): `selected`/`find_sel`/`press`,
+   press-on-release, `value`/`set_value` transfer, corner-cap active tab `┌Label┐`,
+   `~X~` hotkeys + ←/→ wrap, broadcasts `Command::TAB_BAR_CHANGED` (source = self).
+3. **`PageStack`** (`src/widgets/page_stack.rs`) — a content multiplexer
+   (`#[delegate(to=group)]`, N page Views, one `sfVisible`). **New cross-cutting
+   seam — the third D3 sibling-broker** (after scroller↔scrollbar,
+   listviewer↔scrollbar): `Deferred::PageStackSync { page_stack, tab_bar }` +
+   `Context::request_sync_page_stack` + a pump arm beside `SyncScrollerDelta` that
+   reads `tab_bar.value()` → `PageStack::set_active(idx, ctx)`. Bind the bar via
+   `PageStack::bind_tab_bar(id)`; insert both as siblings in a `Group` and tab
+   clicks/arrows auto-switch the page through the pump.
+4. **Color-picker rebuild** (`src/dialog/colorpick/`) — `ColorPicker` is now a
+   `Group` = `TabBar` + `PageStack` (four surfaces wrapped as `SurfacePage<S>` page
+   Views over one shared `Rc<RefCell<ColorModel>>`) + an always-visible
+   `InfoColumn`. The bespoke `drag.rs` broker is **retired** (only the
+   `ColorDragRegion` enum kept); draggable surfaces self-drive via
+   `ctx.start_mouse_track`. Gray chrome (tab row + info column off the blue
+   `FramePassive`/`ScrollerNormal` roles onto gray `StaticText`/Label; surfaces
+   keep their own colorful content). Tabs renamed `Hue/Sat`/`Xterm` (hotkeys
+   P/R/H/X). Public API preserved (`new`/`color`/`select_tab`/`as_any_mut` + `Tab`).
+   `tvdemo`/`gallery` re-laid via `button_row` (`5ab651a`).
 
-The plan flags two atomicity hazards (the picker won't compile mid-rebuild → its
-tasks commit as one unit; a temporary `request_sync_page_stack` stub bridges the
-`PageStack` task's isolated build) and the `select_tab` pre-modal timing (apply a
-stashed `pending_tab` on the first event, since `select_tab` has no `Context`).
-**Investigation reports that grounded the plan are in the conversation, not on
-disk.** Resume by **committing spec+plan, then executing the plan subagent-driven.**
+**Merge note:** branch off `main`; the only non-obvious bundled change is a
+re-captured `docs/book/src/screens/splitter.html` (pre-existing capture drift, not
+from this effort — see IMPLEMENTATION-LOG). **`docs/demo/tvdemo.webp` is NOT
+regenerated** (the movie covers the picker scene but `cargo xtask demo` has no
+per-scene targeting — a full regen is a separate task).
 
 ## Previous state (2026-06-13, Docs Phase 3 landed + crate renamed to `rstv`)
 
@@ -358,12 +346,12 @@ This session ran the **backlog run** end to end:
 
 ## Next
 
-**Active:** execute the **dialog guide + `TabBar` + `PageStack` + color-picker
-rebuild** on branch `dialog-design-guide`. Spec (revised to Model B) **and** the
-13-task implementation plan are written but **uncommitted**; no code yet. Commit
-spec+plan, then run the plan subagent-driven (two-stage review per task; commit at
-the atomic boundaries — tasks 4, 7, 9, 12, 13). See "In flight" above for the
-four-piece design and the gotchas.
+**Active:** none — the **dialog guide + `TabBar` + `PageStack` + color-picker
+rebuild** is complete on `dialog-design-guide` (see "Landed" above). Next step is
+**merge to `main`** (fast-forward) once reviewed; then optionally regenerate
+`docs/demo/tvdemo.webp` (full movie regen) and migrate `msgbox`/`inputbox`/
+`filedlg`/theme-editor onto the new `layout.rs` constants + `button_row` (they
+already conform behaviorally — a de-dup pass, recorded out-of-scope in the spec).
 
 **Splitter resize follow-ups (noted in the resize spec, not started):** Cyan/Gray
 window-palette divider color (the splitter uses the Blue frame-role family — other
