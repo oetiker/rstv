@@ -695,14 +695,14 @@ struct KeyboardResizeCapture {
 }
 
 impl KeyboardResizeCapture {
-    /// Apply an arrow-key delta (move and/or grow per the mode) and request new
-    /// bounds: if the mode allows moving, the delta shifts the origin; if it
-    /// allows growing, the delta changes the size.
-    fn apply_delta(&mut self, delta: Point, ctx: &mut Context) {
-        if self.mode.drag_move {
+    /// Apply an arrow-key delta to the window target. Faithful to `TView::change`:
+    /// plain arrows MOVE (when `drag_move`), Shift+arrows GROW (when `drag_grow`).
+    /// `Ctrl` only scales the step (handled by the caller); it does not pick
+    /// move-vs-grow.
+    fn apply_delta(&mut self, delta: Point, shift: bool, ctx: &mut Context) {
+        if self.mode.drag_move && !shift {
             self.origin += delta;
-        }
-        if self.mode.drag_grow {
+        } else if self.mode.drag_grow && shift {
             self.size += delta;
         }
         let r = move_grow(
@@ -754,41 +754,31 @@ impl KeyboardResizeCapture {
         self.set_highlight(true, ctx);
     }
 
-    /// An arrow on the current target: window resize, or a ±1 divider nudge along
-    /// the divider's axis (cross-axis arrows are ignored for dividers).
+    /// A ±1 arrow nudge for a DIVIDER target, along the divider's axis only.
+    /// Cross-axis arrows are ignored. The window target is handled inline in
+    /// `handle` (see the arrow-key arm there).
     fn arrow(&mut self, key: Key, ctx: &mut Context) {
-        match self.targets.get(self.current) {
-            Some(ResizeTarget::Window) | None => {
-                let d = match key {
-                    Key::Left => Point::new(-1, 0),
-                    Key::Right => Point::new(1, 0),
-                    Key::Up => Point::new(0, -1),
-                    Key::Down => Point::new(0, 1),
-                    _ => return,
-                };
-                self.apply_delta(d, ctx);
-            }
-            Some(ResizeTarget::Divider {
-                splitter,
-                index,
-                orientation,
-            }) => {
-                let delta = match (orientation, key) {
-                    (Orientation::Cols, Key::Left) => -1,
-                    (Orientation::Cols, Key::Right) => 1,
-                    (Orientation::Rows, Key::Up) => -1,
-                    (Orientation::Rows, Key::Down) => 1,
-                    _ => 0,
-                };
-                if delta != 0 {
-                    ctx.splitter_divider(
-                        *splitter,
-                        DividerOp::Nudge {
-                            index: *index,
-                            delta,
-                        },
-                    );
-                }
+        if let Some(ResizeTarget::Divider {
+            splitter,
+            index,
+            orientation,
+        }) = self.targets.get(self.current)
+        {
+            let delta = match (orientation, key) {
+                (Orientation::Cols, Key::Left) => -1,
+                (Orientation::Cols, Key::Right) => 1,
+                (Orientation::Rows, Key::Up) => -1,
+                (Orientation::Rows, Key::Down) => 1,
+                _ => 0,
+            };
+            if delta != 0 {
+                ctx.splitter_divider(
+                    *splitter,
+                    DividerOp::Nudge {
+                        index: *index,
+                        delta,
+                    },
+                );
             }
         }
     }
@@ -833,17 +823,19 @@ impl CaptureHandler for KeyboardResizeCapture {
                 CaptureFlow::Consumed
             }
             Key::Left | Key::Right | Key::Up | Key::Down => {
-                if k.modifiers.ctrl && self.current_is_window() {
-                    // Ctrl+arrow: the larger window step ({±8, 0} / {0, ±4}).
+                if self.current_is_window() {
+                    // Ctrl scales the step (±8 horiz / ±4 vert); Shift picks grow vs move.
+                    let (mh, mv) = if k.modifiers.ctrl { (8, 4) } else { (1, 1) };
                     let d = match k.key {
-                        Key::Left => Point::new(-8, 0),
-                        Key::Right => Point::new(8, 0),
-                        Key::Up => Point::new(0, -4),
-                        Key::Down => Point::new(0, 4),
+                        Key::Left => Point::new(-mh, 0),
+                        Key::Right => Point::new(mh, 0),
+                        Key::Up => Point::new(0, -mv),
+                        Key::Down => Point::new(0, mv),
                         _ => Point::new(0, 0),
                     };
-                    self.apply_delta(d, ctx);
+                    self.apply_delta(d, k.modifiers.shift, ctx);
                 } else {
+                    // Divider target: ±1 nudge along the divider's axis (Shift/Ctrl ignored).
                     self.arrow(k.key, ctx);
                 }
                 CaptureFlow::Consumed
@@ -2368,8 +2360,72 @@ mod tests {
         flow
     }
 
+    /// Feed `ev` to `cap`; apply divider ops to `parent`; return `(flow, deferred)`.
+    /// Use this when you also need to inspect `ChangeBounds` or other deferred ops.
+    fn feed_capture_full(
+        parent: &mut Group,
+        cap: &mut dyn CaptureHandler,
+        mut ev: Event,
+    ) -> (CaptureFlow, Vec<crate::view::Deferred>) {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut deferred: Vec<crate::view::Deferred> = Vec::new();
+        let flow = {
+            let mut ctx = Context::new(&mut out, &mut timers, 0, &mut deferred);
+            ctx.set_owner_size(Point::new(80, 25));
+            cap.handle(&mut ev, &mut ctx)
+        };
+        apply_divider_ops(parent, &deferred);
+        (flow, deferred)
+    }
+
+    /// Extract the last `ChangeBounds` rect for `id` from a deferred Vec.
+    fn last_bounds(deferred: &[crate::view::Deferred], id: ViewId) -> Option<Rect> {
+        use crate::view::Deferred;
+        deferred.iter().rev().find_map(|d| {
+            if let Deferred::ChangeBounds(vid, r) = d
+                && *vid == id
+            {
+                Some(*r)
+            } else {
+                None
+            }
+        })
+    }
+
     fn key(k: Key) -> Event {
         Event::KeyDown(KeyEvent::new(k, KeyModifiers::default()))
+    }
+
+    fn key_shift(k: Key) -> Event {
+        Event::KeyDown(KeyEvent::new(
+            k,
+            KeyModifiers {
+                shift: true,
+                ..Default::default()
+            },
+        ))
+    }
+
+    fn key_ctrl(k: Key) -> Event {
+        Event::KeyDown(KeyEvent::new(
+            k,
+            KeyModifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+        ))
+    }
+
+    fn key_ctrl_shift(k: Key) -> Event {
+        Event::KeyDown(KeyEvent::new(
+            k,
+            KeyModifiers {
+                ctrl: true,
+                shift: true,
+                ..Default::default()
+            },
+        ))
     }
 
     /// Extract the (single) `PushCapture` handler from a drained deferred Vec.
@@ -2443,6 +2499,172 @@ mod tests {
             pane_right(&mut parent, p0),
             before,
             "Esc restores divider-0 to its pre-mode position"
+        );
+    }
+
+    // -- 15. keyboard resize: plain arrow moves, Shift+arrow resizes (faithful TView::change) ---
+
+    /// Enter RESIZE mode (target = Window). Feed a plain Right arrow.
+    /// Assert: origin.x increased by 1, size (width/height) UNCHANGED.
+    #[test]
+    fn resize_mode_plain_arrow_moves_window_not_resizes() {
+        let (mut parent, id, _sp_id, _p0) = window_with_splitter_body();
+
+        // Snapshot the window's bounds before entering resize mode.
+        let init_bounds = parent.find_mut(id).unwrap().state().get_bounds();
+
+        // Deliver RESIZE command → enters resize mode, target[0] = Window.
+        let mut ev = Event::Command(Command::RESIZE);
+        let deferred = drive_collect(&mut parent, id, &mut ev, Point::new(80, 25));
+        apply_divider_ops(&mut parent, &deferred);
+        let window_id = id; // captured for ChangeBounds lookup
+        let mut cap = take_capture(deferred);
+
+        // Feed plain Right (no modifiers) → should MOVE only.
+        let (_flow, deferred) = feed_capture_full(&mut parent, cap.as_mut(), key(Key::Right));
+
+        let new_bounds = last_bounds(&deferred, window_id)
+            .expect("a plain arrow on the Window target must emit ChangeBounds");
+
+        assert_eq!(
+            new_bounds.b.x - new_bounds.a.x,
+            init_bounds.b.x - init_bounds.a.x,
+            "plain Right: window width must be UNCHANGED (move, not grow)"
+        );
+        assert_eq!(
+            new_bounds.b.y - new_bounds.a.y,
+            init_bounds.b.y - init_bounds.a.y,
+            "plain Right: window height must be UNCHANGED (move, not grow)"
+        );
+        assert_eq!(
+            new_bounds.a.x,
+            init_bounds.a.x + 1,
+            "plain Right: window origin.x must increase by 1"
+        );
+        assert_eq!(
+            new_bounds.a.y, init_bounds.a.y,
+            "plain Right: window origin.y must be UNCHANGED"
+        );
+    }
+
+    /// Enter RESIZE mode (target = Window). Feed Shift+Right.
+    /// Assert: width increased by 1, origin UNCHANGED.
+    #[test]
+    fn resize_mode_shift_arrow_resizes_window_not_moves() {
+        let (mut parent, id, _sp_id, _p0) = window_with_splitter_body();
+
+        let init_bounds = parent.find_mut(id).unwrap().state().get_bounds();
+
+        let mut ev = Event::Command(Command::RESIZE);
+        let deferred = drive_collect(&mut parent, id, &mut ev, Point::new(80, 25));
+        apply_divider_ops(&mut parent, &deferred);
+        let window_id = id;
+        let mut cap = take_capture(deferred);
+
+        // Feed Shift+Right → should GROW only.
+        let (_flow, deferred) = feed_capture_full(&mut parent, cap.as_mut(), key_shift(Key::Right));
+
+        let new_bounds = last_bounds(&deferred, window_id)
+            .expect("Shift+arrow on the Window target must emit ChangeBounds");
+
+        assert_eq!(
+            new_bounds.a.x, init_bounds.a.x,
+            "Shift+Right: window origin.x must be UNCHANGED (grow, not move)"
+        );
+        assert_eq!(
+            new_bounds.a.y, init_bounds.a.y,
+            "Shift+Right: window origin.y must be UNCHANGED"
+        );
+        assert_eq!(
+            new_bounds.b.x - new_bounds.a.x,
+            init_bounds.b.x - init_bounds.a.x + 1,
+            "Shift+Right: window width must increase by 1"
+        );
+        assert_eq!(
+            new_bounds.b.y - new_bounds.a.y,
+            init_bounds.b.y - init_bounds.a.y,
+            "Shift+Right: window height must be UNCHANGED"
+        );
+    }
+
+    /// Enter RESIZE mode (target = Window). Feed Ctrl+Right (big step, no shift).
+    /// Assert: origin.x increased by 8, size UNCHANGED.
+    #[test]
+    fn resize_mode_ctrl_arrow_big_move() {
+        let (mut parent, id, _sp_id, _p0) = window_with_splitter_body();
+
+        let init_bounds = parent.find_mut(id).unwrap().state().get_bounds();
+
+        let mut ev = Event::Command(Command::RESIZE);
+        let deferred = drive_collect(&mut parent, id, &mut ev, Point::new(80, 25));
+        apply_divider_ops(&mut parent, &deferred);
+        let window_id = id;
+        let mut cap = take_capture(deferred);
+
+        // Feed Ctrl+Right (big step, plain = move) → origin shifts by 8.
+        let (_flow, deferred) = feed_capture_full(&mut parent, cap.as_mut(), key_ctrl(Key::Right));
+
+        let new_bounds =
+            last_bounds(&deferred, window_id).expect("Ctrl+arrow on Window must emit ChangeBounds");
+
+        // Size must be unchanged.
+        assert_eq!(
+            new_bounds.b.x - new_bounds.a.x,
+            init_bounds.b.x - init_bounds.a.x,
+            "Ctrl+Right: width unchanged (big move, not grow)"
+        );
+        // Origin.x should move by 8 (clamped to limits; the window starts at x=2,
+        // so +8 = 10 is well within 80-wide owner).
+        assert_eq!(
+            new_bounds.a.x,
+            init_bounds.a.x + 8,
+            "Ctrl+Right: origin.x increases by the large step (8)"
+        );
+    }
+
+    /// Enter RESIZE mode (target = Window). Feed Ctrl+Shift+Right (big grow).
+    /// Ctrl scales the step to 8; Shift selects grow. Assert: width += 8,
+    /// origin UNCHANGED.
+    #[test]
+    fn resize_mode_ctrl_shift_arrow_big_resizes_window() {
+        let (mut parent, id, _sp_id, _p0) = window_with_splitter_body();
+
+        let init_bounds = parent.find_mut(id).unwrap().state().get_bounds();
+
+        let mut ev = Event::Command(Command::RESIZE);
+        let deferred = drive_collect(&mut parent, id, &mut ev, Point::new(80, 25));
+        apply_divider_ops(&mut parent, &deferred);
+        let window_id = id;
+        let mut cap = take_capture(deferred);
+
+        // Feed Ctrl+Shift+Right (big step + grow) → width grows by 8.
+        let (_flow, deferred) =
+            feed_capture_full(&mut parent, cap.as_mut(), key_ctrl_shift(Key::Right));
+
+        let new_bounds = last_bounds(&deferred, window_id)
+            .expect("Ctrl+Shift+arrow on Window must emit ChangeBounds");
+
+        // Origin must be unchanged (grow, not move).
+        assert_eq!(
+            new_bounds.a.x, init_bounds.a.x,
+            "Ctrl+Shift+Right: origin.x must be UNCHANGED (grow, not move)"
+        );
+        assert_eq!(
+            new_bounds.a.y, init_bounds.a.y,
+            "Ctrl+Shift+Right: origin.y must be UNCHANGED"
+        );
+        // Width grows by the large step (8); the window is 40 wide starting at
+        // x=2, so 40+8 = 48 fits well within the 80-wide owner.
+        assert_eq!(
+            new_bounds.b.x - new_bounds.a.x,
+            init_bounds.b.x - init_bounds.a.x + 8,
+            "Ctrl+Shift+Right: width grows by the large step (8)"
+        );
+        // Height unchanged (horizontal arrow).
+        assert_eq!(
+            new_bounds.b.y - new_bounds.a.y,
+            init_bounds.b.y - init_bounds.a.y,
+            "Ctrl+Shift+Right: height must be UNCHANGED"
         );
     }
 }

@@ -163,9 +163,16 @@ Set a per-seam style with `.divider(i, style)` or a blanket default with
 
 Dragging a `Line` or `Handle` seam with the mouse resizes immediately. Pressing
 `Ctrl-F5` (bound to `Command::RESIZE`) enters *resize mode*: `Tab` / `Shift-Tab`
-cycle the resize target between the window itself and each splitter divider; arrow
-keys move the active target (resize the window, or nudge the selected divider);
+cycle the resize target between the window itself and each splitter divider;
 `Enter` commits; `Esc` cancels. `Locked` seams are skipped when cycling.
+
+While the **window** is the active target, plain arrows **move** the window and
+`Shift`+arrows **resize** (grow) it — matching the classic `TView::change`
+contract. `Ctrl` scales the step to ±8 cells horizontally / ±4 vertically, so
+`Ctrl`+arrow is a big move and `Ctrl`+`Shift`+arrow is a big resize.
+
+While a **divider** is the active target, plain arrows nudge it ±1 cell along
+its axis; `Shift` and `Ctrl` are ignored for dividers.
 
 ### Nested splitters
 

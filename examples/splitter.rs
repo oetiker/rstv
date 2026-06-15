@@ -20,8 +20,11 @@
 //!   - **Ctrl-F5:** enter resize mode. Then:
 //!       - `Tab` / `Shift-Tab` cycle the resize target (the window, then each
 //!         splitter divider),
-//!       - arrow keys move the active target (resize the window, or nudge the
-//!         selected divider),
+//!       - for the **window** target: plain arrows **move** the window;
+//!         `Shift`+arrow **resizes** (grows) it; `Ctrl` scales the step
+//!         (×8 horizontal / ×4 vertical),
+//!       - for a **divider** target: plain arrows nudge the divider along its
+//!         axis (`Shift` / `Ctrl` are ignored for dividers),
 //!       - `Enter` commits, `Esc` cancels.
 //!   - **Tab** (outside resize mode) moves focus between panes / form fields.
 //!   - **Alt-X** quits.
