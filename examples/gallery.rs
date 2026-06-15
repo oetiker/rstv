@@ -15,10 +15,10 @@
 use std::{env, io};
 
 use rstv::{
-    Button, ButtonFlags, CD_NORMAL, ChDirDialog, CheckBoxes, Color, ColorPicker, Command,
-    Constraints, Context, CrosstermBackend, Desktop, Dialog, EditWindow, Event, FD_OPEN_BUTTON,
-    FileDialog, HistoryWindow, InputLine, Key, KeyEvent, Label, ListBox, Memo, Menu, MenuBar,
-    MenuBox, Node, Outline, OutlineViewer, Program, RadioButtons, Rect, ScrollBar,
+    Button, ButtonFlags, ButtonRowAlign, CD_NORMAL, ChDirDialog, CheckBoxes, Color, ColorPicker,
+    Command, Constraints, Context, CrosstermBackend, Desktop, Dialog, EditWindow, Event,
+    FD_OPEN_BUTTON, FileDialog, HistoryWindow, InputLine, Key, KeyEvent, Label, ListBox, Memo,
+    Menu, MenuBar, MenuBox, Node, Outline, OutlineViewer, Program, RadioButtons, Rect, ScrollBar,
     ScrollBarOptions, Splitter, StaticText, StatusDef, StatusLine, SystemClock, THistory, Tab,
     Terminal, TextDevice, Theme, View, ViewId, Window, alt, delegate, history_add, ov_update,
 };
@@ -386,27 +386,29 @@ fn memo() -> Box<dyn View> {
 // ANCHOR: colorpicker
 /// A full-color picker with OK and Cancel buttons. The picker needs at least
 /// 56 × 18 content area; the dialog is sized to give it comfortable margins.
+///
+/// Layout: dialog 62 × 23 cells. Picker occupies rows 2–18 (17 rows tall),
+/// leaving row 19 blank and the button row at row 20 (`height − 3`).
 fn colorpicker() -> Box<dyn View> {
     let mut dlg = Dialog::new(Rect::new(1, 0, 63, 23), Some("Select Color".to_string()));
-    let mut picker = ColorPicker::new(Rect::new(2, 2, 60, 20), Color::Rgb(30, 144, 255));
+    let mut picker = ColorPicker::new(Rect::new(2, 2, 60, 19), Color::Rgb(30, 144, 255));
     // Open on the visual hue/saturation plane rather than the preset palette.
     picker.select_tab(Tab::Plane);
     dlg.insert_child(Box::new(picker));
-    dlg.insert_child(Box::new(Button::new(
-        Rect::new(8, 20, 20, 22),
-        "~O~K",
-        Command::OK,
-        ButtonFlags {
-            default: true,
-            ..Default::default()
-        },
-    )));
-    dlg.insert_child(Box::new(Button::new(
-        Rect::new(42, 20, 56, 22),
-        "~C~ancel",
-        Command::CANCEL,
-        ButtonFlags::default(),
-    )));
+    dlg.button_row(
+        &[
+            (
+                "~O~K",
+                Command::OK,
+                ButtonFlags {
+                    default: true,
+                    ..Default::default()
+                },
+            ),
+            ("~C~ancel", Command::CANCEL, ButtonFlags::default()),
+        ],
+        ButtonRowAlign::Right,
+    );
     Box::new(dlg)
 }
 // ANCHOR_END: colorpicker

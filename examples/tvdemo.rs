@@ -18,10 +18,11 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use rstv::{
-    Backend, Button, ButtonFlags, Color, ColorPicker, Command, Constraints, CrosstermBackend,
-    Desktop, Dialog, DrawCtx, Event, Frame, Key, KeyEvent, KeyModifiers, Menu, MenuBar, Program,
-    Rect, Role, ScrollBarOptions, Scroller, Splitter, StaticText, StatusDef, StatusLine,
-    SystemClock, Tab, Theme, View, ViewId, ViewState, Window, WindowFlags, alt, delegate,
+    Backend, Button, ButtonFlags, ButtonRowAlign, Color, ColorPicker, Command, Constraints,
+    CrosstermBackend, Desktop, Dialog, DrawCtx, Event, Frame, Key, KeyEvent, KeyModifiers, Menu,
+    MenuBar, Program, Rect, Role, ScrollBarOptions, Scroller, Splitter, StaticText, StatusDef,
+    StatusLine, SystemClock, Tab, Theme, View, ViewId, ViewState, Window, WindowFlags, alt,
+    delegate,
 };
 
 // ---------------------------------------------------------------------------
@@ -1620,26 +1621,28 @@ impl TVDemo {
 // ---------------------------------------------------------------------------
 
 /// A truecolor [`ColorPicker`] on its hue/saturation plane, in a dialog.
+///
+/// Layout: dialog 62 × 23 cells. Picker occupies rows 2–18 (17 rows tall),
+/// leaving row 19 blank and the button row at row 20 (`height − 3`).
 fn color_window() -> Box<dyn View> {
     let mut dlg = Dialog::new(Rect::new(6, 1, 68, 24), Some("Select Color".to_string()));
-    let mut picker = ColorPicker::new(Rect::new(2, 2, 60, 20), Color::Rgb(30, 144, 255));
+    let mut picker = ColorPicker::new(Rect::new(2, 2, 60, 19), Color::Rgb(30, 144, 255));
     picker.select_tab(Tab::Plane);
     dlg.insert_child(Box::new(picker));
-    dlg.insert_child(Box::new(Button::new(
-        Rect::new(8, 20, 20, 22),
-        "~O~K",
-        Command::OK,
-        ButtonFlags {
-            default: true,
-            ..ButtonFlags::new()
-        },
-    )));
-    dlg.insert_child(Box::new(Button::new(
-        Rect::new(42, 20, 56, 22),
-        "~C~ancel",
-        Command::CANCEL,
-        ButtonFlags::new(),
-    )));
+    dlg.button_row(
+        &[
+            (
+                "~O~K",
+                Command::OK,
+                ButtonFlags {
+                    default: true,
+                    ..ButtonFlags::new()
+                },
+            ),
+            ("~C~ancel", Command::CANCEL, ButtonFlags::new()),
+        ],
+        ButtonRowAlign::Right,
+    );
     Box::new(dlg)
 }
 
