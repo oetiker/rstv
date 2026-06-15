@@ -16,9 +16,9 @@ pub enum DividerStyle {
     Line,
     /// Clean look; only a small grab nub at the midpoint.
     Handle,
-    /// Invisible & seamless in normal use, but resizable in reconfig mode.
+    /// Invisible & seamless in normal use, but resizable in resize mode.
     Hidden,
-    /// Invisible AND immovable — a permanent boundary, even in reconfig mode.
+    /// Invisible AND immovable — a permanent boundary, even in resize mode.
     Locked,
 }
 
@@ -27,8 +27,8 @@ impl DividerStyle {
     pub fn draggable_live(&self) -> bool {
         matches!(self, DividerStyle::Line | DividerStyle::Handle)
     }
-    /// Whether reconfig mode may move this divider.
-    pub fn movable_in_reconfig(&self) -> bool {
+    /// Whether this divider may be moved (true for everything except `Locked`).
+    pub fn movable(&self) -> bool {
         !matches!(self, DividerStyle::Locked)
     }
 }
@@ -56,9 +56,8 @@ pub struct Splitter {
     /// Per-divider styles (len ≤ panes−1); `default_style` fills any gap.
     divider_styles: Vec<DividerStyle>,
     default_style: DividerStyle,
-    /// Active resize-target divider index; set externally via [`Splitter::set_active_divider`].
-    /// `None` = no active target (normal use).
-    reconfig: Option<usize>,
+    /// The divider that is the active keyboard resize target (highlighted), if any.
+    active_divider: Option<usize>,
     /// Weight snapshot taken at [`Splitter::begin_resize_session`]; restored on Esc cancel.
     #[allow(dead_code)] // written/read by the resize session API (next task wires the caller)
     saved_weights: Vec<f64>,
@@ -93,7 +92,7 @@ impl Splitter {
             slots: Vec::new(),
             divider_styles: Vec::new(),
             default_style: DividerStyle::Line,
-            reconfig: None,
+            active_divider: None,
             saved_weights: Vec::new(),
             abs_origin: bounds.a,
             dragging: None,
@@ -187,7 +186,7 @@ impl Splitter {
     /// True while divider `i` is being moved (mouse drag or the active keyboard
     /// resize target) — drives the FrameDragging highlight.
     fn is_moving(&self, i: usize) -> bool {
-        self.dragging == Some(i) || self.reconfig == Some(i)
+        self.dragging == Some(i) || self.active_divider == Some(i)
     }
 
     /// Paint the N−1 dividers into the 1-cell gaps. Called by `draw` AFTER the
@@ -563,11 +562,11 @@ impl Splitter {
         } else {
             Vec::new()
         };
-        self.reconfig = None;
+        self.active_divider = None;
         let mut out = Vec::new();
         if let Some(id) = self.state().id() {
             for i in 0..self.slots.len().saturating_sub(1) {
-                if self.style_of(i).movable_in_reconfig() {
+                if self.style_of(i).movable() {
                     out.push((id, i, self.orientation));
                 }
             }
@@ -591,7 +590,7 @@ impl Splitter {
     /// the broker addresses each splitter by id.
     #[allow(dead_code)] // pub(crate) API called by the window resize capture (next task)
     pub(crate) fn set_active_divider(&mut self, sel: Option<usize>) {
-        self.reconfig = sel;
+        self.active_divider = sel;
     }
 
     /// Move divider `index` by `delta` cells along the split axis, then re-flow
@@ -614,7 +613,7 @@ impl Splitter {
                 s.weight = *w;
             }
         }
-        self.reconfig = None;
+        self.active_divider = None;
         self.saved_weights.clear();
         self.resolve_layout_local();
     }
@@ -623,7 +622,7 @@ impl Splitter {
     /// whether to enable Command::RESIZE / offer divider targets).
     #[allow(dead_code)] // pub(crate) API called by the window resize capture (next task)
     pub(crate) fn has_movable_divider(&self) -> bool {
-        (0..self.slots.len().saturating_sub(1)).any(|i| self.style_of(i).movable_in_reconfig())
+        (0..self.slots.len().saturating_sub(1)).any(|i| self.style_of(i).movable())
     }
 
     // -- interior crossings (Site 2) --------------------------------------------
@@ -774,7 +773,7 @@ impl View for Splitter {
                     let style = self.style_of(i);
                     // Any non-Locked divider is mouse-draggable (incl. Hidden, which
                     // becomes visible in FrameDragging while dragged) — deliberate per spec.
-                    let allowed = style.movable_in_reconfig();
+                    let allowed = style.movable();
                     if let (true, Some(id)) = (allowed, self.state().id()) {
                         self.dragging = Some(i);
                         ctx.start_mouse_track(
@@ -878,8 +877,8 @@ mod divider_tests {
         assert!(!DividerStyle::Hidden.draggable_live());
         assert!(!DividerStyle::Locked.draggable_live());
 
-        assert!(DividerStyle::Hidden.movable_in_reconfig());
-        assert!(!DividerStyle::Locked.movable_in_reconfig());
+        assert!(DividerStyle::Hidden.movable());
+        assert!(!DividerStyle::Locked.movable());
     }
 
     // Minimal view used by resize-session tests (no rendering needed here).
@@ -924,7 +923,10 @@ mod divider_tests {
             vec![(id, 0, Orientation::Cols), (id, 1, Orientation::Cols)],
             "movable dividers enumerated in axis order with this splitter's id"
         );
-        assert_eq!(sp.reconfig, None, "begin does NOT auto-select a divider");
+        assert_eq!(
+            sp.active_divider, None,
+            "begin does NOT auto-select a divider"
+        );
         assert_eq!(
             sp.saved_weights.len(),
             sp.slots.len(),
@@ -951,7 +953,7 @@ mod divider_tests {
             "commit keeps the new position"
         );
         assert!(sp.saved_weights.is_empty(), "session ended");
-        assert_eq!(sp.reconfig, None);
+        assert_eq!(sp.active_divider, None);
     }
 
     #[test]
@@ -970,13 +972,13 @@ mod divider_tests {
     }
 
     #[test]
-    fn set_active_divider_drives_reconfig_field() {
+    fn set_active_divider_drives_active_field() {
         let mut sp = three_pane_cols();
         sp.begin_resize_session();
         sp.set_active_divider(Some(1));
-        assert_eq!(sp.reconfig, Some(1));
+        assert_eq!(sp.active_divider, Some(1));
         sp.set_active_divider(None);
-        assert_eq!(sp.reconfig, None);
+        assert_eq!(sp.active_divider, None);
     }
 
     #[test]
