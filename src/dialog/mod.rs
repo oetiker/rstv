@@ -41,6 +41,7 @@ mod colorpick;
 #[allow(clippy::module_inception)]
 mod dialog;
 mod filedlg;
+pub mod layout;
 mod msgbox;
 mod theme_editor;
 
@@ -51,6 +52,10 @@ pub use filedlg::{
     FA_DIREC, FD_CLEAR_BUTTON, FD_HELP_BUTTON, FD_NO_LOAD_DIR, FD_OK_BUTTON, FD_OPEN_BUTTON,
     FD_REPLACE_BUTTON, FileCollection, FileDialog, FileInfoPane, FileInputLine, FileList,
     SearchRec, search_rec_compare,
+};
+pub use layout::{
+    BUTTON_GAP, BUTTON_ROW_FROM_BOTTOM, ButtonRowAlign, MARGIN_LEFT, MARGIN_RIGHT, MARGIN_TOP,
+    STD_BUTTON,
 };
 pub use msgbox::{MessageBoxButtons, MessageBoxKind};
 pub(crate) use msgbox::{build_input_box, build_message_box};
