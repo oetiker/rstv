@@ -245,12 +245,11 @@ impl SplitterApp {
         r.a.y = r.b.y - 1;
         let defs = StatusDef::list()
             .def_all(|d| {
-                d.item(
-                    "~Ctrl-F5~ Resize",
-                    ctrl_f5(),
-                    Command::RESIZE,
+                d.item("~Ctrl-F5~ Resize", ctrl_f5(), Command::RESIZE).item(
+                    "~Alt-X~ Exit",
+                    alt('x'),
+                    Command::QUIT,
                 )
-                .item("~Alt-X~ Exit", alt('x'), Command::QUIT)
             })
             .build();
         Some(Box::new(StatusLine::new(r, defs)))
