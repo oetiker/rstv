@@ -5,6 +5,61 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Splitter resize unification — keyboard resize via the window mode + frame-matching color (2026-06-15)
+
+Replaced the splitter's bespoke **F6 "reconfig" mode** (which collided with
+`cmNext`) with the window's unified keyboard **resize mode**: `Command::RESIZE`
+(Ctrl-F5) on a window whose body is a `Splitter` now enters one modal capture
+where **Tab/Shift-Tab cycle the resize target** — the window itself, then each
+divider (recursively across nested splitters) — arrows move the active target,
+Enter commits, Esc cancels all. The mouse can drag **any** non-`Locked` divider
+(incl. `Hidden`, which appears only while dragged). Divider **color** now matches
+the owning window frame state: being-moved → `FrameDragging`, window-active →
+`FrameActive`, else `FramePassive` (single-line always — match color, not weight).
+Built on `feat-splitter-resize-unification`, subagent-driven (implementer +
+two-stage fresh-subagent review per task), 7 commits.
+
+- **Task 1 — resize-session API + drop F6** (`splitter/mod.rs`):
+  `pub(crate)` `begin_resize_session` (snapshots weights **iff** it has movable
+  dividers, recurses into sub-splitters, returns `(splitter_id, index,
+  orientation)` targets depth-first), `set_active_divider`, `nudge_divider`,
+  `end_resize_session(commit)`, `has_movable_divider`. The F6 key handling +
+  the four private reconfig fns are removed; F6 falls through to `cmNext`.
+- **Task 2 — frame-matching color + mouse-any-divider** (`splitter/mod.rs`):
+  `divider_role(moving, active)` free fn; single-line glyphs everywhere (dropped
+  the reconfig-keyed double-line in `draw_dividers`/`collect_frame_marks`/
+  `draw_interior_crossings`/`put_crossing`); MouseDown gate relaxed to any
+  non-`Locked` divider.
+- **Task 3 — `Deferred::SplitterDivider` broker** (`view/context.rs`,
+  `app/program.rs`): new `DividerOp` (`SetActive`/`Nudge`/`EndSession`) +
+  `Context::splitter_divider` + a pump apply arm
+  (`find_mut → as_any_mut → downcast_mut::<Splitter>`) — the D3 sibling-broker
+  pattern, so the capture drives dividers by `ViewId` without touching them
+  inline.
+- **Task 4 — unified window capture** (`window.rs`): `KeyboardResizeCapture`
+  gains a `Vec<ResizeTarget>` (`Window | Divider{splitter,index,orientation}`) +
+  `current`; helpers `cycle`/`set_highlight`/`arrow`/`finish`; the `RESIZE`
+  handler begins a body-splitter session, builds the target list, sets the
+  initial highlight, and pushes the capture; RESIZE enablement ORs in
+  `body_has_movable_divider` so a fixed window with movable dividers still
+  resizes them. Whole-feature review verified begin/end pairing is exact (a
+  splitter snapshots **iff** it contributes a target, so every begun session is
+  ended; the guard-skip and nested cases leave nothing dangling).
+- **Task 5 — examples/docs** (`examples/splitter.rs`, `examples/gallery.rs`,
+  `docs/book/src/apps/windows.md`): F6-resize wording replaced with the Ctrl-F5
+  / Tab-cycles model; the splitter example binds Ctrl-F5 → `Command::RESIZE`.
+- **Cleanup commits:** renamed `reconfig`→`active_divider` and
+  `movable_in_reconfig`→`movable` (the old "reconfig mode" no longer exists);
+  removed the obsolete `#[allow(dead_code)]` placeholders once the API was wired.
+
+**Deliberately not done (noted, not deferred):** Cyan/Gray window-palette divider
+color (the splitter uses the Blue frame-role family — matching the demos —
+matching other palettes needs palette threading into the splitter); and
+larger-step (Ctrl+arrow) divider nudges. Both are out-of-scope follow-ups
+recorded in the spec. Spec
+[`docs/superpowers/specs/2026-06-14-splitter-resize-unification-design.md`](docs/superpowers/specs/2026-06-14-splitter-resize-unification-design.md),
+plan [`docs/superpowers/plans/2026-06-15-splitter-resize-unification.md`](docs/superpowers/plans/2026-06-15-splitter-resize-unification.md).
+
 ## Splitter frame-joining — divider↔frame + divider↔divider line-joining (rstv-original, 2026-06-13)
 
 Opt-in feature (`Window::with_joined_lines()`) that renders tee glyphs where a
