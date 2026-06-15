@@ -581,6 +581,22 @@ pub enum Deferred {
         /// `MouseDown`/`MouseUp`, position already view-local).
         event: Event,
     },
+
+    // -- the PageStack↔TabBar read-sync broker --------------------------
+    /// **Read-broker for a [`PageStack`](crate::widgets::PageStack)**: on a
+    /// `TAB_BAR_CHANGED` broadcast, the pump resolves `tab_bar`, reads its
+    /// `value()` (→ `FieldValue::Int` index), downcasts `page_stack` to
+    /// `PageStack`, and calls `set_active(index, &mut ctx)`. Mirrors
+    /// [`SyncScrollerDelta`](Deferred::SyncScrollerDelta).
+    ///
+    /// Touches the **view-tree** family (same as the scroller broker ops), so
+    /// the insertion-order drain stays order-equivalent.
+    PageStackSync {
+        /// The [`PageStack`](crate::widgets::PageStack) whose active page to update.
+        page_stack: ViewId,
+        /// The [`TabBar`](crate::widgets::TabBar) whose `value()` to read.
+        tab_bar: ViewId,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1275,6 +1291,16 @@ impl<'a> Context<'a> {
     ) {
         self.deferred
             .push(Deferred::SyncOutlineViewerDelta { viewer, h, v });
+    }
+
+    /// Queue a [`PageStack`](crate::widgets::PageStack) sync (see
+    /// [`Deferred::PageStackSync`]). Called by `PageStack::handle_event` on a
+    /// `TAB_BAR_CHANGED` broadcast from its bound bar.
+    pub fn request_sync_page_stack(&mut self, page_stack: ViewId, tab_bar: ViewId) {
+        self.deferred.push(Deferred::PageStackSync {
+            page_stack,
+            tab_bar,
+        });
     }
 
     /// Request the focused directory entry of the file list `source` be resolved

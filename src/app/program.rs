@@ -2445,6 +2445,32 @@ impl Program {
                                     v.handle_event(&mut ev, &mut ctx);
                                 }
                             }
+                            // -- PageStack↔TabBar read-sync broker ----------
+                            //
+                            // On a TAB_BAR_CHANGED broadcast, PageStack queues
+                            // this. The pump resolves `tab_bar`, reads its
+                            // `value()` (FieldValue::Int index), downcasts
+                            // `page_stack` to `PageStack`, and calls
+                            // `set_active(idx, &mut ctx)`. Mirrors
+                            // SyncScrollerDelta but reads one bar into one index.
+                            Deferred::PageStackSync {
+                                page_stack,
+                                tab_bar,
+                            } => {
+                                use crate::widgets::PageStack;
+                                let idx = group
+                                    .find_mut(tab_bar)
+                                    .and_then(|v| v.value())
+                                    .and_then(field_int)
+                                    .unwrap_or(0);
+                                if let Some(ps) = group
+                                    .find_mut(page_stack)
+                                    .and_then(|v| v.as_any_mut())
+                                    .and_then(|a| a.downcast_mut::<PageStack>())
+                                {
+                                    ps.set_active(idx.max(0) as usize, &mut ctx);
+                                }
+                            }
                             // -- colorpick: the color-picker drag broker --
                             //
                             // `ColorDragCapture` posts `ColorPickerDrag` on each
@@ -6635,6 +6661,118 @@ mod tests {
             scroller_delta(&mut program, s),
             Point::new(7, 3),
             "broadcast from a non-bar source must leave delta unchanged"
+        );
+    }
+
+    // -- PageStack↔TabBar read-sync broker (pump-side apply) ---------
+    //
+    // Model: same as scroller_read_broker_syncs_delta_through_pump.
+    // A TabBar and a PageStack (2 pages) are inserted into the program's
+    // root group. Injecting a TAB_BAR_CHANGED broadcast sourced by the
+    // TabBar makes the pump read its value and call set_active on the
+    // PageStack. A broadcast from a non-bound source is ignored.
+
+    use crate::widgets::{PageStack, TabBar};
+
+    fn insert_tab_bar_page_stack(program: &mut Program) -> (ViewId, ViewId, ViewId, ViewId) {
+        let g = program.group_mut();
+        let tab_id = g.insert(Box::new(TabBar::new(Rect::new(0, 0, 30, 1), &["A", "B"])));
+        // Two page stubs at the full 30×9 content area.
+        let page_rect = Rect::new(0, 1, 30, 10);
+        let mut ps = PageStack::new(page_rect);
+        let p0 = ps.insert_page(Box::new(crate::widgets::StaticText::new(
+            page_rect, "page0",
+        )));
+        let p1 = ps.insert_page(Box::new(crate::widgets::StaticText::new(
+            page_rect, "page1",
+        )));
+        ps.bind_tab_bar(tab_id);
+        let ps_id = g.insert(Box::new(ps));
+        program.out_events.clear();
+        (tab_id, ps_id, p0, p1)
+    }
+
+    fn page_stack_active(program: &mut Program, ps_id: ViewId) -> usize {
+        program
+            .group_mut()
+            .find_mut(ps_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<PageStack>())
+            .map(|ps| ps.active())
+            .expect("page stack resolves")
+    }
+
+    fn page_visible(program: &mut Program, ps_id: ViewId, page_id: ViewId) -> bool {
+        program
+            .group_mut()
+            .find_mut(ps_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<PageStack>())
+            .map(|ps| ps.page_visible(page_id))
+            .expect("page stack resolves")
+    }
+
+    fn set_tab_bar_value(program: &mut Program, tab_id: ViewId, value: usize) {
+        // Set directly to avoid the broadcast loop (test setup only).
+        use crate::data::FieldValue;
+        let g = program.group_mut();
+        let tb = g.find_mut(tab_id).expect("tab bar resolves");
+        tb.set_value(FieldValue::Int(value as i32));
+    }
+
+    /// Read broker: a `TAB_BAR_CHANGED` broadcast whose `source` is the bound
+    /// TabBar makes the pump read that bar's `value` and call `set_active` on
+    /// the PageStack. A broadcast from a non-bound source is ignored.
+    #[test]
+    fn page_stack_read_broker_switches_active_page_through_pump() {
+        let (mut program, _h2, _c) = program_with_desktop(80, 25);
+        let (tab_id, ps_id, p0, p1) = insert_tab_bar_page_stack(&mut program);
+
+        // Initial state: tab bar at index 0, page 0 visible.
+        assert_eq!(page_stack_active(&mut program, ps_id), 0);
+        assert!(page_visible(&mut program, ps_id, p0));
+        assert!(!page_visible(&mut program, ps_id, p1));
+
+        // Pre-set the TabBar's value to index 1 (the broker will read this).
+        set_tab_bar_value(&mut program, tab_id, 1);
+
+        // Inject TAB_BAR_CHANGED broadcast sourced by the TabBar and pump once:
+        // the broadcast phase delivers it to the PageStack (which queues
+        // PageStackSync), then the apply loop reads the TabBar's value (1) and
+        // calls set_active(1) on the PageStack.
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::TAB_BAR_CHANGED,
+            source: Some(tab_id),
+        });
+        program.pump_once();
+
+        assert_eq!(
+            page_stack_active(&mut program, ps_id),
+            1,
+            "active index must switch to 1 after TAB_BAR_CHANGED from the bound tab bar"
+        );
+        assert!(
+            !page_visible(&mut program, ps_id, p0),
+            "page 0 must be hidden after switching to page 1"
+        );
+        assert!(
+            page_visible(&mut program, ps_id, p1),
+            "page 1 must be visible after the switch"
+        );
+
+        // Negative case: a TAB_BAR_CHANGED broadcast from an unbound source must
+        // NOT switch the active page.
+        set_tab_bar_value(&mut program, tab_id, 0);
+        let other_id = ViewId::next();
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::TAB_BAR_CHANGED,
+            source: Some(other_id),
+        });
+        program.pump_once();
+        assert_eq!(
+            page_stack_active(&mut program, ps_id),
+            1,
+            "broadcast from an unbound source must leave the active page unchanged"
         );
     }
 
