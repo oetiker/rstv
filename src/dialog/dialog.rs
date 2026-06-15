@@ -71,6 +71,44 @@ impl Dialog {
         self.window.child_mut(id)
     }
 
+    /// Insert a conventional button row: standard 10×2 buttons,
+    /// [`BUTTON_GAP`](crate::dialog::BUTTON_GAP) apart, top edge at
+    /// `height - BUTTON_ROW_FROM_BOTTOM`. `align` centers or right-groups the row.
+    /// Returns the inserted ids in the given order.
+    pub fn button_row(
+        &mut self,
+        buttons: &[(&str, crate::command::Command, crate::widgets::ButtonFlags)],
+        align: crate::dialog::ButtonRowAlign,
+    ) -> Vec<ViewId> {
+        use crate::dialog::ButtonRowAlign;
+        use crate::dialog::layout::{BUTTON_GAP, BUTTON_ROW_FROM_BOTTOM, MARGIN_RIGHT, STD_BUTTON};
+        use crate::widgets::Button;
+        let size = self.state().size;
+        let n = buttons.len() as i32;
+        if n == 0 {
+            return Vec::new();
+        }
+        let span = n * STD_BUTTON.x + (n - 1) * BUTTON_GAP;
+        let left = match align {
+            ButtonRowAlign::Center => (size.x - span) / 2,
+            ButtonRowAlign::Right => size.x - MARGIN_RIGHT - span,
+        };
+        let top = size.y - BUTTON_ROW_FROM_BOTTOM;
+        let mut ids = Vec::with_capacity(buttons.len());
+        let mut x = left;
+        for (title, command, flags) in buttons {
+            let b = Button::new(
+                Rect::new(x, top, x + STD_BUTTON.x, top + STD_BUTTON.y),
+                title,
+                *command,
+                *flags,
+            );
+            ids.push(self.insert_child(Box::new(b)));
+            x += STD_BUTTON.x + BUTTON_GAP;
+        }
+        ids
+    }
+
     /// Override the decoration flags after construction.
     ///
     /// Mirrors [`Window::set_flags`]; used by `FileDialog` and `ChDirDialog` to
@@ -166,11 +204,13 @@ impl View for Dialog {
 mod tests {
     use super::*;
     use crate::backend::{HeadlessBackend, Renderer};
+    use crate::dialog::ButtonRowAlign;
     use crate::event::{KeyEvent, KeyModifiers};
     use crate::screen::Buffer;
     use crate::theme::Theme;
     use crate::timer::TimerQueue;
     use crate::view::Deferred;
+    use crate::widgets::ButtonFlags;
     use std::collections::VecDeque;
 
     fn with_ctx<R>(
@@ -399,5 +439,50 @@ mod tests {
             )),
             "other command defers to the group (an invalid child vetoes)"
         );
+    }
+
+    // -- 6. button_row -------------------------------------------------------
+
+    #[test]
+    fn button_row_center_places_two_buttons_symmetrically() {
+        let mut d = Dialog::new(Rect::new(0, 0, 40, 12), Some("D".into()));
+        let ids = d.button_row(
+            &[
+                (
+                    "~O~K",
+                    Command::OK,
+                    ButtonFlags {
+                        default: true,
+                        ..ButtonFlags::new()
+                    },
+                ),
+                ("~C~ancel", Command::CANCEL, ButtonFlags::new()),
+            ],
+            ButtonRowAlign::Center,
+        );
+        assert_eq!(ids.len(), 2);
+        let b0 = d.child_mut(ids[0]).unwrap().state().get_bounds();
+        let b1 = d.child_mut(ids[1]).unwrap().state().get_bounds();
+        assert_eq!((b0.a.x, b0.a.y), (9, 9), "centered, row top = h-3");
+        assert_eq!(b1.a.x, 9 + 10 + 2, "after gap");
+        assert_eq!((b0.b.x - b0.a.x, b0.b.y - b0.a.y), (10, 2));
+    }
+
+    #[test]
+    fn button_row_right_groups_against_right_margin() {
+        let mut d = Dialog::new(Rect::new(0, 0, 40, 12), Some("D".into()));
+        let ids = d.button_row(
+            &[
+                ("~O~K", Command::OK, ButtonFlags::new()),
+                ("~C~ancel", Command::CANCEL, ButtonFlags::new()),
+            ],
+            ButtonRowAlign::Right,
+        );
+        assert_eq!(
+            d.child_mut(ids[1]).unwrap().state().get_bounds().b.x,
+            38,
+            "right edge at w - MARGIN_RIGHT"
+        );
+        assert_eq!(d.child_mut(ids[0]).unwrap().state().get_bounds().a.x, 16);
     }
 }
