@@ -59,13 +59,18 @@ fn tour() -> Vec<Scene> {
         scene(&["Up"], 26),
         scene(&["Enter"], 90),             // confirm move
         scene(&["F10", "Down", "l"], 100), // Calendar window
-        // Color picker — drag across the hue/sat plane; "New" sweeps live.
+        // Color picker — drag across the hue/sat plane; "New" sweeps live. The
+        // picker activates on first click (`first_click`), so a throwaway focus
+        // click precedes the press; the press-drag-release then stays inside the
+        // SV box (screen cols 14–46, rows 6–21 at this layout) so every move
+        // scrubs the saturation/value and the "New" swatch sweeps.
         scene(&["F10", "Down", "k"], 130), // open Color Picker
-        scene(&["\x1b[<0;12;7M"], 40),     // mouse-press on the plane
-        scene(&["\x1b[<32;20;10M"], 45),   // drag…
-        scene(&["\x1b[<32;30;14M"], 45),
-        scene(&["\x1b[<32;40;19M"], 45),
-        scene(&["\x1b[<0;40;19m"], 120), // release (final picked colour)
+        scene(&["\x1b[<0;16;7M", "\x1b[<0;16;7m"], 50), // focus click (activates picker)
+        scene(&["\x1b[<0;18;8M"], 30),     // press in the SV box
+        scene(&["\x1b[<32;28;12M"], 45),   // drag…
+        scene(&["\x1b[<32;38;16M"], 45),
+        scene(&["\x1b[<32;44;20M"], 45),
+        scene(&["\x1b[<0;44;20m"], 120), // release (final picked colour)
         scene(&["F10", "Down", "s"], 150), // Splitter grid (joined panes)
         // Resize the split window interactively: Ctrl-F5 enters resize mode; Tab
         // cycles the target (window → each divider); arrows move the active
