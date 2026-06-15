@@ -55,8 +55,11 @@ impl TabBar {
         self.value
     }
 
+    /// Display width of `label` with the `~` hotkey markers stripped (they are not
+    /// printed columns). Mirrors [`cluster.rs::cstrlen`](crate::widgets::Cluster) so
+    /// wide/CJK labels measure correctly.
     fn label_len(label: &str) -> i32 {
-        label.chars().filter(|&c| c != '~').count() as i32
+        crate::text::width(&label.replace('~', "")) as i32
     }
 
     /// `(start_x, width)` per tab; the active tab is +2 wide (its caps); 1-cell gaps.
@@ -142,13 +145,13 @@ impl View for TabBar {
         );
         let layout = self.tab_layout();
         for (i, (start, _w)) in layout.iter().enumerate() {
-            let label = self.tabs[i].clone();
+            let label = &self.tabs[i];
             if i == self.value {
                 ctx.put_char(*start, 0, g.frame_tl, act);
-                let lw = ctx.put_cstr(start + 1, 0, &label, act, act_hi);
+                let lw = ctx.put_cstr(start + 1, 0, label, act, act_hi);
                 ctx.put_char(start + 1 + lw, 0, g.frame_tr, act);
             } else {
-                ctx.put_cstr(*start, 0, &label, norm, norm_hi);
+                ctx.put_cstr(*start, 0, label, norm, norm_hi);
             }
         }
     }
@@ -208,6 +211,11 @@ impl View for TabBar {
                 {
                     self.press(i, ctx);
                 }
+                ev.clear();
+            }
+            // Consume routed moves while tracking (mirrors cluster.rs's no-op
+            // MouseMove arm — the C++ only toggled cursor visibility, no TUI equivalent).
+            Event::MouseMove(_) if self.tracking => {
                 ev.clear();
             }
             _ => {}
