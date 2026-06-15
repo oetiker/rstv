@@ -42,7 +42,30 @@ Research findings (from magiblot Turbo Vision + the rstv codebase):
   button-row helper** (prevent recurrence of the drift).
 - Retrofit scope: **color picker only** now. `msgbox`/`inputbox` already conform;
   migrating `filedlg`/theme-editor is a later, optional pass.
-- The tab bar becomes a **reusable `TabBar` widget** (like `ScrollBar`).
+- The tab selector becomes a **reusable `TabBar` widget**, modelled on
+  **`TCluster`/`TRadioButtons`** (single selection, `~X~` hotkeys, arrow nav,
+  click-to-select, transfer `value`/`sel`, press-on-release) — **not** on
+  `ScrollBar`. TV precedent: `TMonoSelector : public TCluster` is a custom
+  single-selector built *inside* the C++ color dialog by subclassing the cluster.
+- **The switchable views live in a reusable `PageStack`** — a content
+  multiplexer (rstv-original; classic TV has no notebook/tab-page class, only
+  `TGroup` + `sfVisible`/`show()`/`hide()`, confirmed by grep). It holds N child
+  page Views and keeps exactly one `sfVisible`.
+- **`TabBar` and `PageStack` are siblings coupled by the D3 pump broker**,
+  mirroring `Scroller`↔`ScrollBar` exactly: `TabBar` broadcasts
+  `Command::TAB_BAR_CHANGED` carrying its own `ViewId` as `source`; `PageStack`
+  (which stores the bound `tab_bar` id) filters on `source`, queues a new
+  `Deferred::PageStackSync { page_stack, tab_bar }`; the pump reads
+  `tab_bar.value()` and calls `PageStack::set_active(idx, &mut ctx)`. This is why
+  the selector broadcasts at all — it now has a real sibling consumer (the earlier
+  "broadcast into the void" smell is gone).
+- **The color picker is rebuilt as a `Group` container** (not the current
+  monolithic single `View`): a `TabBar` child + a `PageStack` child (the four
+  surfaces become real page Views sharing one `Rc<RefCell<ColorModel>>`) + an
+  always-visible info-column child. Draggable surfaces are rebuilt on the
+  **standard mouse-track capture** (`ctx.start_mouse_track`, the `ScrollBar`
+  thumb-drag pattern), retiring the bespoke `drag.rs` broker
+  (`ColorDragCapture` + `Deferred::ColorPickerDrag`).
 
 ## Design
 
@@ -103,54 +126,109 @@ pub fn button_row(
 (The helper encodes items 3 above so callers can't drift. `msgbox`/`inputbox`
 may adopt it later; out of scope now.)
 
-### Piece 2 — `TabBar` widget (rstv-original, `src/widgets/tab_bar/` or `src/widgets/tab_bar.rs`)
+### Piece 2 — `TabBar` selector + `PageStack` content multiplexer + the broker
 
-A standalone, focusable, single-row view — same standing as `ScrollBar`.
+Two composable rstv-original widgets plus the sibling-broker seam that couples
+them. Both documented as rstv extensions (no TV ancestor for the *idiom*; the
+*mechanisms* — cluster selection, `TGroup` + `sfVisible` — are TV-faithful).
 
-- **State:** `tabs: Vec<String>` (each may carry `~X~` hotkey markup),
-  `active: usize`, plus `ViewState`.
-- **Draw:** corner-cap style on the gray field — active tab `┌Label┐`
-  (`frame_tl`/`frame_tr`), inactive tabs plain; hotkey letter in the accent
-  (shortcut) role; **no background fill** beyond the gray field. A 1-cell gap
-  between tabs.
-- **Input:** when focused, **←/→** move `active` (wrapping); a tab's **hotkey**
-  (the `~X~` letter) selects it directly; **mouse click** on a tab selects it.
-- **Change notification:** on `active` change, **broadcast** a tab-changed
-  command carrying its `ViewId` as `source` (D4), and expose the index via
-  `View::value`/`set_value` (D10) — mirrors how `ScrollBar` notifies its owner.
-  The owner (color picker) listens for the broadcast and switches surfaces.
-- **Sizing:** width = sum of tab widths + caps + gaps; height = 1. Helper to
-  compute its natural width so callers can place it.
-- **Snapshot tests** (D11): active vs inactive rendering; ←/→ cycling; hotkey
-  select; mouse-click select; the broadcast fires with the right source/index.
+**`TabBar`** (`src/widgets/tab_bar.rs`) — a focusable single-row selector,
+**cluster-shaped** (the `TMonoSelector : public TCluster` precedent):
 
-This is an **rstv-original** (no TV ancestor) — documented as such in its
-rustdoc under a "Turbo Vision heritage" note (there is none; it's an extension),
-consistent with the Splitter precedent.
+- **State/semantics modelled on `Cluster`:** `value` (selected index) + `sel`
+  (cursor); `tabs: Vec<String>` with `~X~` hotkeys; `press(item)`/`moved_to(item)`
+  selection verbs; `find_sel(p)` hit-test; **press-on-release** mouse (mirrors
+  `cluster.rs`); `~X~` hotkey-when-focused + arrow nav. (Standalone, cluster-
+  *shaped* rather than a `ClusterKind` branch, because the shared `Cluster` engine
+  is marker-/column-centric and must-not-broadcast for radio/check — a Tabs branch
+  would pollute it. The vocabulary and contract still match `TCluster`.)
+- **Draw:** corner-cap on the active tab — `┌Label┐` (`glyphs.frame_tl/tr`),
+  inactive tabs plain; hotkey letter in the shortcut role; **no fill beyond the
+  gray field**; 1-cell gaps. (rstv-original visual, like `TMonoSelector` overrode
+  `draw`.)
+- **Transfer protocol (D10):** `value()` → `FieldValue::Int(selected)`;
+  `set_value(FieldValue::Int)` clamps (the `getData`/`setData` successors).
+- **Change notification (D3/D4):** on a selection change, broadcast
+  `Command::TAB_BAR_CHANGED` carrying its own `ViewId` as `source` — exactly
+  `ScrollBar::scroll_draw`'s shape.
+- **`as_any_mut` → `Some(self)`**; `natural_width()` helper for placement.
 
-### Piece 3 — Refit the color picker (`src/dialog/colorpick/`)
+**`PageStack`** (`src/widgets/page_stack.rs`) — a content multiplexer, a thin
+`#[delegate(to = group)]` wrapper (`{ group: Group, pages: Vec<ViewId>, active,
+tab_bar: Option<ViewId> }`):
 
-- **Replace the bespoke tab drawing** (`mod.rs` ~232–253) with an embedded
-  `TabBar` child. The picker switches the visible surface when the TabBar
-  broadcasts a change. The `Tab` enum / `label()` move into TabBar tab strings.
-- **Rename** the tabs: `Hue/Sat` (was "Plane ~W~"), `Xterm` (was "~6~"); keep
-  `Presets`, `RGB`.
-- **Kill the blue chrome:** the tab row and the **info column** fill
-  (`mod.rs` ~177, ~235–240) stop using `ScrollerNormal` / `FramePassive` (blue)
-  and use the **gray dialog field** roles, so the picker reads as one coherent
-  gray dialog. Actual color swatches/gradients (the surfaces' content) stay
-  colorful — only the chrome changes.
-- **Blank line above the buttons:** in `examples/tvdemo.rs` the picker dialog is
-  re-laid so there's one empty row between the picker body and the OK/Cancel row
-  (shrink the picker body by one row; place buttons via the new `button_row`
-  helper at `height − 3`).
-- **Snapshot tests** updated for the new chrome/tabs.
+- `insert_page(view) -> ViewId` inserts a child page; all but the active page get
+  `state.visible = false`.
+- `set_active(idx, ctx)` flips visibility via `group.set_visible_descendant`
+  (which auto-`reset_current`s on a selectable visibility change) then
+  `group.focus_child(active_page, ctx)`.
+- **Sibling reaction:** `handle_event` filters `Event::Broadcast { command:
+  TAB_BAR_CHANGED, source }` on `source == self.tab_bar` and queues
+  `ctx.request_sync_page_stack(self_id, tab_bar)` — the exact shape of
+  `Scroller::handle_event` filtering `SCROLL_BAR_CHANGED`.
+- `as_any_mut → Some(self)` (NOT delegated — the pump downcast hatch).
+
+**The broker** (the only new substrate, modelled 1:1 on `SyncScrollerDelta`):
+
+- New `Deferred::PageStackSync { page_stack: ViewId, tab_bar: ViewId }` in the
+  `Deferred` enum.
+- New `Context::request_sync_page_stack(page_stack, tab_bar)` queues it.
+- New pump arm (beside the `SyncScrollerDelta` arm in `program.rs`): read
+  `group.find_mut(tab_bar).value()` → `Int` index, then `group.find_mut(page_stack)`
+  → `as_any_mut` → `downcast_mut::<PageStack>()` → `set_active(idx, &mut ctx)`.
+- New `Command::TAB_BAR_CHANGED`. **No `View`-trait method is added, so no
+  `rstv-macros/src/specs.rs` forwarder is needed.**
+
+- **Snapshot/unit tests** (D11): `TabBar` active vs inactive draw, arrow/hotkey/
+  click selection, press-on-release, broadcast source; `PageStack` show-one/hide-
+  rest, `set_active` moves currency; an integration test that a `TabBar`+`PageStack`
+  pair in a `Group` switches the visible page through the pump broker.
+
+### Piece 3 — Rebuild the color picker on `TabBar` + `PageStack`
+
+`ColorPicker` stops being a monolithic single `View` and becomes a **`Group`
+container** (`{ group, tab_bar_id, page_stack_id, info_col_id, model:
+Rc<RefCell<ColorModel>>, old }`):
+
+- **Children:** a `TabBar` on row 0 (left of the info column); a `PageStack`
+  below it whose four pages are the surfaces rebuilt as real Views
+  (`PresetsPage`/`RgbPage`/`PlanePage`/`XtermPage`), each holding a clone of the
+  shared `Rc<RefCell<ColorModel>>`; an always-visible **info-column** child on
+  the right. The `Tab` enum maps to page indices.
+- **Shared model:** `ColorModel` (Clone+Copy today) moves behind
+  `Rc<RefCell<ColorModel>>`; each page borrows it in `draw`/`handle_event`. This
+  removes the "inline match to split borrows" anti-pattern in the current
+  `ColorPicker` (it only existed because surfaces took `&mut model` params).
+- **Drag rebuilt on the standard track capture:** `RgbPage`/`PlanePage` handle
+  their own `MouseDown`-over-a-drag-region by caching `abs_origin` in `draw` and
+  calling `ctx.start_mouse_track` (the `ScrollBar` thumb-drag pattern); their
+  `MouseMove`/`MouseAuto` arms scrub the shared model. The bespoke `drag.rs`
+  (`ColorDragCapture`, `Deferred::ColorPickerDrag`, `Context::request_color_drag`,
+  its pump arm) is **retired**.
+- **Tab switching:** the `TabBar` broadcasts; the `PageStack` (its `tab_bar` bound
+  to the bar's id) switches the visible page via the broker. The picker keeps
+  Ctrl+←/→ and Alt+hotkey by driving the `TabBar`'s `set_value`/`press`.
+- **Rename** tabs: `Hue/Sat` (was "Plane ~W~"), `Xterm` (was "~6~"); keep
+  `Presets`, `RGB`. Hotkeys P/R/H/X.
+- **Kill the blue chrome:** the tab row and the info-column fill stop using
+  `ScrollerNormal`/`FramePassive` (blue) and use the **gray dialog field** roles.
+  Color swatches/gradients stay colorful — only chrome changes.
+- **Public API preserved:** `ColorPicker::new(bounds, initial)`, `color()`,
+  `select_tab(tab)`, `as_any_mut` — so `Program::color_dialog`,
+  `open_color_dialog_for_role`, and the `examples/` embeds keep working.
+- **Blank line above the buttons:** `examples/tvdemo.rs` re-lays the picker dialog
+  via the new `button_row` helper, leaving one empty row above OK/Cancel.
+- **Snapshot tests** updated for the new chrome/tabs; the per-surface standalone
+  snapshots migrate to the per-page Views.
 
 ## Verification
 
-- D11 snapshot tests for `TabBar` (states + interactions) and the refit color
-  picker (gray chrome, corner-cap tabs, renamed labels, blank line above
-  buttons).
+- D11 snapshot/unit tests for `TabBar` (states + interactions + broadcast),
+  `PageStack` (show-one/hide-rest + `set_active` currency), a `TabBar`+`PageStack`
+  **pump-broker integration test** (switching the visible page through
+  `Deferred::PageStackSync`), and the rebuilt color picker (gray chrome,
+  corner-cap tabs, renamed labels, blank line above buttons; per-page surface
+  snapshots; drag still scrubs via the standard track capture).
 - A regenerated tvdemo frame (the demo already opens the picker) eyeballed to
   confirm the blue is gone and the tabs read as tabs.
 - Guide doc cross-checked against the recovered TV metrics.
@@ -159,13 +237,24 @@ consistent with the Splitter precedent.
 
 - Migrating `msgbox`/`inputbox`/`filedlg`/theme-editor to the constants + helper
   (they already conform behaviorally; a de-duplication pass can come later).
-- A full notebook/multi-page container (we only need a single-row tab selector).
 - Tab overflow/scrolling when tabs exceed the width (the picker's four short
   tabs fit; note as a future `TabBar` enhancement).
+- Making `TabBar` a true `ClusterKind::Tabs` branch of the shared `Cluster`
+  engine (we go standalone-cluster-shaped now to avoid polluting the marker-
+  centric engine; revisit if a second tabbed consumer appears).
+- **(Now in scope — was previously deferred):** the `PageStack` multi-page
+  container. The earlier draft scoped this out; the full rebuild adopts it as the
+  faithful answer to "where do the switchable views live."
 
 ## Decomposition
 
 Built and reviewed in order (each is independently testable):
-1. Guide doc + constants + `button_row` helper.
-2. `TabBar` widget (+ snapshot tests).
-3. Color-picker refit (uses 1 and 2) + tvdemo re-lay + demo regen.
+1. **Piece 1** — guide doc + layout constants + `Dialog::button_row` helper.
+2. **Piece 2a** — `TabBar` (cluster-shaped selector) + tests.
+3. **Piece 2b** — `PageStack` (content multiplexer) + the broker seam
+   (`Command::TAB_BAR_CHANGED`, `Deferred::PageStackSync`,
+   `Context::request_sync_page_stack`, the pump arm) + an integration test.
+4. **Piece 3** — rebuild `ColorPicker` as a `TabBar`+`PageStack`+info-column
+   group; surfaces → page Views over `Rc<RefCell<ColorModel>>`; retire `drag.rs`
+   for the standard track capture; gray chrome; rename tabs; tvdemo re-lay +
+   demo regen.

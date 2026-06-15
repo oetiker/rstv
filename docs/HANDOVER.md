@@ -11,8 +11,9 @@
 > (`docs/BACKLOG.md`, Phases A/B/C) is exhausted, and the developer docs (Docs
 > Phases 1–3) are ✅ done. The work now is **post-port UI polish + targeted
 > rstv-original extensions** (e.g. the `Splitter`; an interactive-resize pass; a
-> dialog design guide + `TabBar`). When something lands: add an IMPLEMENTATION-LOG
-> section and update this file.
+> dialog design guide + a `TabBar`/`PageStack` widget pair + a color-picker
+> rebuild). When something lands: add an IMPLEMENTATION-LOG section and update
+> this file.
 
 ## Current state (2026-06-15)
 
@@ -30,19 +31,52 @@ move, Shift+arrows resize). New cross-cutting seam worth knowing:
 session by `ViewId`), with a target-cycling `KeyboardResizeCapture`.
 
 ### In flight (NOT on `main` yet): branch `dialog-design-guide`
-A **dialog design guide + reusable `TabBar` + color-picker refit** effort. The
-**design spec is committed** on that branch
-(`docs/superpowers/specs/2026-06-15-dialog-design-guide-and-tabbar-design.md`);
-**no implementation plan yet** (next step is `writing-plans`). Three sequenced
-pieces: (1) `docs/design/dialog-layout.md` + named layout constants (`STD_BUTTON`
-10×2, `BUTTON_GAP` 2, margins) + a `Dialog::button_row` helper; (2) a standalone
-**`TabBar`** widget (rstv-original, like `ScrollBar`: corner-cap active tab
-`┌Label┐`, ←→/hotkey/mouse, broadcasts on change); (3) refit the color picker
-(`src/dialog/colorpick/`) to use `TabBar`, drop the **blue chrome** (it wrongly
-used blue-window roles `FramePassive`/`ScrollerNormal` inside a *gray* dialog),
-add a blank line above the buttons, rename tabs **`Plane W`→`Hue/Sat`** and
-**`6`→`Xterm`**. Locked decisions are in the spec. **Resume by reviewing the spec
-with the user, then `writing-plans`.**
+A **dialog design guide + `TabBar` + `PageStack` + color-picker rebuild** effort.
+**Spec AND implementation plan are both written** (the plan is uncommitted on the
+working tree; the spec was revised — see below — but that revision is also
+uncommitted). NO code yet — next step is **execution** (subagent-driven, the plan
+is task-by-task with two-stage review). Files:
+- Spec: `docs/superpowers/specs/2026-06-15-dialog-design-guide-and-tabbar-design.md`
+- Plan: `docs/superpowers/plans/2026-06-15-dialog-design-guide-and-tabbar.md`
+
+**The design grew during review (a TV-spirit pass + a "where do the switchable
+views live" question) from a single `TabBar` into a selector+container pair —
+read the revised spec, the original git-committed spec is stale.** Model B, four
+pieces:
+1. **Guide + constants + helper** — `docs/design/dialog-layout.md`; layout
+   constants in `src/dialog/layout.rs` (`STD_BUTTON` 10×2, `BUTTON_GAP` 2, margins
+   3/2/2, `BUTTON_ROW_FROM_BOTTOM` 3) + `ButtonRowAlign`; a `Dialog::button_row`
+   helper.
+2. **`TabBar`** (`src/widgets/tab_bar.rs`) — a focusable single-row selector,
+   **cluster-shaped** (the `TMonoSelector : public TCluster` precedent — NOT
+   modelled on `ScrollBar`): `value`/`selected`/`press`/`find_sel`, press-on-
+   release, `value`/`set_value` transfer; corner-cap active tab `┌Label┐`;
+   broadcasts `Command::TAB_BAR_CHANGED` (source = self id).
+3. **`PageStack`** (`src/widgets/page_stack.rs`) — a content multiplexer (a
+   `#[delegate(to=group)]` wrapper holding N page Views, one `sfVisible`). The key
+   new seam: **`TabBar` ↔ `PageStack` are siblings coupled by the D3 pump broker,
+   a 1:1 clone of scroller↔scrollbar** — new `Deferred::PageStackSync { page_stack,
+   tab_bar }` + `Context::request_sync_page_stack` + a pump arm beside
+   `SyncScrollerDelta` that reads `tab_bar.value()` → `PageStack::set_active(idx,
+   ctx)`. (This is the third instance of the D3 sibling-broker pattern.)
+4. **Color-picker rebuild** (`src/dialog/colorpick/`) — `ColorPicker` becomes a
+   `Group` container: `TabBar` + `PageStack` (the four surfaces become page Views
+   sharing one `Rc<RefCell<ColorModel>>`) + an always-visible info column.
+   Draggable surfaces self-drive via the standard `ctx.start_mouse_track` capture,
+   **retiring the bespoke `drag.rs`** (`ColorDragCapture` + `Deferred::ColorPickerDrag`;
+   keep only the `ColorDragRegion` enum). Drop the **blue chrome** (it wrongly used
+   blue-window roles `FramePassive`/`ScrollerNormal` in a *gray* dialog → use gray
+   field roles), blank line above OK/Cancel (via `button_row`), rename tabs
+   **`Plane W`→`Hue/Sat`** and **`6`→`Xterm`** (hotkeys P/R/H/X). Public API
+   preserved (`new`/`color`/`select_tab`/`as_any_mut`) so `color_dialog`,
+   `open_color_dialog_for_role`, and the example embeds keep working.
+
+The plan flags two atomicity hazards (the picker won't compile mid-rebuild → its
+tasks commit as one unit; a temporary `request_sync_page_stack` stub bridges the
+`PageStack` task's isolated build) and the `select_tab` pre-modal timing (apply a
+stashed `pending_tab` on the first event, since `select_tab` has no `Context`).
+**Investigation reports that grounded the plan are in the conversation, not on
+disk.** Resume by **committing spec+plan, then executing the plan subagent-driven.**
 
 ## Previous state (2026-06-13, Docs Phase 3 landed + crate renamed to `rstv`)
 
@@ -324,9 +358,12 @@ This session ran the **backlog run** end to end:
 
 ## Next
 
-**Active:** finish the **dialog design guide + `TabBar` + color-picker refit** on
-branch `dialog-design-guide` (spec committed; needs `writing-plans` → subagent-driven
-implementation). See "In flight" above.
+**Active:** execute the **dialog guide + `TabBar` + `PageStack` + color-picker
+rebuild** on branch `dialog-design-guide`. Spec (revised to Model B) **and** the
+13-task implementation plan are written but **uncommitted**; no code yet. Commit
+spec+plan, then run the plan subagent-driven (two-stage review per task; commit at
+the atomic boundaries — tasks 4, 7, 9, 12, 13). See "In flight" above for the
+four-piece design and the gotchas.
 
 **Splitter resize follow-ups (noted in the resize spec, not started):** Cyan/Gray
 window-palette divider color (the splitter uses the Blue frame-role family — other
