@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to rstv will be documented in this file.
+All notable changes to tvision-rs will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -12,7 +12,7 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
-- Initial public release of `rstv` — an idiomatic Rust port of Turbo Vision
+- Initial public release of `tvision-rs` — an idiomatic Rust port of Turbo Vision
   (magiblot/tvision): the `View` trait + `ViewState` composition, the single
   event loop and deferred-effects channel, the core widget set (windows,
   dialogs, menus, buttons, input lines, list/scroll views, validators, color

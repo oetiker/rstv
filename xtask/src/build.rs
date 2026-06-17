@@ -45,14 +45,14 @@ pub fn build_book() -> Result<()> {
     Ok(())
 }
 
-/// rustdoc for the `rstv` crate, with the shared header injected. (The logo
+/// rustdoc for the `tvision-rs` crate, with the shared header injected. (The logo
 /// is set via `#![doc(html_logo_url = …)]` crate attributes in Plan 2; only the
 /// header — carrying the Guide⇄API toggle — is injected here, using only stable
 /// rustdoc flags. The header path must be space-free; the repo path is.)
 ///
 /// rustdoc is built into an xtask-owned, isolated target dir
 /// (`paths::rustdoc_target_dir()`) rather than the shared `$CARGO_TARGET_DIR`,
-/// so `api/` ends up holding only the `rstv` docs. See `paths::rustdoc_out`.
+/// so `api/` ends up holding only the `tvision-rs` docs. See `paths::rustdoc_out`.
 fn build_rustdoc() -> Result<()> {
     let header = paths::book_root().join("theme").join("rustdoc-header.html");
     anyhow::ensure!(
@@ -63,7 +63,7 @@ fn build_rustdoc() -> Result<()> {
     let flags = format!("--html-in-header {}", header.display());
     let target = paths::rustdoc_target_dir();
     let status = Command::new("cargo")
-        .args(["doc", "--no-deps", "--package", "rstv"])
+        .args(["doc", "--no-deps", "--package", "tvision-rs"])
         .arg("--target-dir")
         .arg(&target)
         .env("CARGO_BUILD_JOBS", "4")

@@ -1,4 +1,4 @@
-//! The clipboard fallback chain that backs every copy/paste in rstv:
+//! The clipboard fallback chain that backs every copy/paste in tvision-rs:
 //! **native first, internal buffer only on failure**. The copy order is
 //! native → OSC 52 emit → internal; paste is native → internal. The rungs:
 //!
@@ -16,7 +16,7 @@
 //!
 //! There is **no OSC 52 read** rung: reading requires capability probes (a TERM
 //! allowlist plus XTGETTCAP/XTQALLOWED queries) and a reply arriving through the
-//! input parser — which crossterm owns, so rstv has no place to receive it.
+//! input parser — which crossterm owns, so tvision-rs has no place to receive it.
 //! Terminals also gate clipboard *reads* behind security opt-ins, making a blind
 //! read request useless.
 //!
@@ -28,7 +28,7 @@
 //! with the internal buffer touched only after the native write fails. The Unix
 //! native + OSC 52 emit rungs follow `unixcon.cpp` / `termio.cpp`. The original
 //! detected an OSC 52 capability before claiming success; since crossterm owns
-//! the input parser, rstv cannot probe and instead always reports the internal
+//! the input parser, tvision-rs cannot probe and instead always reports the internal
 //! fallback after emitting.
 
 use std::io;

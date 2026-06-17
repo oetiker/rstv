@@ -4,7 +4,7 @@
 > in `src/dialog/dialog.rs`). This document is the authoritative reference for
 > the recovered classic Turbo Vision dialog conventions.
 
-Dialogs in rstv are gray-palette modal containers. The conventions below are
+Dialogs in tvision-rs are gray-palette modal containers. The conventions below are
 confirmed against `msgbox.cpp`, `tfildlg.cpp`, and `tdialog.cpp` in
 magiblot/tvision. Using the named constants from `crate::dialog::layout` keeps
 all dialogs consistent and makes coordinate bugs obvious.
@@ -174,10 +174,10 @@ and not borrowing a blue role by mistake.
 
 ---
 
-## 8. rstv-original extensions: `TabBar` and `PageStack`
+## 8. tvision-rs-original extensions: `TabBar` and `PageStack`
 
 Classic Turbo Vision exposes only `TGroup` with `sfVisible` toggled per page.
-rstv adds two widgets for the common "tabbed dialog" idiom:
+tvision-rs adds two widgets for the common "tabbed dialog" idiom:
 
 **`TabBar`** — a corner-capped tab strip rendered above the content area.
 Each tab has a title and fires
@@ -210,9 +210,9 @@ let _pages_id = d.insert_child(Box::new(pages));
 // The pump brokers TAB_BAR_CHANGED from bar_id to the PageStack automatically.
 ```
 
-Note: `TabBar` and `PageStack` are rstv-original — they have no direct Turbo
+Note: `TabBar` and `PageStack` are tvision-rs-original — they have no direct Turbo
 Vision counterpart. Classic TV authors would achieve the same effect by toggling
-`sfVisible` on groups manually; the rstv widgets encapsulate that pattern and
+`sfVisible` on groups manually; the tvision-rs widgets encapsulate that pattern and
 wire the broker automatically.
 
 ---

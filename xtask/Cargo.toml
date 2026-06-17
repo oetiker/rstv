@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-rstv = { path = ".." }
+tvision-rs = { path = ".." }
 mdbook = "0.4"
 mdbook-mermaid = "0.14"
 notify = "6"

@@ -128,7 +128,7 @@ pub trait Validator {
 /// # Turbo Vision heritage
 ///
 /// Ports `TFilterValidator` (`tvalidator.cpp`), which tests membership per byte
-/// where rstv tests per Unicode `char` (identical for the ASCII charsets these
+/// where tvision-rs tests per Unicode `char` (identical for the ASCII charsets these
 /// validators carry). The streaming machinery is dropped (deviation D12).
 pub struct FilterValidator {
     valid_chars: String,
@@ -870,7 +870,7 @@ impl<'a> Picture<'a> {
 ///
 /// Ports `TPXPictureValidator`, with the matching engine taken verbatim from
 /// `tvalidat.cpp`. The streaming machinery is dropped (deviation D12). Where the
-/// original copies the input into a fixed 256-byte stack buffer, rstv lets the
+/// original copies the input into a fixed 256-byte stack buffer, tvision-rs lets the
 /// backing `String` grow instead (real inputs are length-bounded by the field).
 /// No null-mask guard is needed: `pic` is always a (possibly empty) `String`,
 /// and an empty or malformed mask yields the same `Syntax`/`Empty` results.
@@ -942,7 +942,7 @@ impl Validator for PXPictureValidator {
     }
 }
 
-// ── RegexValidator (rstv extension) ─────────────────────────────────────────
+// ── RegexValidator (tvision-rs extension) ─────────────────────────────────────────
 
 /// Error returned when compiling a [`RegexValidator`] pattern.
 ///
@@ -959,7 +959,7 @@ impl std::fmt::Display for RegexError {
 
 impl std::error::Error for RegexError {}
 
-/// rstv-original **extension** (NOT a Turbo Vision port): a [`Validator`]
+/// tvision-rs-original **extension** (NOT a Turbo Vision port): a [`Validator`]
 /// driven by a regular expression, giving the same two-phase behavior as
 /// [`PXPictureValidator`] — `is_valid` = the input fully matches the pattern;
 /// `is_valid_input` = the input is still a *prefix of some complete match*
@@ -1577,7 +1577,7 @@ mod tests {
         assert!(!grp.is_valid("12a")); // 'a' not a digit → error
     }
 
-    // ── RegexValidator (rstv extension) ──────────────────────────────────────
+    // ── RegexValidator (tvision-rs extension) ──────────────────────────────────────
     //
     // Golden vectors verified against the working spike implementation.
     // If a test disagrees with its comment, the implementation is wrong — do

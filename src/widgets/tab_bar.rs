@@ -1,5 +1,5 @@
 //! A single-row tab selector: corner-cap active tab (`┌Label┐`), ←/→/hotkey/click
-//! selection. An rstv-original widget — no Turbo Vision ancestor for the tab idiom
+//! selection. An tvision-rs-original widget — no Turbo Vision ancestor for the tab idiom
 //! — but **cluster-shaped**: it follows the `TCluster`/`TRadioButtons` contract
 //! (single selection, `~X~` hotkeys, `find_sel` hit-test, press-on-release,
 //! `value`/`set_value` transfer), the way the C++ color dialog's
@@ -9,7 +9,7 @@
 //! [`PageStack`](crate::widgets::PageStack) can react (mirrors `ScrollBar`).
 //!
 //! # Turbo Vision heritage
-//! None — the tabbed idiom is an rstv extension; the selection mechanics mirror
+//! None — the tabbed idiom is an tvision-rs extension; the selection mechanics mirror
 //! `TCluster`.
 
 use crate::capture::TrackMask;

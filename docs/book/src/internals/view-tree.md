@@ -2,28 +2,28 @@
 
 Everything you see on screen is a node in one tree. The desktop is a node; each
 window on it is a node; the frame, scrollbars, buttons and input lines inside a
-window are nodes. rstv calls the core abstraction the `View` trait and the
+window are nodes. tvision-rs calls the core abstraction the `View` trait and the
 container type `Group`, keeping the tree model but rendering it in idiomatic Rust.
 
 ## A trait, not a base class
 
-Every widget in rstv is defined by two things working together:
+Every widget in tvision-rs is defined by two things working together:
 
-- **[`View`](../api/rstv/view/trait.View.html)** — the *behaviour*. It is a
+- **[`View`](../api/tvision-rs/view/trait.View.html)** — the *behaviour*. It is a
   trait whose required methods cover everything the framework calls:
-  [`draw`](../api/rstv/view/trait.View.html#method.draw)
-  paints the view, [`handle_event`](../api/rstv/view/trait.View.html#method.handle_event)
+  [`draw`](../api/tvision-rs/view/trait.View.html#method.draw)
+  paints the view, [`handle_event`](../api/tvision-rs/view/trait.View.html#method.handle_event)
   reacts to input, and a handful of others (`set_state`, `valid`, `value` /
   `set_value`) cover focus, validation and data transfer.
-- **[`ViewState`](../api/rstv/view/struct.ViewState.html)** — the *data*. A
+- **[`ViewState`](../api/tvision-rs/view/struct.ViewState.html)** — the *data*. A
   struct that every widget embeds (conventionally a field named `state`),
   holding `origin`, `size`, `cursor`, the state / option / grow / drag flags,
   the event mask and the help context.
 
 Every widget **embeds** a `ViewState` and **implements** `View`. Only three
 methods are required —
-[`state`](../api/rstv/view/trait.View.html#method.state),
-[`state_mut`](../api/rstv/view/trait.View.html#method.state_mut), and `draw`;
+[`state`](../api/tvision-rs/view/trait.View.html#method.state),
+[`state_mut`](../api/tvision-rs/view/trait.View.html#method.state_mut), and `draw`;
 the rest have sensible defaults. That is the whole composition recipe, and the
 [Writing your own View](custom-view.md) chapter walks it end to end.
 
@@ -40,22 +40,22 @@ arithmetic is needed.
 
 Coming from C++ Turbo Vision, the flag word families map like this:
 
-| C++ flag word | rstv struct |
+| C++ flag word | tvision-rs struct |
 | ------------- | -------------- |
-| `sfXxx` (state)     | [`State`](../api/rstv/view/struct.State.html)     |
-| `ofXxx` (options)   | [`Options`](../api/rstv/view/struct.Options.html) |
-| `gfXxx` (grow mode) | [`GrowMode`](../api/rstv/view/struct.GrowMode.html) |
-| `dmXxx` (drag mode) | [`DragMode`](../api/rstv/view/struct.DragMode.html) |
+| `sfXxx` (state)     | [`State`](../api/tvision-rs/view/struct.State.html)     |
+| `ofXxx` (options)   | [`Options`](../api/tvision-rs/view/struct.Options.html) |
+| `gfXxx` (grow mode) | [`GrowMode`](../api/tvision-rs/view/struct.GrowMode.html) |
+| `dmXxx` (drag mode) | [`DragMode`](../api/tvision-rs/view/struct.DragMode.html) |
 
 The propagating subset of state flags a parent flips on a child during focus and
-activation is the [`StateFlag`](../api/rstv/view/enum.StateFlag.html) enum
+activation is the [`StateFlag`](../api/tvision-rs/view/enum.StateFlag.html) enum
 (`Active`, `Selected`, `Focused`, `Dragging`).
 
 ## Geometry
 
-A view's rectangle is two corners: [`Rect`](../api/rstv/view/struct.Rect.html)
+A view's rectangle is two corners: [`Rect`](../api/tvision-rs/view/struct.Rect.html)
 holds a top-left `a` (inclusive) and bottom-right `b` (exclusive), each a
-[`Point`](../api/rstv/view/struct.Point.html). Coordinates are `i32` — signed,
+[`Point`](../api/tvision-rs/view/struct.Point.html). Coordinates are `i32` — signed,
 because origins go negative when a view scrolls offscreen, and faithful to
 magiblot's widening of the historical `short` to `int`. `Rect` carries the
 familiar chained mutators (`grow`, `intersect`, plus `r#move` and `r#union`,
@@ -66,7 +66,7 @@ the absolute position as it descends — there is no up-pointer to walk.
 
 ## Groups are the branch nodes
 
-A [`Group`](../api/rstv/view/struct.Group.html) is a `View` that owns child
+A [`Group`](../api/tvision-rs/view/struct.Group.html) is a `View` that owns child
 views — the port of `TGroup`, and the node type of the tree. The desktop, every
 window and every dialog are groups. A group:
 
@@ -78,11 +78,11 @@ window and every dialog are groups. A group:
 - **routes events** to them and tracks which child is *current* (focused).
 
 > **Turbo Vision heritage:** `TGroup` stored children in a circular `next`/`prev`
-> ring with a per-child `owner` back-pointer. rstv replaces this with a plain
+> ring with a per-child `owner` back-pointer. tvision-rs replaces this with a plain
 > `Vec` and handle-based addressing — children have no up-pointer.
 
 Because a child has no pointer back to its parent, cross-references use a
-**[`ViewId`](../api/rstv/view/struct.ViewId.html) handle** instead of a raw
+**[`ViewId`](../api/tvision-rs/view/struct.ViewId.html) handle** instead of a raw
 pointer. Each view's id is minted when it is inserted into a
 group and stamped into its own `ViewState`; the framework resolves a handle back
 to a view by walking down from the group. This is also how a window addresses one

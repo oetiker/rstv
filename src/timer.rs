@@ -30,7 +30,7 @@
 //! Ports `TTimerQueue` (`ttimerqu.cpp`, `system.h`) and its time source
 //! `THardwareInfo::getTickCountMs`. The original marked each timer with a
 //! per-invocation collect-id so a callback could mutate the list mid-iteration,
-//! and stored the clock inside the queue; rstv replaces the callback with a
+//! and stored the clock inside the queue; tvision-rs replaces the callback with a
 //! returned id list and injects the clock from the event loop (deviations D9 and
 //! D11).
 
@@ -152,7 +152,7 @@ impl Clock for std::rc::Rc<ManualClock> {
 ///
 /// # Turbo Vision heritage
 ///
-/// Faithful to `TTimerId` (`system.h`), which was a raw `TTimer*`; rstv uses an
+/// Faithful to `TTimerId` (`system.h`), which was a raw `TTimer*`; tvision-rs uses an
 /// opaque integer handle instead (no pointer arithmetic, and `u64` never
 /// realistically exhausts).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -167,7 +167,7 @@ struct TimerEntry {
     /// Absolute ms when this timer next fires.
     expires_at: u64,
     /// `None` = one-shot; `Some(ms)` = periodic with this period. (The original
-    /// used a signed sentinel — negative for one-shot — where rstv uses `Option`.)
+    /// used a signed sentinel — negative for one-shot — where tvision-rs uses `Option`.)
     period_ms: Option<u64>,
 }
 

@@ -14,7 +14,7 @@
 
 use std::{env, io};
 
-use rstv::{
+use tvision_rs::{
     Button, ButtonFlags, ButtonRowAlign, CD_NORMAL, ChDirDialog, CheckBoxes, Color, ColorPicker,
     Command, Constraints, Context, CrosstermBackend, Desktop, Dialog, EditWindow, Event,
     FD_OPEN_BUTTON, FileDialog, HistoryWindow, InputLine, Key, KeyEvent, Label, ListBox, Memo,
@@ -496,7 +496,7 @@ fn editor() -> Box<dyn View> {
     let path = std::env::temp_dir().join("rstv_gallery_sample.txt");
     let _ = std::fs::write(
         &path,
-        "fn main() {\n    println!(\"Hello, rstv!\");\n}\n\n// An editor window with\n// scroll bars and a line:col indicator.\n",
+        "fn main() {\n    println!(\"Hello, tvision-rs!\");\n}\n\n// An editor window with\n// scroll bars and a line:col indicator.\n",
     );
     let win = EditWindow::new(Rect::new(1, 0, 71, 22), Some(path), 1);
     Box::new(win)
@@ -548,7 +548,7 @@ impl View for ListBoxShowcase {
                     ],
                     ctx,
                 );
-                rstv::widgets::list_viewer::update_steps(lb, ctx);
+                tvision_rs::widgets::list_viewer::update_steps(lb, ctx);
             }
         }
         self.dialog.handle_event(ev, ctx);

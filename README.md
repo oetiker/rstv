@@ -1,6 +1,6 @@
 <div align="center">
 
-# rstv
+# tvision-rs
 
 **Turbo Vision, reborn in idiomatic Rust.**
 
@@ -9,19 +9,19 @@ the modern C++ incarnation of Borland's **Turbo Vision** — with overlapping
 windows, pull-down menus, dialogs, a status line, and the whole DOS-era widget
 set, running in any modern terminal.
 
-![rstv demo: the tvdemo example — menus, About dialog, a calculator driven 7×6=42,
+![tvision-rs demo: the tvdemo example — menus, About dialog, a calculator driven 7×6=42,
 a window drag, a truecolor color picker, a splitter grid, and cascaded windows](docs/demo/tvdemo.webp)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Guide](https://img.shields.io/badge/docs-guide-success.svg)](https://oetiker.github.io/rstv/)
-[![API](https://img.shields.io/badge/docs-API-informational.svg)](https://docs.rs/rstv)
+[![Guide](https://img.shields.io/badge/docs-guide-success.svg)](https://oetiker.github.io/tvision-rs/)
+[![API](https://img.shields.io/badge/docs-API-informational.svg)](https://docs.rs/tvision-rs)
 
 </div>
 
 ## What is it?
 
 If you ever drove a DOS-era dialog with overlapping windows, a top menu bar and a
-bottom status line, you already know what an app built with rstv looks and feels
+bottom status line, you already know what an app built with tvision-rs looks and feels
 like. The goal is a framework a Turbo Vision veteran recognises on sight — but
 that is *native Rust*: no inheritance, no raw pointers, no preprocessor.
 
@@ -51,7 +51,7 @@ becomes the `tv::` namespace — `TButton` → `tv::Button`, `TDialog` → `tv::
 
 ```toml
 [dependencies]
-tv = { package = "rstv", version = "0.1" }
+tv = { package = "tvision-rs", version = "0.1" }
 ```
 
 ```rust
@@ -67,16 +67,19 @@ dialog.insert_child(Box::new(Button::new(
 ```
 
 See [`examples/hello.rs`](examples/hello.rs) for a complete, runnable program, and
-the [Getting Started guide](https://oetiker.github.io/rstv/) for a
+the [Getting Started guide](https://oetiker.github.io/tvision-rs/) for a
 walk-through.
 
 ## Documentation
 
-- **[Developer Guide](https://oetiker.github.io/rstv/)** — the narrative you read
+- **[Developer Guide](https://oetiker.github.io/tvision-rs/)** — the narrative you read
   to learn: getting started, building apps, how it works, and the widget gallery
   with live screenshots.
-- **[API reference](https://docs.rs/rstv)** — the rustdoc (also bundled into the
+- **[API reference](https://docs.rs/tvision-rs)** — the rustdoc (also bundled into the
   guide site at `/api/` under each version).
+- **[`docs/` folder](docs/)** — the guide's Markdown sources, the C++→Rust porting
+  reference, and the cross-cutting design notes, as raw `.md` — convenient to read
+  on GitHub and friendlier than rendered HTML for tools and LLMs ingesting the docs.
 
 Both layers read as one site; every code snippet is pulled from compiled examples
 and verified in CI, so the docs never drift.
@@ -93,7 +96,7 @@ drives the snapshot tests).
 
 ## Heritage & license
 
-rstv is licensed under the [MIT License](LICENSE). It carries forward the upstream
+tvision-rs is licensed under the [MIT License](LICENSE). It carries forward the upstream
 terms of the projects it ports and vendors — Turbo Vision (public domain,
 Borland), magiblot/tvision (MIT), and ratatui (MIT) — recorded in
 [`NOTICE`](NOTICE).

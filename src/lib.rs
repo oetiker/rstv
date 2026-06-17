@@ -1,6 +1,6 @@
-//! # rstv — a text-user-interface framework for Rust
+//! # tvision-rs — a text-user-interface framework for Rust
 //!
-//! rstv is an idiomatic Rust port of [magiblot/tvision](https://github.com/magiblot/tvision),
+//! tvision-rs is an idiomatic Rust port of [magiblot/tvision](https://github.com/magiblot/tvision),
 //! a modern revival of Turbo Vision. It gives you the classic Turbo Vision
 //! experience — overlapping windows, modal dialogs, menus, a status line,
 //! validated input fields, scrollers and list boxes — built on a retained view
@@ -15,16 +15,27 @@
 //!
 //! ```toml
 //! # Cargo.toml
-//! tv = { package = "rstv", version = "0.1" }
+//! tv = { package = "tvision-rs", version = "0.1" }
 //! ```
 //!
 //! ```
-//! # use rstv as tv;
+//! # use tvision_rs as tv;
 //! let _r = tv::Rect::new(0, 0, 80, 25);
 //! ```
 //!
 //! Public types are therefore re-exported at the crate root below, even though
 //! they live in topical modules internally.
+//!
+//! ## Documentation
+//!
+//! - **Guide** (narrative, with live terminal screenshots): the [developer
+//!   guide](https://oetiker.github.io/tvision-rs/) walks through getting
+//!   started, building apps, the internals, and a widget gallery.
+//! - **Markdown sources & design notes**: the [`docs/` folder in the
+//!   repository](https://github.com/oetiker/tvision-rs/tree/main/docs) holds the
+//!   guide's Markdown sources, the C++→Rust porting reference, and the
+//!   cross-cutting design notes — raw `.md`, which is convenient to read directly
+//!   (and friendlier than rendered HTML for tools and LLMs ingesting the docs).
 //!
 //! ## Tour of the modules
 //!
@@ -49,14 +60,14 @@
 //!
 //! # Turbo Vision heritage
 //!
-//! rstv ports Borland's Turbo Vision as modernized by magiblot/tvision (a C++
+//! tvision-rs ports Borland's Turbo Vision as modernized by magiblot/tvision (a C++
 //! codebase). The pervasive translation choices — inheritance becomes the
 //! [`View`] trait plus [`ViewState`] composition, raw pointers become [`ViewId`]
 //! handles, flag words become structs of bools, and the palette becomes a
 //! [`Theme`] keyed by [`Role`] — are summarized in the project's guide.
 
-// Lets proc-macro-generated `::rstv::Type` paths resolve inside this crate.
-extern crate self as rstv;
+// Lets proc-macro-generated `::tvision_rs::Type` paths resolve inside this crate.
+extern crate self as tvision_rs;
 
 pub mod app;
 pub mod backend;
@@ -110,11 +121,11 @@ pub use keymap::{KeyStroke, Keymap, Resolve};
 pub use menu::{
     Menu, MenuBar, MenuBox, MenuBuilder, MenuItem, MenuView, MenuViewState, alt, popup_menu,
 };
-pub use rstv_macros::delegate;
 pub use screen::{Buffer, Cell, DrawBuffer};
 pub use status::{HelpCtxRange, StatusColors, StatusDef, StatusItem, StatusLine};
 pub use theme::{Role, Theme};
 pub use timer::{Clock, ManualClock, SystemClock, TimerId, TimerQueue};
+pub use tvision_rs_macros::delegate;
 pub use validate::{
     FilterValidator, LookupValidator, PXPictureValidator, RangeValidator, RegexError,
     RegexValidator, StringLookupValidator, Validator,

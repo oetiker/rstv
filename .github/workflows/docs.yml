@@ -7,7 +7,7 @@ on:
       - 'src/**'
       - 'docs/**'
       - 'xtask/**'
-      - 'rstv-macros/**'
+      - 'tvision-rs-macros/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/docs.yml'
@@ -26,7 +26,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  PAGES_URL: "https://oetiker.github.io/rstv"
+  PAGES_URL: "https://oetiker.github.io/tvision-rs"
 
 jobs:
   build:
@@ -39,11 +39,11 @@ jobs:
       - name: Install tmux (for screenshots)
         run: sudo apt-get update && sudo apt-get install -y tmux
 
-      # Host this build under /rstv/dev/ instead of /rstv/.
-      - name: Rebase doc URLs to /rstv/dev/
+      # Host this build under /tvision-rs/dev/ instead of /tvision-rs/.
+      - name: Rebase doc URLs to /tvision-rs/dev/
         run: |
-          sed -i 's|^site-url = "/rstv/"|site-url = "/rstv/dev/"|' docs/book/book.toml
-          sed -i 's|href="/rstv/|href="/rstv/dev/|g' docs/book/theme/rustdoc-header.html
+          sed -i 's|^site-url = "/tvision-rs/"|site-url = "/tvision-rs/dev/"|' docs/book/book.toml
+          sed -i 's|href="/tvision-rs/|href="/tvision-rs/dev/|g' docs/book/theme/rustdoc-header.html
           grep -n 'site-url' docs/book/book.toml
           grep -n 'href=' docs/book/theme/rustdoc-header.html
 
@@ -88,25 +88,25 @@ jobs:
 
       - name: Replace dev docs
         run: |
-          rm -rf site/rstv/dev
-          mkdir -p site/rstv/dev
-          cp -r new-docs/* site/rstv/dev/
+          rm -rf site/tvision-rs/dev
+          mkdir -p site/tvision-rs/dev
+          cp -r new-docs/* site/tvision-rs/dev/
 
       - name: Update versions and redirect
         run: |
           chmod +x .github/scripts/manage-doc-versions.sh
-          .github/scripts/manage-doc-versions.sh site/rstv cull
-          .github/scripts/manage-doc-versions.sh site/rstv update-json
-          .github/scripts/manage-doc-versions.sh site/rstv generate-redirect
+          .github/scripts/manage-doc-versions.sh site/tvision-rs cull
+          .github/scripts/manage-doc-versions.sh site/tvision-rs update-json
+          .github/scripts/manage-doc-versions.sh site/tvision-rs generate-redirect
 
       - name: Show final site structure
         run: |
-          ls -la site/rstv/
-          echo "versions.json:"; cat site/rstv/versions.json
+          ls -la site/tvision-rs/
+          echo "versions.json:"; cat site/tvision-rs/versions.json
 
       - uses: actions/configure-pages@v4
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site/rstv
+          path: site/tvision-rs
       - id: deployment
         uses: actions/deploy-pages@v4

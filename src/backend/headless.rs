@@ -9,7 +9,7 @@
 //! needing to reach through the `Box<dyn Backend>` that the `Renderer` owns.
 //!
 //! # Turbo Vision heritage
-//! An rstv addition with no Turbo Vision counterpart: it stands in for the
+//! An tvision-rs addition with no Turbo Vision counterpart: it stands in for the
 //! platform terminal driver so the snapshot test suite can drive the framework
 //! synchronously, with injected input and an inspectable screen (deviation D11).
 
@@ -33,7 +33,7 @@ use crate::screen::{Buffer, Cell};
 /// The handle outlives that move and lets tests inspect or drive the backend:
 ///
 /// ```
-/// # use rstv::{HeadlessBackend, Renderer};
+/// # use tvision_rs::{HeadlessBackend, Renderer};
 /// let (backend, screen) = HeadlessBackend::new(80, 25);
 /// let mut renderer = Renderer::new(Box::new(backend));
 /// // … render frames …

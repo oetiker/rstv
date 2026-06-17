@@ -36,10 +36,10 @@ pub fn target_dir() -> PathBuf {
 /// rustdoc from every crate that has ever shared the target dir (a documented
 /// dev-machine gotcha), and `cargo doc --no-deps` only refreshes our crate
 /// without evicting stale siblings — so building into an isolated dir is what
-/// guarantees `api/` holds only the `rstv` docs. In CI (pristine target)
+/// guarantees `api/` holds only the `tvision-rs` docs. In CI (pristine target)
 /// this is purely defensive.
 pub fn rustdoc_target_dir() -> PathBuf {
-    target_dir().join("rstv-rustdoc")
+    target_dir().join("tvision-rs-rustdoc")
 }
 
 /// rustdoc HTML output root: `<rustdoc-target>/doc`.

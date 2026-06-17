@@ -2,20 +2,20 @@
 
 A **dialog** is a modal window: it appears on top of everything, captures input
 until the user dismisses it, and returns a single answer — which button closed
-it. [`Dialog`](../api/rstv/dialog/struct.Dialog.html) embeds a
-[`Window`](../api/rstv/window/struct.Window.html) and delegates to it, with
+it. [`Dialog`](../api/tvision-rs/dialog/struct.Dialog.html) embeds a
+[`Window`](../api/tvision-rs/window/struct.Window.html) and delegates to it, with
 dialog-specific behaviour layered on: `Esc` cancels, `Enter` accepts the default
 button, and the frame carries only the move and close affordances — no grow, no
-zoom *(the rstv equivalent of C++ `TDialog`)*.
+zoom *(the tvision-rs equivalent of C++ `TDialog`)*.
 
 ## Building a dialog
 
 Construct the dialog with a rectangle and an optional title, then populate it
 with child views — buttons, input lines, checkboxes, labels — via
-[`insert_child`](../api/rstv/dialog/struct.Dialog.html#method.insert_child):
+[`insert_child`](../api/tvision-rs/dialog/struct.Dialog.html#method.insert_child):
 
 ```rust
-# use rstv as tv;
+# use tvision_rs as tv;
 # use tv::{Command, Dialog, Rect};
 # use tv::widgets::{Button, ButtonFlags, InputLine};
 let mut dialog = Dialog::new(Rect::new(0, 0, 40, 11), Some("Sign in".into()));
@@ -34,8 +34,8 @@ dialog.insert_child(Box::new(Button::new(
 # let _ = name;
 ```
 
-`InputLine::new` takes a validator and a [`LimitMode`](../api/rstv/widgets/enum.LimitMode.html)
-too; [`with_limit`](../api/rstv/widgets/struct.InputLine.html#method.with_limit) is
+`InputLine::new` takes a validator and a [`LimitMode`](../api/tvision-rs/widgets/enum.LimitMode.html)
+too; [`with_limit`](../api/tvision-rs/widgets/struct.InputLine.html#method.with_limit) is
 the no-validator, byte-limit shortcut. `ButtonFlags` is a struct of named bools,
 so the default button is `ButtonFlags { default: true, .. }`.
 
@@ -53,13 +53,13 @@ The runnable source is the `dialog` entry in the [widget gallery](../gallery.md)
 ## Running it modally
 
 You do not insert a dialog into the view tree yourself. You hand it to
-[`Program::exec_view`](../api/rstv/app/struct.Program.html#method.exec_view).
+[`Program::exec_view`](../api/tvision-rs/app/struct.Program.html#method.exec_view).
 It inserts the dialog at the top of the tree, marks it modal, gives it focus,
 and spins the **same** event loop until the dialog ends itself — then removes it
 and hands back the closing command:
 
 ```rust
-# use rstv as tv;
+# use tvision_rs as tv;
 # use tv::{Command, Dialog};
 # fn _demo(program: &mut tv::Program, dialog: Dialog) {
 match program.exec_view(Box::new(dialog)) {
@@ -70,7 +70,7 @@ match program.exec_view(Box::new(dialog)) {
 # }
 ```
 
-There is no separate "modal loop." rstv runs a single event loop plus a
+There is no separate "modal loop." tvision-rs runs a single event loop plus a
 **capture stack**: `exec_view` pushes the dialog as the capture target, and the
 loop drives it until the dialog closes itself (see
 [Modal execView → one loop + capture](../port/modal.md) and
@@ -80,7 +80,7 @@ it *cannot* re-enter the loop from inside `handle_event` — which is exactly wh
 keeps the single loop sound.
 
 > **Turbo Vision heritage:** in C++ each `TGroup::execView` spun a fresh nested
-> `getEvent` loop. rstv collapses all modal nesting into one loop + capture
+> `getEvent` loop. tvision-rs collapses all modal nesting into one loop + capture
 > stack, eliminating the reentrancy entirely.
 
 > A modal must have a path to closing itself, or it hangs. `Dialog` provides one
@@ -88,25 +88,25 @@ keeps the single loop sound.
 > If you build a bare modal with neither, nothing will end it.
 
 The framework ships ready-made modals built on this path —
-[`message_box`](../api/rstv/app/struct.Program.html#method.message_box) for a
+[`message_box`](../api/tvision-rs/app/struct.Program.html#method.message_box) for a
 titled alert with Yes/No/OK/Cancel buttons, and
-[`input_box`](../api/rstv/app/struct.Program.html#method.input_box) for a
+[`input_box`](../api/tvision-rs/app/struct.Program.html#method.input_box) for a
 single labelled text field. Both build a `Dialog`, run it through `exec_view`,
 and return the user's answer.
 
 ## Moving data in and out
 
 Dialog data flows through a **typed value currency** —
-[`FieldValue`](../api/rstv/data/enum.FieldValue.html) — passed through the
+[`FieldValue`](../api/tvision-rs/data/enum.FieldValue.html) — passed through the
 `value` / `set_value` pair on the
-[`View`](../api/rstv/view/trait.View.html) trait. A text field reads and
+[`View`](../api/tvision-rs/view/trait.View.html) trait. A text field reads and
 writes `FieldValue::Text`; an integer control uses `FieldValue::Int`. The enum
 **grows as controls need it** *(this replaces the C++ `getData`/`setData` pair,
 which moved data through an untyped `memcpy` record)*.
 
 Two operations bracket a dialog:
 
-| Turbo Vision | rstv | Direction |
+| Turbo Vision | tvision-rs | Direction |
 | ------------ | ------- | --------- |
 | `setData` | scatter — `set_value` on each field | seed the dialog before showing it |
 | `getData` | gather — `value()` on each field | read results after `OK` |
@@ -114,7 +114,7 @@ Two operations bracket a dialog:
 For a single-field dialog you call `set_value`/`value` on that one field
 directly — which is exactly what `input_box` does internally to seed and read
 its lone input line. For a multi-field dialog, the
-[`Group`](../api/rstv/view/struct.Group.html) behind the dialog walks its
+[`Group`](../api/tvision-rs/view/struct.Group.html) behind the dialog walks its
 children in order: `gather_data` collects a `Vec<Option<FieldValue>>` (one slot
 per child, `None` where a child has no transferable value), and `scatter_data`
 distributes a matching vector back in the same child order. Seed before

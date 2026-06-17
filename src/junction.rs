@@ -3,7 +3,7 @@
 //! glyph-selector functions that map an (edge, bar-weight, stem-weight) tuple to
 //! the matching box character in [`Glyphs`].
 //!
-//! This is the rstv-local equivalent of Turbo Vision's `frameChars[mask]` table
+//! This is the tvision-rs-local equivalent of Turbo Vision's `frameChars[mask]` table
 //! (`framelin.cpp`): a small finite map with no view dependencies, so it is
 //! exhaustively unit-testable. The owning [`Window`](crate::window::Window)
 //! pushes [`JunctionMark`]s down to its [`Frame`](crate::frame::Frame), which

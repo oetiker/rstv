@@ -1,16 +1,16 @@
-# rstv — session handover (forward-looking)
+# tvision-rs — session handover (forward-looking)
 
 > What the **next** session needs: current state, what's next, and the
 > non-obvious gotchas. The per-session implementation narrative + the git-commit
 > changelog live in
-> [`docs/IMPLEMENTATION-LOG.md`](file:///home/oetiker/checkouts/rstv/docs/IMPLEMENTATION-LOG.md).
-> Read this, then [CLAUDE.md](file:///home/oetiker/checkouts/rstv/CLAUDE.md)
+> [`docs/IMPLEMENTATION-LOG.md`](file:///home/oetiker/checkouts/tvision-rs/docs/IMPLEMENTATION-LOG.md).
+> Read this, then [CLAUDE.md](file:///home/oetiker/checkouts/tvision-rs/CLAUDE.md)
 > (orientation / locked decisions / cross-cutting seams), then start.
 >
 > **Direction:** the 92-class port is ✅ complete, the post-port backlog
 > (`docs/BACKLOG.md`, Phases A/B/C) is exhausted, and the developer docs (Docs
 > Phases 1–3) are ✅ done. The work now is **post-port UI polish + targeted
-> rstv-original extensions** (e.g. the `Splitter`; an interactive-resize pass; a
+> tvision-rs-original extensions** (e.g. the `Splitter`; an interactive-resize pass; a
 > dialog design guide + a `TabBar`/`PageStack` widget pair + a color-picker
 > rebuild). When something lands: add an IMPLEMENTATION-LOG section and update
 > this file.
@@ -22,7 +22,7 @@ tests green; clippy `--all-targets` + fmt clean; examples build.** The porting +
 docs phases are behind us; work now proceeds on small feature/UX branches off
 `main` (branch-first, fast-forward merge, two-stage review per task).
 
-Most recently landed (rstv-original UI; **full narrative in IMPLEMENTATION-LOG**):
+Most recently landed (tvision-rs-original UI; **full narrative in IMPLEMENTATION-LOG**):
 the `Splitter` widget + interactive-resize pass (`Deferred::SplitterDivider`
 broker + target-cycling `KeyboardResizeCapture`), then the **dialog layout guide +
 `TabBar` + `PageStack` + color-picker rebuild** (below).
@@ -66,10 +66,10 @@ from this effort — see IMPLEMENTATION-LOG). **`docs/demo/tvdemo.webp` is NOT
 regenerated** (the movie covers the picker scene but `cargo xtask demo` has no
 per-scene targeting — a full regen is a separate task).
 
-## Previous state (2026-06-13, Docs Phase 3 landed + crate renamed to `rstv`)
+## Previous state (2026-06-13, Docs Phase 3 landed + crate renamed to `tvision-rs`)
 
-**The crate is now `rstv`** (was `tvision`); the proc-macro crate is `rstv-macros`;
-the `tv::` house-style alias is unchanged (`tv = { package = "rstv" }`). See the
+**The crate is now `tvision-rs`** (was `tvision`); the proc-macro crate is `tvision-rs-macros`;
+the `tv::` house-style alias is unchanged (`tv = { package = "tvision-rs" }`). See the
 rename entry at the top of IMPLEMENTATION-LOG. Upstream `magiblot/tvision` and the
 C++ source paths (`source/tvision`, `scratch/tvision-spec`) are NOT renamed.
 
@@ -79,18 +79,18 @@ clean (link check + 0 leftover include directives).**
 
 Docs Phase 3 made the guide self-verifying (full IMPLEMENTATION-LOG section at
 top). The keystone is a **`cargo xtask test`** gate: it runs `rustdoc --test`
-per chapter with `--extern rstv=<rlib> -L deps` (NOT mdBook's `book.test`,
-which can only pass `-L` and so can never resolve `use rstv::…`). Guide code
+per chapter with `--extern tvision-rs=<rlib> -L deps` (NOT mdBook's `book.test`,
+which can only pass `-L` and so can never resolve `use tvision_rs::…`). Guide code
 blocks were triaged — user-facing snippets converted to compiling doctests via a
-hidden `# use rstv as tv;` + uncalled `# fn _demo(recv: &mut tv::Foo){…}`
+hidden `# use tvision_rs as tv;` + uncalled `# fn _demo(recv: &mut tv::Foo){…}`
 wrapper; genuinely-internal sketches kept `rust,ignore` with an explicit
 `// Illustrative sketch …` label. `docs.yml` now runs `cargo build --examples`,
-`cargo test --doc -p rstv`, and `cargo xtask test` before `cargo xtask docs`.
+`cargo test --doc -p tvision-rs`, and `cargo xtask test` before `cargo xtask docs`.
 
 **Phase-3 gotchas for the next editor:**
-- **Doctest convention:** in the book, the crate is `rstv`, NOT `tv`. Any new
-  ```` ```rust ```` guide block must add a hidden `# use rstv as tv;` (or
-  `extern`-free `# use rstv::…;`). For method calls on a live `Program`/
+- **Doctest convention:** in the book, the crate is `tvision-rs`, NOT `tv`. Any new
+  ```` ```rust ```` guide block must add a hidden `# use tvision_rs as tv;` (or
+  `extern`-free `# use tvision_rs::…;`). For method calls on a live `Program`/
   `Context`/view, wrap in a hidden uncalled `# fn _demo(recv: &mut tv::Foo){…}`.
   After editing, run `cargo xtask test` — it prints the real rustc error.
 - **Never silence unused-var warnings with visible `let _ = …` in teaching code**
@@ -150,7 +150,7 @@ quality pass** over both doc layers (on top of the Plan 1 tooling machine, merge
   never used Turbo Vision can read it — with all C++ confined to a concise
   `# Turbo Vision heritage` section per item; added **Guide cross-links** from
   all 22 modules into their narrative chapter.
-- **Project renamed to `rstv`** (branding only: crate stays `rstv`, namespace
+- **Project renamed to `tvision-rs`** (branding only: crate stays `tvision-rs`, namespace
   stays `tv::`, C++ origin stays "Turbo Vision").
 - **Guide IA:** `port/faithful.md` = philosophy+gateway; `reference/deviations.md`
   = the canonical "Differences from C++ Turbo Vision" (`#d1`..`#d15` anchors,
@@ -165,7 +165,7 @@ guide Parts II–V · `35b3aca` Part I + screenshot guard.
 
 **Tooling recap (Plan 1, `2b3656a`):** `cargo xtask docs` builds the mdBook guide
 *and* rustdoc into ONE Pages site (guide at root, rustdoc at `/api/`, Guide⇄API
-toggle, owned book↔api link checker, rustdoc into isolated `<target>/rstv-rustdoc`).
+toggle, owned book↔api link checker, rustdoc into isolated `<target>/tvision-rs-rustdoc`).
 Also `--serve` and `cargo xtask screens`. **Repo-owner action (still pending):**
 Settings → Pages → Source = "GitHub Actions" before `.github/workflows/docs.yml`
 can publish. Mermaid runtime JS is still a placeholder.
@@ -242,9 +242,9 @@ Remaining latent edge notes (not worth fixing now):
   invalidate_all. `libc` dep added. Two-stage reviewed.
 - **C7 ✅ (`8c9bf85` + `20871fd`)** — help-ctx refresh / OneOf status line.
   `View::get_help_ctx()` trait method (default: delegates to
-  `ViewState::get_help_ctx()`); forwarder in `rstv-macros/src/specs.rs`;
+  `ViewState::get_help_ctx()`); forwarder in `tvision-rs-macros/src/specs.rs`;
   `delegate_view` spy updated (27 methods). `Program::pump_once` idle arm wires
-  `TStatusLine::update()`: reads `captures.top_modal_view()` as rstv's
+  `TStatusLine::update()`: reads `captures.top_modal_view()` as tvision-rs's
   `TheTopView` equivalent, calls `v.get_help_ctx()`, then `sl.set_help_ctx(top_ctx)`
   (which is now idempotent — early-return guard mirrors C++'s `if(helpCtx!=h)`).
   OneOf status defs switch automatically when a modal dialog with a matching
@@ -373,13 +373,13 @@ committed:
   exhausted — Phase A+B+C all ✅).
 
 When editing the guide, follow the Phase-3 doctest convention in "Current state"
-(hidden `# use rstv as tv;` + `# fn _demo(recv){…}` wrapper; run
+(hidden `# use tvision_rs as tv;` + `# fn _demo(recv){…}` wrapper; run
 `cargo xtask test`).
 
 ### Verifying docs edits
 - Integrated tree, `CARGO_TARGET_DIR=/home/oetiker/scratch/cargo-target`.
 - `cargo xtask test` (guide doctests — prints the real rustc error), `cargo test
-  --doc -p rstv` (src doctests), `cargo build --examples`, then `cargo xtask
+  --doc -p tvision-rs` (src doctests), `cargo build --examples`, then `cargo xtask
   docs` (regenerates screenshots ≈40s deterministic; builds + link-checks).
 - After any `{{#rustdoc_include}}` edit, grep the built HTML for leftover
   directives (`grep -rl rustdoc_include docs/book/book` must be empty) — the link
@@ -427,7 +427,7 @@ C2/C9 dialogs should follow the same shape rather than inventing new seams.
   — a shared target dir makes their "clean" claims unreliable. ALWAYS
   re-verify on the integrated tree with the canonical
   `CARGO_TARGET_DIR=/home/oetiker/scratch/cargo-target`.
-- **Run `git merge` in `/home/oetiker/checkouts/rstv`**, never inside a
+- **Run `git merge` in `/home/oetiker/checkouts/tvision-rs`**, never inside a
   worktree — `cd <worktree> && git merge <branch>` merges the branch into
   itself ("Already up to date") and the gates then run on the wrong tree.
   (Bit this session repeatedly.)
@@ -470,6 +470,6 @@ C2/C9 dialogs should follow the same shape rather than inventing new seams.
   out-of-scope changes are a real failure mode (a B2 implementer modified
   the pump unprompted; review caught it and the proper redesign landed).
 - When you add a `View` trait method, add a matching forwarder to
-  `rstv-macros/src/specs.rs` (the `delegate_view` spy test catches
+  `tvision-rs-macros/src/specs.rs` (the `delegate_view` spy test catches
   existing methods, not brand-new defaulted ones). A new `Deferred` variant
   needs NO forwarder. Validator-trait methods are NOT `View` methods.

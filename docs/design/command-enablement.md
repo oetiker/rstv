@@ -30,7 +30,7 @@ transition** (`has`-guarded); `TProgram::idle` then broadcasts
 intersection: `disableCommands(s)` flags if `(cur & s)` is nonempty,
 `enableCommands(s)` if `(cur & s) != s`.
 
-## The old rstv mistake (the allowlist)
+## The old tvision-rs mistake (the allowlist)
 
 D1 made commands open strings, so "all 256 bits on" had no direct translation,
 and the original port enumerated an *enabled* allowlist (~35 framework

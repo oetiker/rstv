@@ -8,7 +8,7 @@ group (`lock` / `unlock`, `ofBuffered`) all exist to repaint as little of the
 screen as possible. That is damage tracking, and it is the single most intricate
 part of the original framework.
 
-rstv drops all of it. The reasoning: in-memory work is
+tvision-rs drops all of it. The reasoning: in-memory work is
 free by 1991 standards, and the *only* expensive operation left is writing escape
 sequences to the terminal. So we split drawing into two layers with very
 different costs.
@@ -16,12 +16,12 @@ different costs.
 ## Two layers
 
 1. **In-memory redraw (cheap).** Every update cycle the whole view tree is
-   painted back-to-front into a [`Buffer`](../api/rstv/screen/struct.Buffer.html),
+   painted back-to-front into a [`Buffer`](../api/tvision-rs/screen/struct.Buffer.html),
    the in-memory screen grid. This is RAM only — microseconds, even for a full
    screen.
 2. **Terminal flush (diff-bounded).** The freshly-painted buffer is compared
    against the previous frame with
-   [`Buffer::diff`](../api/rstv/screen/struct.Buffer.html#method.diff), which
+   [`Buffer::diff`](../api/tvision-rs/screen/struct.Buffer.html#method.diff), which
    returns only the cells that changed. Just those cells are turned into escape
    sequences and sent to the terminal.
 
@@ -48,13 +48,13 @@ unnecessary.
 
 ## How a view paints
 
-Views never touch the [`Buffer`](../api/rstv/screen/struct.Buffer.html)
+Views never touch the [`Buffer`](../api/tvision-rs/screen/struct.Buffer.html)
 directly. They fill a scratch row — a
-[`DrawBuffer`](../api/rstv/screen/struct.DrawBuffer.html), the faithful
+[`DrawBuffer`](../api/tvision-rs/screen/struct.DrawBuffer.html), the faithful
 successor to `TDrawBuffer` — one display line at a time using
-[`Cell`](../api/rstv/screen/struct.Cell.html) values, then blit it into the
+[`Cell`](../api/tvision-rs/screen/struct.Cell.html) values, then blit it into the
 draw context. Each `Cell` carries its grapheme and a typed
-[`Style`](../api/rstv/color/struct.Style.html) (see
+[`Style`](../api/tvision-rs/color/struct.Style.html) (see
 [Palettes & glyphs → Theme/Role](theme.md)) instead of the packed attribute byte
 of the original.
 

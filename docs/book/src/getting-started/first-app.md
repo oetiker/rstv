@@ -21,9 +21,9 @@ hot-key, and `Alt-X` quits:
 
 ## Building the program
 
-An rstv app is assembled from three factory functions — one each for the
+An tvision-rs app is assembled from three factory functions — one each for the
 desktop, the status line, and the menu bar — passed to
-[`Program::new`](../api/rstv/app/struct.Program.html) at construction.
+[`Program::new`](../api/tvision-rs/app/struct.Program.html) at construction.
 *(They are the successors to C++ `TApplication`'s `initDeskTop` /
 `initStatusLine` / `initMenuBar` overrides.)*
 
@@ -39,7 +39,7 @@ it is selected.
 ## Entering the event loop
 
 `main` owns the terminal and runs the loop until a quit command ends it. The
-[`CrosstermBackend`](../api/rstv/backend/struct.CrosstermBackend.html) constructor
+[`CrosstermBackend`](../api/tvision-rs/backend/struct.CrosstermBackend.html) constructor
 takes over raw mode, the alternate screen, and mouse capture, and restores all
 of it on drop — even on a panic or a signal:
 
@@ -50,14 +50,14 @@ of it on drop — even on a panic or a signal:
 That is the whole entry point. The complete, runnable program — including the
 desktop/menu/status factories above and the command handler that opens editor
 windows — is
-[`examples/hello.rs`](https://github.com/oetiker/rstv/blob/main/examples/hello.rs).
+[`examples/hello.rs`](https://github.com/oetiker/tvision-rs/blob/main/examples/hello.rs).
 
 ## What's next
 
-- The pieces you just wired up — [`Program`](../api/rstv/app/struct.Program.html),
-  [`Desktop`](../api/rstv/desktop/struct.Desktop.html),
-  [`MenuBar`](../api/rstv/menu/menu_bar/struct.MenuBar.html),
-  [`StatusLine`](../api/rstv/status/status_line/struct.StatusLine.html) — are explained at a
+- The pieces you just wired up — [`Program`](../api/tvision-rs/app/struct.Program.html),
+  [`Desktop`](../api/tvision-rs/desktop/struct.Desktop.html),
+  [`MenuBar`](../api/tvision-rs/menu/menu_bar/struct.MenuBar.html),
+  [`StatusLine`](../api/tvision-rs/status/status_line/struct.StatusLine.html) — are explained at a
   higher level in [The application skeleton](skeleton.md).
 - To see how the loop, the views, and drawing actually fit together, read [How
   It Works](../internals/view-tree.md).

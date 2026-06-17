@@ -21,7 +21,7 @@
 //! Faithful port of the `TText` primitives (`ttext.h`, `ttext.cpp`). The original
 //! hand-decoded UTF-8 with a DFA and iterated per codepoint, appending combining
 //! marks onto the previous cell at draw time. Because Rust strings are already
-//! valid UTF-8 and `unicode-segmentation` yields grapheme clusters directly, rstv
+//! valid UTF-8 and `unicode-segmentation` yields grapheme clusters directly, tvision-rs
 //! drops the DFA and the append-combining-mark machinery and works one grapheme at
 //! a time (deviation D13) — which also clusters ZWJ emoji into one cell, where the
 //! per-codepoint model split them.
@@ -275,7 +275,7 @@ pub fn draw_str(
 ///
 /// Ports `TStringList` / `TStrListMaker` (`tstrlist.cpp`). The original classes
 /// exist entirely to serialize a compressed keyed-string table to/from a
-/// resource (`.res`) stream; rstv drops that streaming/persistence machinery
+/// resource (`.res`) stream; tvision-rs drops that streaming/persistence machinery
 /// (`TStrIndexRec`, the run-length index, the byte-length-prefixed blob, and
 /// `build`/`read`/`write`) and keeps only the observable contract — a keyed
 /// lookup of strings (deviation D12). The maker/list split, which existed only

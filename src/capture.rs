@@ -16,7 +16,7 @@
 //! Turbo Vision implements modality, view dragging, and a pressed button's
 //! mouse-tracking by spinning *nested* blocking event loops (`tgroup.cpp`,
 //! `tview.cpp`). Rust cannot nest a blocking loop that re-borrows the view tree,
-//! so rstv collapses all of them into one non-recursive event loop plus this LIFO
+//! so tvision-rs collapses all of them into one non-recursive event loop plus this LIFO
 //! capture stack (deviation D9). Handlers hold a [`ViewId`] rather than a view
 //! pointer (deviation D3).
 
@@ -202,7 +202,7 @@ impl CaptureHandler for MouseTrackCapture {
             // Broadcasts pass THROUGH to normal routing (like `ModalFrame`).
             // A broadcast is a synchronous notification, not a queued input
             // event — the original hold loop only ever consumed queued input, so
-            // it never saw a broadcast to discard. rstv delivers that notification
+            // it never saw a broadcast to discard. tvision-rs delivers that notification
             // as a queued `Event::Broadcast`, so to stay faithful the hold must let
             // it pass — otherwise a scrollbar-changed broadcast emitted by the very
             // bar being dragged (its own value update → redraw) is swallowed and

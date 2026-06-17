@@ -1,4 +1,4 @@
-//! rstv documentation build tool. Pure-cargo entry point: `cargo xtask <cmd>`.
+//! tvision-rs documentation build tool. Pure-cargo entry point: `cargo xtask <cmd>`.
 
 mod ansi_html;
 mod build;

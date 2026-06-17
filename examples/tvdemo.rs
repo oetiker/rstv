@@ -17,7 +17,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use rstv::{
+use tvision_rs::{
     Backend, Button, ButtonFlags, ButtonRowAlign, Color, ColorPicker, Command, Constraints,
     CrosstermBackend, Desktop, Dialog, DrawCtx, Event, Frame, Key, KeyEvent, KeyModifiers, Menu,
     MenuBar, Program, Rect, Role, ScrollBarOptions, Scroller, Splitter, StaticText, StatusDef,
@@ -225,7 +225,7 @@ impl View for PuzzleView {
 
     fn draw(&mut self, ctx: &mut DrawCtx) {
         // C++ cpPuzzlePalette "\x06\x07": getColor(1) → normal, getColor(2) →
-        // highlight — the same chain rstv exposes as ScrollerNormal/ScrollerSelected.
+        // highlight — the same chain tvision-rs exposes as ScrollerNormal/ScrollerSelected.
         let normal = ctx.style(Role::ScrollerNormal);
         let highlight = ctx.style(Role::ScrollerSelected);
 
@@ -258,7 +258,7 @@ impl View for PuzzleView {
         }
     }
 
-    fn handle_event(&mut self, ev: &mut Event, ctx: &mut rstv::Context) {
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut tvision_rs::Context) {
         // If solved: any key/mouse rescrambles.
         if self.solved {
             let triggered = matches!(
@@ -411,7 +411,7 @@ impl View for AsciiTable {
         self.st.set_cursor(self.cursor_x, self.cursor_y);
     }
 
-    fn handle_event(&mut self, ev: &mut Event, ctx: &mut rstv::Context) {
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut tvision_rs::Context) {
         let (sx, sy) = self.size();
         match ev {
             Event::MouseDown(me) => {
@@ -515,7 +515,7 @@ impl View for AsciiReport {
         ctx.put_str(0, 0, &s, color);
     }
 
-    fn handle_event(&mut self, ev: &mut Event, _ctx: &mut rstv::Context) {
+    fn handle_event(&mut self, ev: &mut Event, _ctx: &mut tvision_rs::Context) {
         if let Event::Broadcast { command, .. } = ev {
             // Updates are managed by AsciiWindow which sets ascii_char directly.
             let _ = command;
@@ -577,7 +577,7 @@ impl AsciiWindow {
 
 #[delegate(to = window)]
 impl View for AsciiWindow {
-    fn handle_event(&mut self, ev: &mut Event, ctx: &mut rstv::Context) {
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut tvision_rs::Context) {
         self.window.handle_event(ev, ctx);
 
         // Sync the report when a broadcast arrives.
@@ -774,7 +774,7 @@ impl View for CalendarView {
         }
     }
 
-    fn handle_event(&mut self, ev: &mut Event, _ctx: &mut rstv::Context) {
+    fn handle_event(&mut self, ev: &mut Event, _ctx: &mut tvision_rs::Context) {
         match ev {
             Event::MouseDown(me) => {
                 let pos = me.position;
@@ -1037,7 +1037,7 @@ impl View for CalcDisplay {
         ctx.put_str(i + 1, 0, &self.number, color);
     }
 
-    fn handle_event(&mut self, ev: &mut Event, _ctx: &mut rstv::Context) {
+    fn handle_event(&mut self, ev: &mut Event, _ctx: &mut tvision_rs::Context) {
         match ev {
             Event::KeyDown(ke) => match ke.key {
                 Key::Char(c) => {
@@ -1144,7 +1144,7 @@ impl Calculator {
 
 #[delegate(to = dialog)]
 impl View for Calculator {
-    fn handle_event(&mut self, ev: &mut Event, ctx: &mut rstv::Context) {
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut tvision_rs::Context) {
         self.dialog.handle_event(ev, ctx);
 
         // A button broadcast names the pressed button in `source`; map it to its
@@ -1195,7 +1195,7 @@ fn describe_event(ev: &Event) -> Option<String> {
 }
 
 /// The scrollable log interior — a [`Scroller`] over a `Vec<String>`, like the
-/// C++ `TTerminal` inside `TEventViewer` (rstv's `Terminal::as_any_mut`
+/// C++ `TTerminal` inside `TEventViewer` (tvision-rs's `Terminal::as_any_mut`
 /// delegates to its inner `Scroller`, so an owner can't reach the terminal to
 /// feed it; a purpose-built log view exposes `as_any_mut` → self instead).
 struct EventLog {
@@ -1213,7 +1213,7 @@ impl EventLog {
 
     /// Append a line, cap the backlog, refresh the scroll limits, and follow
     /// the tail so the newest line stays visible.
-    fn push(&mut self, line: String, ctx: &mut rstv::Context) {
+    fn push(&mut self, line: String, ctx: &mut tvision_rs::Context) {
         self.lines.push(line);
         const MAX_LINES: usize = 1000;
         if self.lines.len() > MAX_LINES {
@@ -1257,7 +1257,7 @@ impl View for EventLog {
 }
 
 /// A window that logs the events it receives. Faithful to `TEventViewer` in
-/// spirit; rstv's `run_app` exposes no global event hook, so this logs the
+/// spirit; tvision-rs's `run_app` exposes no global event hook, so this logs the
 /// events routed to the viewer itself (keystrokes while focused, clicks on it,
 /// posted commands) rather than every event in the program.
 struct EventViewer {
@@ -1290,7 +1290,7 @@ impl EventViewer {
 
 #[delegate(to = window)]
 impl View for EventViewer {
-    fn handle_event(&mut self, ev: &mut Event, ctx: &mut rstv::Context) {
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut tvision_rs::Context) {
         // Describe before forwarding — handling may consume (clear) the event.
         if let Some(desc) = describe_event(ev) {
             self.count += 1;
@@ -1352,7 +1352,7 @@ impl FileViewer {
 
 #[delegate(to = scroller)]
 impl View for FileViewer {
-    fn handle_event(&mut self, ev: &mut Event, ctx: &mut rstv::Context) {
+    fn handle_event(&mut self, ev: &mut Event, ctx: &mut tvision_rs::Context) {
         // Publish the content extent on the first event — the ctor has no Context.
         // Faithful to C++ TFileViewer::readFile calling setLimit(maxWidth, lineCount).
         if !self.limit_set {
@@ -1617,7 +1617,7 @@ impl TVDemo {
 }
 
 // ---------------------------------------------------------------------------
-// Color picker + Splitter (rstv widgets, opened as desktop windows)
+// Color picker + Splitter (tvision-rs widgets, opened as desktop windows)
 // ---------------------------------------------------------------------------
 
 /// A truecolor [`ColorPicker`] on its hue/saturation plane, in a dialog.

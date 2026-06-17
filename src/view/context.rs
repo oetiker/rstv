@@ -391,7 +391,7 @@ pub enum Deferred {
 
     // -- the payload-carrying-broadcast (file-focused) broker --
     /// **Resolve a file-focused broadcast's directory-entry payload** (the file
-    /// input line / info pane consumers). rstv's
+    /// input line / info pane consumers). tvision-rs's
     /// [`Event::Broadcast`](crate::event::Event::Broadcast) is payload-less
     /// (`source` is the resolvable subject, NOT a value carrier), so this is the
     /// resolve-by-source broker — the same shape as
@@ -913,7 +913,7 @@ impl<'a> DrawCtx<'a> {
 ///
 /// A synchronous return-valued query to a view by id, or a direct message to one,
 /// are **tree-owner** primitives (Group/Program over `find_mut`), *not* `Context`
-/// methods — a `Context` deliberately holds no tree to route through. rstv has no
+/// methods — a `Context` deliberately holds no tree to route through. tvision-rs has no
 /// consumer for a synchronous return-valued query (the close-the-form veto is
 /// realized differently), so these are intentionally absent here.
 ///

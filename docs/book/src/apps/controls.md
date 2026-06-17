@@ -9,7 +9,7 @@ drive them. The names follow the `tv::` house style with no `T` prefix
 
 ## Buttons
 
-A [`Button`](../api/rstv/widgets/struct.Button.html) is a clickable command
+A [`Button`](../api/tvision-rs/widgets/struct.Button.html) is a clickable command
 button — a boxed, shadowed title with an optional `~`-marked hotkey. Pressing it
 (mouse, `Alt`+hotkey, or focused `Space`) fires its command, either posted as a
 normal command event or, when the button is flagged broadcast, sent as a
@@ -18,7 +18,7 @@ does not fire instantly: the button flashes its pressed look for a moment (a
 short one-shot timer) and then fires, so the click is visible.
 
 ```rust
-# use rstv as tv;
+# use tvision_rs as tv;
 # use tv::Command;
 # let bounds = tv::Rect::new(0, 0, 10, 3);
 use tv::widgets::{Button, ButtonFlags};
@@ -36,16 +36,16 @@ boxes, radio buttons, input lines, and more — is in the
 ## Check boxes & radio buttons
 
 These share one engine, the
-[`Cluster`](../api/rstv/widgets/struct.Cluster.html): a single type that
+[`Cluster`](../api/tvision-rs/widgets/struct.Cluster.html): a single type that
 branches on a
-[`ClusterKind`](../api/rstv/widgets/enum.ClusterKind.html), wrapped by three
+[`ClusterKind`](../api/tvision-rs/widgets/enum.ClusterKind.html), wrapped by three
 named types:
 
-- [`CheckBoxes`](../api/rstv/widgets/struct.CheckBoxes.html) — independent
+- [`CheckBoxes`](../api/tvision-rs/widgets/struct.CheckBoxes.html) — independent
   on/off boxes (` [X] `); any combination may be set.
-- [`RadioButtons`](../api/rstv/widgets/struct.RadioButtons.html) — mutually
+- [`RadioButtons`](../api/tvision-rs/widgets/struct.RadioButtons.html) — mutually
   exclusive options (` (•) `); exactly one is selected.
-- [`MultiCheckBoxes`](../api/rstv/widgets/struct.MultiCheckBoxes.html) —
+- [`MultiCheckBoxes`](../api/tvision-rs/widgets/struct.MultiCheckBoxes.html) —
   multi-state boxes that cycle through more than two values.
 
 A cluster lays its items out top-to-bottom and wraps into a new column when the
@@ -55,35 +55,35 @@ other control, so a dialog gathers and scatters cluster state automatically.
 
 ## Input lines
 
-An [`InputLine`](../api/rstv/widgets/struct.InputLine.html) is a single-line
+An [`InputLine`](../api/tvision-rs/widgets/struct.InputLine.html) is a single-line
 text field with selection, horizontal scrolling, clipboard cut/copy/paste, and
-an optional [`Validator`](../api/rstv/validate/trait.Validator.html). Its
+an optional [`Validator`](../api/tvision-rs/validate/trait.Validator.html). Its
 cursor and selection track byte offsets into a real Rust `String`, so multi-byte
 and wide text behave correctly.
 
 ## Labels & static text
 
-- [`StaticText`](../api/rstv/widgets/struct.StaticText.html) — a read-only,
+- [`StaticText`](../api/tvision-rs/widgets/struct.StaticText.html) — a read-only,
   word-wrapped block of text. Not selectable; it just paints.
-- [`ParamText`](../api/rstv/widgets/struct.ParamText.html) — a `StaticText`
+- [`ParamText`](../api/tvision-rs/widgets/struct.ParamText.html) — a `StaticText`
   variant whose content you set at runtime.
-- [`Label`](../api/rstv/widgets/struct.Label.html) — a single-line caption
+- [`Label`](../api/tvision-rs/widgets/struct.Label.html) — a single-line caption
   **linked** to another control. Clicking the label, or pressing its `~`-marked
   hotkey, focuses the linked control, and the label highlights while that control
   holds focus. The link is a view handle, not a pointer.
 
 ## List boxes, scrollers & scroll bars
 
-- [`ListBox`](../api/rstv/widgets/struct.ListBox.html) — a scrollable list of
+- [`ListBox`](../api/tvision-rs/widgets/struct.ListBox.html) — a scrollable list of
   string items. Populate it after inserting it into a group (a `Context` is
   needed to publish the scroll range to its bars), then it handles selection and
-  navigation for you. [`SortedListBox`](../api/rstv/widgets/struct.SortedListBox.html)
+  navigation for you. [`SortedListBox`](../api/tvision-rs/widgets/struct.SortedListBox.html)
   keeps the items ordered.
-- [`ScrollBar`](../api/rstv/widgets/struct.ScrollBar.html) — a vertical or
+- [`ScrollBar`](../api/tvision-rs/widgets/struct.ScrollBar.html) — a vertical or
   horizontal bar (orientation inferred from its 1×N or N×1 bounds). It broadcasts
   a *changed* message when its value moves, naming itself as the source so a
   two-bar owner can tell which bar fired.
-- [`Scroller`](../api/rstv/widgets/struct.Scroller.html) — the base for
+- [`Scroller`](../api/tvision-rs/widgets/struct.Scroller.html) — the base for
   scrollable content. It references two sibling scroll bars on the window frame,
   mirrors their value into its own scroll offset, and pushes range changes back
   to them. The wiring between a scroller and its bars is brokered by the event
@@ -92,7 +92,7 @@ and wide text behave correctly.
 ## Validators
 
 A validator gates what an input line accepts.
-[`Validator`](../api/rstv/validate/trait.Validator.html) is a trait — an
+[`Validator`](../api/tvision-rs/validate/trait.Validator.html) is a trait — an
 input line holds one as a boxed trait object *(the Rust-idiomatic successor to
 C++ `TValidator`'s abstract base class)*. With no validator,
 every keystroke is accepted. The trait has two checkpoints: `is_valid_input`
@@ -105,11 +105,11 @@ addition:
 
 | Validator | Accepts |
 | --- | --- |
-| [`FilterValidator`](../api/rstv/validate/struct.FilterValidator.html) | only characters from a given set |
-| [`RangeValidator`](../api/rstv/validate/struct.RangeValidator.html) | an integer within `[min, max]` |
-| [`PXPictureValidator`](../api/rstv/validate/struct.PXPictureValidator.html) | text matching a Paradox picture mask |
-| [`LookupValidator`](../api/rstv/validate/struct.LookupValidator.html) / [`StringLookupValidator`](../api/rstv/validate/struct.StringLookupValidator.html) | a value from a fixed list |
-| [`RegexValidator`](../api/rstv/validate/struct.RegexValidator.html) | text matching a regular expression (a modern extension) |
+| [`FilterValidator`](../api/tvision-rs/validate/struct.FilterValidator.html) | only characters from a given set |
+| [`RangeValidator`](../api/tvision-rs/validate/struct.RangeValidator.html) | an integer within `[min, max]` |
+| [`PXPictureValidator`](../api/tvision-rs/validate/struct.PXPictureValidator.html) | text matching a Paradox picture mask |
+| [`LookupValidator`](../api/tvision-rs/validate/struct.LookupValidator.html) / [`StringLookupValidator`](../api/tvision-rs/validate/struct.StringLookupValidator.html) | a value from a fixed list |
+| [`RegexValidator`](../api/tvision-rs/validate/struct.RegexValidator.html) | text matching a regular expression (a modern extension) |
 
 When a final-form check fails, the validator can pop an informational error
 message box explaining what is wrong, then return focus to the field.

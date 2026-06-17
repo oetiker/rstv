@@ -41,7 +41,7 @@
 //! # Turbo Vision heritage
 //!
 //! Ports `TFrame` (`tframe.cpp` / `framelin.cpp`). The original frame's draw and
-//! event handling reached up through the owner into the window; rstv instead
+//! event handling reached up through the owner into the window; tvision-rs instead
 //! pushes the needed data down from the window (deviation D3). Inheritance becomes
 //! the [`View`] trait plus [`ViewState`] composition (deviation D2), the frame
 //! flag word becomes [`WindowFlags`] (deviation D5), and palette lookups become

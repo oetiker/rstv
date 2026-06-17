@@ -1,10 +1,10 @@
 [package]
-name = "rstv-macros"
+name = "tvision-rs-macros"
 version = "0.1.0"
 edition = "2024"
-description = "Delegation proc-macros for the rstv crate."
+description = "Delegation proc-macros for the tvision-rs crate."
 license = "MIT"
-repository = "https://github.com/oetiker/rstv"
+repository = "https://github.com/oetiker/tvision-rs"
 publish = true
 
 [lib]

@@ -1,6 +1,6 @@
 # Design note — OS clipboard by default (backlog A6)
 
-> Status: **LANDED**. User directive: rstv copy/paste should hit the real OS
+> Status: **LANDED**. User directive: tvision-rs copy/paste should hit the real OS
 > clipboard out of the box, not just an internal string.
 
 ## Baseline (the C++)
@@ -63,7 +63,7 @@ shared handle state so tests can assert copies / seed pastes via
   `NativeClipboard` impl closing the gap.
 - **Blind OSC 52**: on terminals that neither support OSC 52 nor swallow
   unknown OSC sequences, the emit could leak garbage. Magiblot redraws the
-  screen after the attempt (`unixcon.cpp:55-58`); rstv's whole-tree
+  screen after the attempt (`unixcon.cpp:55-58`); tvision-rs's whole-tree
   redraw+diff makes the next pump self-healing, but a byte could flash.
   Mitigated by emitting only on the non-native path.
 - **Size limits**: some terminals cap OSC 52 payloads (commonly ~100 KB

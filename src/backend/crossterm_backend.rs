@@ -8,7 +8,7 @@
 //! ## Terminal lifecycle (RAII)
 //! `CrosstermBackend::new()` performs the full terminal setup — raw mode,
 //! alternate screen, mouse capture — at construction; `Drop` restores the
-//! terminal (best-effort, errors ignored), so an rstv program never hand-rolls
+//! terminal (best-effort, errors ignored), so an tvision-rs program never hand-rolls
 //! terminal setup.
 //!
 //! Two process-global hooks (installed once, on the first construction) keep
@@ -38,7 +38,7 @@
 //!   back to internal).
 //! - **Paste** (`get_clipboard`): OS-native → internal buffer → `None`.
 //!   There is no OSC 52 *read* rung — the capability probes it needs require
-//!   owning the input parser, which crossterm (not rstv) owns.
+//!   owning the input parser, which crossterm (not tvision-rs) owns.
 //!
 //! **SSH story:** with no display, arboard init fails and the chain runs
 //! without its native rung — but the OSC 52 emit still reaches the *local*
@@ -451,7 +451,7 @@ fn xterm16_to_crossterm(idx: u8) -> CColor {
 
 /// Map `Style` modifiers to crossterm `Attribute`s.
 ///
-/// `no_shadow` is an internal rstv marker with no crossterm equivalent;
+/// `no_shadow` is an internal tvision-rs marker with no crossterm equivalent;
 /// it is silently ignored here.
 fn map_attributes(style: Style) -> Vec<Attribute> {
     let m = style.modifiers;

@@ -25,7 +25,7 @@
 //!
 //! The original moved dialog data through an untyped getter/setter protocol: each
 //! control copied its raw value into/out of an untyped record at a hand-tracked
-//! offset, and a dialog gathered the record by walking its children. rstv replaces
+//! offset, and a dialog gathered the record by walking its children. tvision-rs replaces
 //! that protocol with this typed value currency (deviation D10).
 
 /// The typed unit of dialog data transfer.

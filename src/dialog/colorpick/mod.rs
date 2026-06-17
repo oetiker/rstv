@@ -1,4 +1,4 @@
-//! Truecolor color-picker — an rstv-original extension (NOT a faithful port).
+//! Truecolor color-picker — an tvision-rs-original extension (NOT a faithful port).
 //!
 //! [`ColorPicker`] is a [`Group`](crate::view::Group) container assembled from a
 //! [`TabBar`](crate::widgets::TabBar) (tab strip), a

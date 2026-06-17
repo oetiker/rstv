@@ -1,6 +1,6 @@
 # Demo animation
 
-![rstv tvdemo](tvdemo.webp)
+![tvision-rs tvdemo](tvdemo.webp)
 
 `tvdemo.webp` is an animated WebP tour of the `tvdemo` example — the menu bar,
 the About dialog, the calculator (driven `6 * 7 = 42`), a window drag, and

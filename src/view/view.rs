@@ -104,7 +104,7 @@ pub struct State {
 /// behaves (selectable, framed, centered, pre/post-process, …), as opposed to
 /// the live [`State`] bits.
 ///
-/// **Dropped:** the per-view back-buffer option (rstv redraws the whole tree and
+/// **Dropped:** the per-view back-buffer option (tvision-rs redraws the whole tree and
 /// diffs). The streaming-only version bits are dropped too.
 ///
 /// # Turbo Vision heritage
@@ -637,7 +637,7 @@ fn grow(gm: GrowMode, s: i32, d: i32, i: &mut i32) {
 /// up an owner pointer instead take the downward
 /// [`Context`](crate::view::Context) (deviation D3).
 // MAINTENANCE: when adding a defaulted method to this trait, also add a
-// forwarder entry to `rstv-macros/src/specs.rs` (`view()`) AND the
+// forwarder entry to `tvision-rs-macros/src/specs.rs` (`view()`) AND the
 // `expected` list in `tests/delegate_view.rs`. Required methods (no default)
 // catch omission at compile time; defaulted ones would silently fall back to
 // the default at every `#[delegate]` site if the forwarder is missing.

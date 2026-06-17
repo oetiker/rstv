@@ -24,7 +24,7 @@
 C++ `valid()` is *blocking* and does I/O: `TInputLine::valid` calls
 `validator->valid()` → `error()` → a synchronous `messageBox`; `TFileEditor::valid`
 calls `editorDialog(edSaveModify, …)` → a synchronous Yes/No/Cancel `messageBox`
-and **uses its answer** to decide the bool it returns. rstv's single event loop
+and **uses its answer** to decide the bool it returns. tvision-rs's single event loop
 (D9) forbids a downward-borrowed `&mut View` from running a nested modal inline
 (`exec_view` is top-level only — the `View` holds only `&mut Context`).
 
@@ -53,7 +53,7 @@ drains → `pending_modal` → `pump_and_drive`). The modal-close site at 886 mu
 
 - Every `impl View::valid` (Group, Dialog, Window, InputLine, Editor, FileEditor,
   test stubs).
-- `rstv-macros/src/specs.rs` `valid` forwarder (line ~36) → new signature.
+- `tvision-rs-macros/src/specs.rs` `valid` forwarder (line ~36) → new signature.
 - `Group::valid` (`group.rs:847`) `children.iter().all(|c| c.view.valid(cmd))` →
   manual `iter_mut` loop threading `&mut ctx`, **keeping the short-circuit**
   (C++ `firstThat` stops at the first invalid child).
@@ -145,7 +145,7 @@ fn validate_modal_close(&mut self, id: ViewId, es: Command) -> bool {
 | StringLookup (`TStringLookupValidator`) | `Input is not in list of valid strings` |
 | Range (`TRangeValidator`) | `Value not in the range {min} to {max}` |
 | PXPicture (`TPXPictureValidator`) | `Error in picture format.\n {pic}` |
-| Regex (rstv extension) | `Input does not match pattern: {pattern}` |
+| Regex (tvision-rs extension) | `Input does not match pattern: {pattern}` |
 
 `InputLine::valid`'s `!validate(&self.data)` branch calls `self.validator…error(ctx)`
 before returning false (faithful to `TInputLine::valid`). Fires on **both** the
@@ -165,7 +165,7 @@ else if modified:
     Cancel → return False
 else true
 ```
-rstv: consume `pending_save_answer` if set (Yes→`save(ctx)`, No→`clear_modified()`
+tvision-rs: consume `pending_save_answer` if set (Yes→`save(ctx)`, No→`clear_modified()`
 +true, Cancel→false). Else if `modified()` & untitled-or-named → queue
 `OpenMessageBox` (`Information`, `yes_no_cancel()`, `answer_to = self id`,
 `then_command = cmClose`) and return false. Else true.

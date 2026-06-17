@@ -1,7 +1,7 @@
 //! `tvedit` — a faithful port of the magiblot/tvision `tvedit` example.
 //!
 //! This combines `tvedit1.cpp` (application logic), `tvedit2.cpp` (find/replace
-//! dialogs — built into rstv's `Editor` via the `Deferred` seam), and
+//! dialogs — built into tvision-rs's `Editor` via the `Deferred` seam), and
 //! `tvedit3.cpp` (menu bar + status line).
 //!
 //! Run it:  `cargo run --example tvedit [file ...]`
@@ -19,7 +19,7 @@
 use std::io;
 use std::path::PathBuf;
 
-use rstv::{
+use tvision_rs::{
     Backend, CD_NORMAL, ChDirDialog, Command, CrosstermBackend, Desktop, EditWindow, Key, KeyEvent,
     Menu, MenuBar, Program, Rect, StatusDef, StatusLine, SystemClock, Theme, View, alt,
 };
@@ -164,11 +164,11 @@ impl TEditApp {
             } else if cmd == Command::CH_DIR {
                 prog.exec_view(Box::new(ChDirDialog::new(CD_NORMAL, 0)));
             } else if cmd == KEYMAP_WORDSTAR {
-                rstv::keymap::set_global(rstv::Keymap::word_star());
+                tvision_rs::keymap::set_global(tvision_rs::Keymap::word_star());
             } else if cmd == KEYMAP_CUA {
-                rstv::keymap::set_global(rstv::Keymap::cua());
+                tvision_rs::keymap::set_global(tvision_rs::Keymap::cua());
             } else if cmd == KEYMAP_EMACS {
-                rstv::keymap::set_global(rstv::Keymap::emacs());
+                tvision_rs::keymap::set_global(tvision_rs::Keymap::emacs());
             }
         });
     }
@@ -191,7 +191,7 @@ fn ctrl_w() -> KeyEvent {
     ctrl(Key::Char('w'))
 }
 fn ctrl_f5() -> KeyEvent {
-    use rstv::KeyModifiers;
+    use tvision_rs::KeyModifiers;
     KeyEvent::new(
         Key::F(5),
         KeyModifiers {
@@ -201,7 +201,7 @@ fn ctrl_f5() -> KeyEvent {
     )
 }
 fn ctrl_ins() -> KeyEvent {
-    use rstv::KeyModifiers;
+    use tvision_rs::KeyModifiers;
     KeyEvent::new(
         Key::Insert,
         KeyModifiers {
@@ -211,7 +211,7 @@ fn ctrl_ins() -> KeyEvent {
     )
 }
 fn shift_del() -> KeyEvent {
-    use rstv::KeyModifiers;
+    use tvision_rs::KeyModifiers;
     KeyEvent::new(
         Key::Delete,
         KeyModifiers {
@@ -221,7 +221,7 @@ fn shift_del() -> KeyEvent {
     )
 }
 fn shift_ins() -> KeyEvent {
-    use rstv::KeyModifiers;
+    use tvision_rs::KeyModifiers;
     KeyEvent::new(
         Key::Insert,
         KeyModifiers {
@@ -231,7 +231,7 @@ fn shift_ins() -> KeyEvent {
     )
 }
 fn shift_f6() -> KeyEvent {
-    use rstv::KeyModifiers;
+    use tvision_rs::KeyModifiers;
     KeyEvent::new(
         Key::F(6),
         KeyModifiers {
@@ -241,7 +241,7 @@ fn shift_f6() -> KeyEvent {
     )
 }
 fn ctrl_del() -> KeyEvent {
-    use rstv::KeyModifiers;
+    use tvision_rs::KeyModifiers;
     KeyEvent::new(
         Key::Delete,
         KeyModifiers {
@@ -251,7 +251,7 @@ fn ctrl_del() -> KeyEvent {
     )
 }
 fn ctrl(k: Key) -> KeyEvent {
-    use rstv::KeyModifiers;
+    use tvision_rs::KeyModifiers;
     KeyEvent::new(
         k,
         KeyModifiers {

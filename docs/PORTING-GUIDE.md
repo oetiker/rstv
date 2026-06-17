@@ -1,6 +1,6 @@
 # Turbo Vision → Rust: Porting Guide
 
-> The deviation reference for **rstv**, an idiomatic Rust port of
+> The deviation reference for **tvision-rs**, an idiomatic Rust port of
 > [magiblot/tvision](https://github.com/magiblot/tvision).
 >
 > **We port faithfully from the magiblot C++ source.** Class structure, method
@@ -13,7 +13,7 @@
 > If something isn't listed here, port it straight from the C++.
 >
 > The dependency-ordered port sequence lives in
-> [PORT-ORDER.md](file:///home/oetiker/checkouts/rstv/docs/PORT-ORDER.md); the
+> [PORT-ORDER.md](file:///home/oetiker/checkouts/tvision-rs/docs/PORT-ORDER.md); the
 > mechanical per-class recipe is **Appendix B**. Together they let `MECHANICAL`
 > classes be ported with near-zero judgment.
 
@@ -49,8 +49,8 @@ prefixed global constants; a 256-entry `TCommandSet`. The prefixes are manual
 namespacing — 1991 C++ had no real namespaces.
 
 **Deviation.**
-- Crate published as `rstv`; **house style `tv::`** on every type/constant
-  (consumers add `tv = { package = "rstv" }` once, no `use` needed). The path
+- Crate published as `tvision-rs`; **house style `tv::`** on every type/constant
+  (consumers add `tv = { package = "tvision-rs" }` once, no `use` needed). The path
   *is* the namespace the `T` prefix was faking.
 - Drop the `T` prefix (`TView` → `tv::View`). Methods are `snake_case`
   (`handleEvent` → `handle_event`).
@@ -732,7 +732,7 @@ to `/` at the syscall boundary (`path_dos2unix` in `source/platform/findfrst.cpp
 emulating a *single* disk on UNIX; it already `#if !defined(_TV_UNIX)`-drops the
 "Drives" entry on UNIX.
 
-**Deviation.** rstv is a **native-Linux** port — model paths as Linux paths
+**Deviation.** tvision-rs is a **native-Linux** port — model paths as Linux paths
 end-to-end, no DOS layer to translate:
 - **Separator is `/`**, never `\`. The tree root is **`/`** (not `C:\`).
 - **No drives.** Drop `showDrives`, the `drives`/`"Drives"` entry, the A–Z scan,
@@ -762,7 +762,7 @@ year-1980/month/day in the high half, hour/min/sec÷2 in the low half, **local
 time**), stored on `TSearchRec::time`. `TFileInfoPane::draw` unpacks that bitfield
 to render `Mon DD, YYYY HH:MMa/p` (row 78).
 
-**Deviation.** rstv reads the timestamp from **`std::fs::Metadata::modified()`**
+**Deviation.** tvision-rs reads the timestamp from **`std::fs::Metadata::modified()`**
 (a `SystemTime`) and packs it into the **same DOS `ftime` u32** so the info-pane
 unpack ports **verbatim**. The civil date is computed **in UTC** (Howard Hinnant's
 days-from-civil — no `chrono`/`time` crate dependency for one info pane). Edge
@@ -790,9 +790,9 @@ so the C++ draw code is unchanged.
 
 ---
 
-## rstv-original extensions (beyond the faithful port)
+## tvision-rs-original extensions (beyond the faithful port)
 
-These features have **no C++ tvision counterpart** — they are rstv inventions
+These features have **no C++ tvision counterpart** — they are tvision-rs inventions
 added alongside the faithful port. They do NOT belong in the C++→Rust symbol
 lookup (Appendix A) or the per-class recipe (Appendix B).
 
@@ -804,7 +804,7 @@ alternative living alongside it. Both implement the `Validator` trait. Use
 
 ### Truecolor color-picker (`src/dialog/colorpick/`, `Program::color_dialog`)
 Replaces the dropped `TColorDialog` cluster (rows 81–87). The faithful cluster
-edited a flat BIOS `TPalette` that rstv deletes under D7 (palette → `Theme`;
+edited a flat BIOS `TPalette` that tvision-rs deletes under D7 (palette → `Theme`;
 `Role` is a closed enum) — a faithful port would produce dead code by
 construction. The truecolor picker is reusable and produces any `Color` variant:
 
@@ -814,8 +814,8 @@ construction. The truecolor picker is reusable and produces any `Color` variant:
 - **`Program::color_dialog(initial: Color) -> Option<Color>`** — the modal entry
   point. Returns `Some(color)` on OK, `None` on Cancel/Esc.
 
-See [`docs/superpowers/specs/2026-06-09-color-picker-design.md`](file:///home/oetiker/checkouts/rstv/docs/superpowers/specs/2026-06-09-color-picker-design.md)
-and [`docs/superpowers/plans/2026-06-09-color-picker.md`](file:///home/oetiker/checkouts/rstv/docs/superpowers/plans/2026-06-09-color-picker.md).
+See [`docs/superpowers/specs/2026-06-09-color-picker-design.md`](file:///home/oetiker/checkouts/tvision-rs/docs/superpowers/specs/2026-06-09-color-picker-design.md)
+and [`docs/superpowers/plans/2026-06-09-color-picker.md`](file:///home/oetiker/checkouts/tvision-rs/docs/superpowers/plans/2026-06-09-color-picker.md).
 
 ---
 
@@ -859,7 +859,7 @@ and [`docs/superpowers/plans/2026-06-09-color-picker.md`](file:///home/oetiker/c
 ## Appendix B — Per-class porting procedure
 
 > The mechanical recipe for any class tagged **`MECHANICAL`** in
-> [PORT-ORDER.md](file:///home/oetiker/checkouts/rstv/docs/PORT-ORDER.md).
+> [PORT-ORDER.md](file:///home/oetiker/checkouts/tvision-rs/docs/PORT-ORDER.md).
 > Follow it verbatim. **Do not run this recipe on `FOUNDATION` or `INFRA` rows**
 > — those establish or build the patterns and need careful (human/Opus) work.
 > See the **Escalate** list at the end for when to stop and ask.

@@ -6,12 +6,12 @@
 //! These tests are the verification backbone: every widget test from Phase 1
 //! onward follows the same pattern.
 
-use rstv::Theme;
-use rstv::backend::{HeadlessBackend, HeadlessHandle, Renderer};
-use rstv::color::{Color, Style};
-use rstv::event::{Event, Key, KeyModifiers};
-use rstv::screen::Buffer;
-use rstv::view::{DrawCtx, Point, Rect};
+use tvision_rs::Theme;
+use tvision_rs::backend::{HeadlessBackend, HeadlessHandle, Renderer};
+use tvision_rs::color::{Color, Style};
+use tvision_rs::event::{Event, Key, KeyModifiers};
+use tvision_rs::screen::Buffer;
+use tvision_rs::view::{DrawCtx, Point, Rect};
 
 /// Full end-to-end pipeline: paint cells, render, snapshot.
 ///
@@ -103,7 +103,7 @@ fn headless_event_queue_roundtrip() {
         },
     );
     // Inject a plain Enter.
-    screen.push_event(Event::KeyDown(rstv::event::KeyEvent::new(
+    screen.push_event(Event::KeyDown(tvision_rs::event::KeyEvent::new(
         Key::Enter,
         KeyModifiers::default(),
     )));

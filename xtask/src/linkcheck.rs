@@ -65,7 +65,7 @@ fn resolves(from: &Path, link: &str) -> bool {
     }
     let base = from.parent().unwrap_or_else(|| Path::new(""));
     let mut target: PathBuf = if let Some(stripped) = path_part.strip_prefix('/') {
-        // Site-absolute "/rstv/..." — map onto the assembled root is out of scope
+        // Site-absolute "/tvision-rs/..." — map onto the assembled root is out of scope
         // for local checking; treat as external/unknown and skip.
         let _ = stripped;
         return true;

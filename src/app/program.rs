@@ -725,7 +725,7 @@ impl Program {
     ///
     /// # Example
     /// ```rust,no_run
-    /// use rstv::{Color, Command};
+    /// use tvision_rs::{Color, Command};
     /// const CMD_PICK: Command = Command::custom("my_app.pick_color");
     /// // program.run_app(|prog, cmd| {
     /// //     if cmd == CMD_PICK { prog.color_dialog(Color::Default); }
@@ -1080,7 +1080,7 @@ impl Program {
     /// Open the truecolor color-picker modal seeded with `initial`; return the
     /// chosen [`Color`](crate::color::Color) on OK, or `None` on Cancel/Esc.
     ///
-    /// An rstv-original extension. The result is read by downcasting the in-tree
+    /// An tvision-rs-original extension. The result is read by downcasting the in-tree
     /// modal [`ColorPicker`](crate::dialog::ColorPicker) to `color()` via a
     /// [`ModalCompletion::ColorPick`] sink — the `HistoryPick`/`get_selection`
     /// shape. No `FieldValue::Color` (spec non-goal).
@@ -1284,7 +1284,7 @@ impl Program {
         // `application->execView(pD)` (msgbox.cpp:90/186 use exactly this). The
         // alternative C++ pattern, `TProgram::executeDialog`, uses
         // `deskTop->execView(pD)` (tprogram.cpp:119) — the desktop variant, which
-        // inserts into the desktop instead. rstv root-inserts. When the desktop is
+        // inserts into the desktop instead. tvision-rs root-inserts. When the desktop is
         // inset by a menu/status bar, a desktop-inset modal would need to clip to
         // the desktop region, compounding the `ModalFrame` (0,0)-coordinate caveat.
         // When `gather_self` is true we pre-mint the id and insert with that id so
@@ -1481,7 +1481,7 @@ impl Program {
         //    DEVIATION: C++ TView::setCommands DOES set commandSetChanged when the
         //    sets differ — and here they do differ (the modal enabled
         //    cmNext/cmPrev/cmClose/cmZoom), so C++ fires a post-modal
-        //    cmCommandSetChanged broadcast that rstv omits. Deliberate: the
+        //    cmCommandSetChanged broadcast that tvision-rs omits. Deliberate: the
         //    command set is restored wholesale on modal exit.
         self.disabled_commands = save_commands;
 
@@ -1739,7 +1739,7 @@ impl Program {
                 // TProgram::idle's statusLine->update() (tstatusl.cpp:209):
                 // re-run find_items against the top view's help context + redraw.
                 //
-                // "TheTopView" in rstv = captures.top_modal_view(): the modal pushed
+                // "TheTopView" in tvision-rs = captures.top_modal_view(): the modal pushed
                 // by exec_view_with_completion, or None when no modal is running. When
                 // None, the C++ `TProgram::idle` would get hcNoContext (TopView() == 0)
                 // — faithful: All-range defs match hcNoContext, so the default
@@ -2215,7 +2215,7 @@ impl Program {
                                     record_history_for(group, link, history_id);
                                     // initHistoryWindow + stash for the outer drive.
                                     // helpCtx propagation is intentionally omitted:
-                                    // rstv has no per-view help-context plumbing for
+                                    // tvision-rs has no per-view help-context plumbing for
                                     // the HistoryWindow to inherit.
                                     let hw = crate::widgets::HistoryWindow::new(bounds, history_id);
                                     *pending_modal = Some((
@@ -3227,7 +3227,7 @@ fn program_handle_event(
     // Modal-isolation note: program-level interception (this Alt-N block + the
     // cmQuit catch below) is NOT suppressed while a modal is active. C++'s nested
     // `p->execute()` (tgroup.cpp:205) structurally avoids it by dispatching to the
-    // dialog's handleEvent, not TProgram's; rstv's single loop runs this on every
+    // dialog's handleEvent, not TProgram's; tvision-rs's single loop runs this on every
     // pump, including modal pumps (the deviation documented on `exec_view`).
     //
     // Alt+digit window selection (cmSelectWindowNum). Faithful TProgram::handleEvent
@@ -4855,7 +4855,7 @@ mod tests {
     /// NESTED-GAP BITE. Showing a selectable view resets its owning group's
     /// currency at EVERY level of the tree, so a ctor-built desktop holding a
     /// window that itself holds a selectable child has the full currency chain
-    /// (desktop→window→child) before the first event. rstv's ctx-less inserts
+    /// (desktop→window→child) before the first event. tvision-rs's ctx-less inserts
     /// defer that to `Program::new`'s eager `settle_currency` pass, which runs
     /// POST-ORDER (children first) so the window's INTERNAL currency exists before
     /// the desktop's focus cascade descends into it. An earlier version reset only
@@ -9908,7 +9908,7 @@ mod tests {
 
         /// REGRESSION: an EditWindow inserted via desktop_insert must arrive with its
         /// FileEditor focused, or typing (and Save) do nothing — the "edit/save does not
-        /// work" bug. C++ focuses the editor via show()->resetCurrent at insert; rstv's
+        /// work" bug. C++ focuses the editor via show()->resetCurrent at insert; tvision-rs's
         /// ctx-less Group::insert skips that, so insert_and_focus must reset_current
         /// before focus_child. Drives the REAL pump and asserts the typed char lands in
         /// the editor buffer (symptom-level, not a focus-flag proxy).
@@ -9943,7 +9943,7 @@ mod tests {
             );
         }
 
-        // -- color_dialog (rstv-original extension) --------------------
+        // -- color_dialog (tvision-rs-original extension) --------------------
 
         /// OK returns `Some(color)` — the initial color is returned unchanged when
         /// nothing is edited (the ModalCompletion::ColorPick sink is written on cmOK).

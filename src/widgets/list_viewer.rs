@@ -637,7 +637,7 @@ pub fn handle_event<L: ListViewer + ?Sized>(this: &mut L, ev: &mut Event, ctx: &
         // already over before any second down can arrive — the second down of a
         // double-click re-enters the MouseDown arm as a fresh event and fires
         // the select path there. The C++ meDoubleClick check on the up path
-        // (tlstview.cpp:276) is semantically unreachable in rstv because
+        // (tlstview.cpp:276) is semantically unreachable in tvision-rs because
         // MouseUp never carries double_click (a down-event-only flag).
         // Guarded by `track.is_some()`.
         // -------------------------------------------------------------------

@@ -69,20 +69,20 @@ impl syn::parse::Parse for DelegateArgs {
     }
 }
 
-/// Resolve the path prefix for crate `rstv` that is valid at the call site
+/// Resolve the path prefix for crate `tvision-rs` that is valid at the call site
 /// (inside the lib via `extern crate self`, in examples, and downstream under
 /// ANY alias the consumer chooses). ALWAYS returns an `::<ident>` form — never `crate`.
-fn rstv_path() -> TokenStream2 {
+fn tvision_rs_path() -> TokenStream2 {
     use proc_macro_crate::{FoundCrate, crate_name};
-    let ident = match crate_name("rstv") {
-        // `Itself` happens when compiling the rstv lib AND its own examples;
-        // `extern crate self as rstv;` makes `::rstv` valid in the lib,
-        // and the example's implicit dep makes `::rstv` valid there too.
-        Ok(FoundCrate::Itself) => Ident::new("rstv", Span::call_site()),
+    let ident = match crate_name("tvision-rs") {
+        // `Itself` happens when compiling the tvision-rs lib AND its own examples;
+        // `extern crate self as tvision_rs;` makes `::tvision_rs` valid in the lib,
+        // and the example's implicit dep makes `::tvision_rs` valid there too.
+        Ok(FoundCrate::Itself) => Ident::new("tvision_rs", Span::call_site()),
         Ok(FoundCrate::Name(name)) => Ident::new(&name, Span::call_site()),
         // Fall back to the canonical name; a wrong name yields a clear
         // unresolved-path error rather than a silently wrong expansion.
-        Err(_) => Ident::new("rstv", Span::call_site()),
+        Err(_) => Ident::new("tvision_rs", Span::call_site()),
     };
     quote! { ::#ident }
 }
@@ -112,7 +112,7 @@ fn expand(args: DelegateArgs, mut item_impl: ItemImpl) -> syn::Result<TokenStrea
         .collect();
     let skip: std::collections::HashSet<String> = args.skip.iter().map(|i| i.to_string()).collect();
 
-    let krate = rstv_path();
+    let krate = tvision_rs_path();
     let field = &args.field;
 
     let candidates = specs::forwarders(&trait_ident, field, &krate).ok_or_else(|| {

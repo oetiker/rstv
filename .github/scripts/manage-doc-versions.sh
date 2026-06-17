@@ -1,7 +1,7 @@
 #!/bin/bash
 # Manage versioned documentation for GitHub Pages.
 # Usage: manage-doc-versions.sh <site-dir> <action> [version]
-#   <site-dir> is the project sub-root inside the Pages tree, e.g. site/rstv.
+#   <site-dir> is the project sub-root inside the Pages tree, e.g. site/tvision-rs.
 #   Actions:
 #     cull               - Remove old versions (keep latest patch of last N minors)
 #     update-json        - Regenerate versions.json from the directories present
@@ -20,7 +20,7 @@ ACTION="${2:?Action required}"
 VERSION="${3:-}"
 
 # URL prefix the site is served under (GitHub Pages project site path).
-URL_BASE="/rstv"
+URL_BASE="/tvision-rs"
 
 VERSIONS_JSON="$SITE_DIR/versions.json"
 KEEP_MINOR_VERSIONS=4
@@ -118,7 +118,7 @@ update_versions_json() {
 
     # Emit a real JSON null (unquoted) when there is no stable release yet, so
     # the redirect's `data.latest ? …` test is falsy. A quoted "null" string is
-    # truthy and would send the root to /rstv/null/.
+    # truthy and would send the root to /tvision-rs/null/.
     local latest_json="null"
     [[ -n "$latest" ]] && latest_json="\"$latest\""
 
@@ -149,7 +149,7 @@ generate_redirect() {
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>rstv Documentation</title>
+    <title>tvision-rs Documentation</title>
     <script>
         // Redirect to the latest stable version (falls back to dev).
         fetch('${URL_BASE}/versions.json')

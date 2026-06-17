@@ -49,7 +49,7 @@
 //! The typed value protocol (`value`/`set_value`) is not implemented for clusters:
 //! their `value`/`sel` fields are read and written directly by their owning dialog
 //! rather than through the gather/scatter protocol. The original per-item
-//! help-context offset (help id plus selected index) does not map onto rstv's
+//! help-context offset (help id plus selected index) does not map onto tvision-rs's
 //! string-identity [`HelpCtx`](crate::help::HelpCtx) and is not modeled.
 //!
 //! # Turbo Vision heritage
@@ -533,14 +533,14 @@ impl View for Cluster {
             // ---------------------------------------------------------------
             // MouseMove arm — the C++ loop body (`tcluster.cpp:174-178`):
             // `showCursor` / `hideCursor` toggled on item containment.
-            // rstv has no TUI cursor-visibility equivalent (the hardware cursor
+            // tvision-rs has no TUI cursor-visibility equivalent (the hardware cursor
             // position is tracked via `set_cursor` / `cursor_request`, not a
             // per-item toggle), so this is a faithful no-op. Guarded by
             // `tracking` against stray moves.
             // ---------------------------------------------------------------
             Event::MouseMove(_) if self.tracking => {
                 // C++ tcluster.cpp:175-178: showCursor/hideCursor only — no
-                // state or value change. rstv drops the cue (no equivalent).
+                // state or value change. tvision-rs drops the cue (no equivalent).
                 ev.clear();
             }
 
@@ -662,7 +662,7 @@ impl View for Cluster {
                                 if self.button_state(i) {
                                     // KNOWN DEVIATION: the C++ gates the press on
                                     // `focus()` succeeding synchronously
-                                    // (`tcluster.cpp:283`); rstv's `request_focus`
+                                    // (`tcluster.cpp:283`); tvision-rs's `request_focus`
                                     // is deferred with no success return (same
                                     // class as the deferred-focus notes at
                                     // group.rs `focus_child`), so we press
@@ -1343,7 +1343,7 @@ mod tests {
     }
 
     /// MouseMove during tracking is consumed but changes no state (faithful
-    /// no-op: the C++ only toggled cursor show/hide which rstv has no equivalent for).
+    /// no-op: the C++ only toggled cursor show/hide which tvision-rs has no equivalent for).
     #[test]
     fn mouse_track_move_is_consumed_noop() {
         let mut c = CheckBoxes::new(Rect::new(0, 0, 20, 3), strs(&["a", "b", "c"]));

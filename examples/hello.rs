@@ -31,7 +31,7 @@
 
 use std::io;
 
-use rstv::{
+use tvision_rs::{
     Backend, Color, Command, CrosstermBackend, Desktop, EditWindow, Key, KeyEvent, Menu, MenuBar,
     Program, Rect, StatusDef, StatusLine, SystemClock, Theme, View, Window, alt,
 };
@@ -181,7 +181,7 @@ impl HelloApp {
 
 /// `Alt-F3` — the classic "close window" accelerator (`kbAltF3`).
 fn alt_f3() -> KeyEvent {
-    use rstv::KeyModifiers;
+    use tvision_rs::KeyModifiers;
     KeyEvent::new(
         Key::F(3),
         KeyModifiers {

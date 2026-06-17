@@ -10,7 +10,7 @@ framework's defining seams.
 
 ## Why a leaf can't act directly
 
-While rstv dispatches an event, the view tree is a live `&mut` borrow
+While tvision-rs dispatches an event, the view tree is a live `&mut` borrow
 **stack**: root → desktop → window → frame → the focused control. Each ancestor
 is already borrowed mutably *above* the view on the stack. So the view being
 handled cannot reach **up** (its parents are borrowed) or **sideways** (a fresh
@@ -21,19 +21,19 @@ that drives modal dialogs, or the program's command set.
 The escape hatch is to **not act now**. Instead the view *records a request*,
 and the event loop carries it out **after** dispatch unwinds and the tree is
 free again. That request is one variant of
-[`Deferred`](../api/rstv/view/enum.Deferred.html).
+[`Deferred`](../api/tvision-rs/view/enum.Deferred.html).
 
 ## The shape of it
 
 A view never constructs a `Deferred` itself. It calls a method on the
-[`Context`](../api/rstv/view/struct.Context.html) it was handed (the downward
+[`Context`](../api/tvision-rs/view/struct.Context.html) it was handed (the downward
 context from [pointers → handles](handles.md), where there are no up-pointers),
 and that method pushes the
 variant onto a single queue. The loop drains the queue once per pump, in
 insertion order, and applies each effect against the state it owns.
 
 ```rust
-# use rstv as tv;
+# use tvision_rs as tv;
 # fn _demo(ctx: &mut tv::Context, id: tv::ViewId) {
 // inside a view's handle_event: "close me" — recorded, not performed.
 ctx.request_close(id);

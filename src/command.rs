@@ -40,7 +40,7 @@ use std::ops::{AddAssign, BitAndAssign, BitOrAssign, SubAssign};
 /// own dotted prefix:
 ///
 /// ```
-/// const REFRESH: rstv::Command = rstv::Command::custom("myapp.refresh");
+/// const REFRESH: tvision_rs::Command = tvision_rs::Command::custom("myapp.refresh");
 /// ```
 ///
 /// Equality and hashing compare the string *contents*, so two `Command`s with
@@ -252,16 +252,16 @@ impl Command {
     /// focused file record is carried via the broadcast's resolvable `source`).
     pub const FILE_FOCUSED: Command = Command("tv.file_focused");
     /// A file in the file list was double-clicked (broadcast). Payload-less in
-    /// rstv: the file dialog just turns it into [`OK`](Command::OK).
+    /// tvision-rs: the file dialog just turns it into [`OK`](Command::OK).
     pub const FILE_DOUBLE_CLICKED: Command = Command("tv.file_double_clicked");
 
-    /// An outline-viewer item was selected (broadcast). Payload-less in rstv.
+    /// An outline-viewer item was selected (broadcast). Payload-less in tvision-rs.
     pub const OUTLINE_ITEM_SELECTED: Command = Command("tv.outline_item_selected");
 
     // --- Theme editor commands ---
-    /// Open the foreground color picker for the selected theme role (rstv-native).
+    /// Open the foreground color picker for the selected theme role (tvision-rs-native).
     pub const THEME_EDIT_FG: Command = Command("tv.theme_edit_fg");
-    /// Open the background color picker for the selected theme role (rstv-native).
+    /// Open the background color picker for the selected theme role (tvision-rs-native).
     pub const THEME_EDIT_BG: Command = Command("tv.theme_edit_bg");
 }
 

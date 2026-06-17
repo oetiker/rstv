@@ -8,7 +8,7 @@
 //! [`ListViewer`](crate::widgets::list_viewer::ListViewer) over a
 //! [`Vec<DirEntry>`] that renders a tree-indented listing.
 //!
-//! Following rstv's "collections become `Vec`" convention, `DirCollection` is a
+//! Following tvision-rs's "collections become `Vec`" convention, `DirCollection` is a
 //! plain `Vec<DirEntry>` alias and `FileCollection` is a `Vec<SearchRec>` carrying
 //! only the one piece of real logic — the sorted insert and its comparator. The
 //! general-purpose collection API (index-of, remove, replace-at, find-first, …) is
@@ -123,7 +123,7 @@ pub struct SearchRec {
 /// The sign of every branch matters — do not "tidy" it.
 ///
 /// ```
-/// use rstv::dialog::{SearchRec, search_rec_compare, FA_DIREC};
+/// use tvision_rs::dialog::{SearchRec, search_rec_compare, FA_DIREC};
 /// use core::cmp::Ordering;
 ///
 /// let a = SearchRec { attr: 0,        time: 0, size: 0, name: "..".into() };
@@ -1570,7 +1570,7 @@ const CHDIR_TEXT: &str = "~C~hdir";
 const REVERT_TEXT: &str = "~R~evert";
 const INVALID_DIR_TEXT: &str = "Invalid directory";
 
-// Button / label text. `~X~` is rstv's hotkey markup (the widgets parse it).
+// Button / label text. `~X~` is tvision-rs's hotkey markup (the widgets parse it).
 const FILES_TEXT: &str = "~F~iles";
 const OPEN_TEXT: &str = "~O~pen";
 const OK_TEXT: &str = "O~K~";

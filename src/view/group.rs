@@ -117,7 +117,7 @@ impl Group {
     ///
     /// # Turbo Vision heritage
     /// Ports `TGroup::TGroup` (`options |= ofSelectable`, `eventMask = 0xFFFF`).
-    /// rstv's event mask exposes only those two opt-in tracking classes; the
+    /// tvision-rs's event mask exposes only those two opt-in tracking classes; the
     /// dropped constructor bits were buffering/clipping.
     pub fn new(bounds: Rect) -> Self {
         let mut st = ViewState::new(bounds);
@@ -477,7 +477,7 @@ impl Group {
     /// Realizes `TView::focus()` → `TView::select()` (`tview.cpp`) in the owner:
     /// the validate-then-select sequence, where `ofTopSelect` views call
     /// `makeFirst` and others call `setCurrent`. The self-heal covers a case the
-    /// C++ leaves to its synchronous insert-time `resetCurrent`, which rstv defers
+    /// C++ leaves to its synchronous insert-time `resetCurrent`, which tvision-rs defers
     /// (deviation D3).
     pub fn focus_child(&mut self, id: ViewId, ctx: &mut Context) -> bool {
         // focus(): validate the outgoing current before letting it lose focus.
@@ -499,7 +499,7 @@ impl Group {
             // which the already_in_place no-op skips. That is safe in C++ only
             // because insert-time show()->resetCurrent() keeps the topmost
             // ofTopSelect window current (so an already-top window is already
-            // current). rstv defers that cascade to the pump's settle_currency
+            // current). tvision-rs defers that cascade to the pump's settle_currency
             // pass, so between events the invariant holds — but it REMAINS
             // LOAD-BEARING for same-instant focus within one call sequence (the
             // e8d82f2 bite): insert_and_focus calls focus_child on a just-
@@ -728,7 +728,7 @@ impl Group {
             Event::MouseAuto(_) => s.event_mask.mouse_auto,
             // `MouseWheel` falls through to `true`: delivered unconditionally,
             // with no eventMask gate (like `MouseDown`). Behavior-neutral vs the
-            // C++ eventMask gate — in rstv only the two opt-in classes are gated.
+            // C++ eventMask gate — in tvision-rs only the two opt-in classes are gated.
             _ => true,
         }
     }
@@ -821,7 +821,7 @@ impl View for Group {
     ///
     /// # Turbo Vision heritage
     /// Ports `TGroup::draw`/`drawSubViews`, with the paint order reversed: the
-    /// original paints top-first and tracks occlusion, which rstv drops in favor
+    /// original paints top-first and tracks occlusion, which tvision-rs drops in favor
     /// of whole-tree redraw + diff.
     fn draw(&mut self, ctx: &mut DrawCtx) {
         for child in self.children.iter_mut() {
@@ -1169,7 +1169,7 @@ impl Group {
             // child identically.
             //
             // No `set_phase` here (nor in the positional arm below): the C++
-            // sets `phase = phFocused` for both (`tgroup.cpp:373-376`), but rstv
+            // sets `phase = phFocused` for both (`tgroup.cpp:373-376`), but tvision-rs
             // broadcasts are re-dispatched by the pump on a fresh `Context`
             // already defaulting to `Focused`, and the focused-events bracket
             // above restores on exit — so the field is always `Focused` here.
@@ -2399,7 +2399,7 @@ mod tests {
 
     /// `focus_child` on a `top_select` child that is ALREADY topmost but NOT
     /// current must still make it current+selected. This is the post-insert
-    /// state rstv's ctx-less `Group::insert` produces (C++ never sees it:
+    /// state tvision-rs's ctx-less `Group::insert` produces (C++ never sees it:
     /// insert-time show()->resetCurrent keeps the topmost ofTopSelect window
     /// current). Without the self-heal, make_first hits put_in_front_of's
     /// already-in-place no-op, its resetCurrent tail never runs, and the click

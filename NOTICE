@@ -1,4 +1,4 @@
-rstv
+tvision-rs
 ====
 
 An idiomatic Rust port of Turbo Vision.
@@ -12,7 +12,7 @@ Borland's Turbo Vision. It carries forward the upstream terms:
     Copyright (c) 2019-2024 magiblot <magiblot@hotmail.com>
     https://github.com/magiblot/tvision
 
-  * The rstv Rust port is distributed under the MIT License.
+  * The tvision-rs Rust port is distributed under the MIT License.
     Copyright (c) 2026 Tobias Oetiker
 
 Third-party code vendored into this repository (added as the port reaches the
@@ -29,6 +29,6 @@ trait (D11); it is not vendored.
   * DejaVu Sans Mono (Bitstream Vera / DejaVu license — free to reproduce and
     distribute) is bundled under `xtask/assets/` and used ONLY by the
     `cargo xtask demo` recorder to rasterize terminal frames into the demo
-    animation. It is a build-tool asset, not part of the published `rstv` crate.
+    animation. It is a build-tool asset, not part of the published `tvision-rs` crate.
     The full license is preserved at `xtask/assets/DejaVuSansMono-LICENSE.txt`.
     https://dejavu-fonts.github.io/

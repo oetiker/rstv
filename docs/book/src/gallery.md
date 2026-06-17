@@ -1,8 +1,8 @@
 # Widget gallery
 
-Every widget rstv draws, shown running with the code that builds it. Each
+Every widget tvision-rs draws, shown running with the code that builds it. Each
 screenshot is the **real terminal output** of the
-[`gallery` example](https://github.com/oetiker/rstv/blob/main/examples/gallery.rs),
+[`gallery` example](https://github.com/oetiker/tvision-rs/blob/main/examples/gallery.rs),
 captured live; each code block is the *same* builder fn the screenshot was made
 from, included verbatim — so every line you see here compiles.
 

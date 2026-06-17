@@ -12,12 +12,12 @@ can application code legitimately invent a new value?**
 
 ## Commands: an open newtype
 
-App code constantly mints its own commands, so [`Command`](../api/rstv/command/struct.Command.html)
+App code constantly mints its own commands, so [`Command`](../api/tvision-rs/command/struct.Command.html)
 is **open**: a one-field newtype around a `&'static str`, with the framework's
 standard commands exposed as `SCREAMING_SNAKE` associated constants.
 
 ```rust
-# use rstv as tv;
+# use tvision_rs as tv;
 let _ok     = tv::Command::OK;     // ports cmOK   — value "tv.ok"
 let _cancel = tv::Command::CANCEL; // ports cmCancel
 let _quit   = tv::Command::QUIT;   // ports cmQuit
@@ -26,11 +26,11 @@ let _quit   = tv::Command::QUIT;   // ports cmQuit
 The integer never comes back. In C++ those numbers existed only to serialize a
 view (`TStreamable`, dropped) and to index a 256-bit `TCommandSet`. Neither is
 needed, so a command's value is now pure *identity*: a namespaced string. Your
-app defines its own with [`Command::custom`](../api/rstv/command/struct.Command.html#method.custom),
+app defines its own with [`Command::custom`](../api/tvision-rs/command/struct.Command.html#method.custom),
 picking a dotted prefix unique to you:
 
 ```rust
-# use rstv as tv;
+# use tvision_rs as tv;
 const REFRESH: tv::Command = tv::Command::custom("myapp.refresh");
 # let _ = REFRESH;
 ```
@@ -42,7 +42,7 @@ string contents, so two `Command`s with the same name are equal no matter where
 the literals live.
 
 Because identity is a string rather than a `0..=255` slot, the old 256-bit
-`TCommandSet` becomes a hash-backed [`CommandSet`](../api/rstv/command/struct.CommandSet.html).
+`TCommandSet` becomes a hash-backed [`CommandSet`](../api/tvision-rs/command/struct.CommandSet.html).
 That open command space is what enable/disable, broadcasts, and the command bus
 run on — see [Commands & events](../apps/commands.md).
 
@@ -54,16 +54,16 @@ central registry to edit.
 ## Help contexts: the same shape
 
 A context-sensitive help id is just as extensible, so
-[`HelpCtx`](../api/rstv/help/struct.HelpCtx.html) is built exactly like
+[`HelpCtx`](../api/tvision-rs/help/struct.HelpCtx.html) is built exactly like
 `Command` — an open newtype around a namespaced string, with
-[`HelpCtx::NO_CONTEXT`](../api/rstv/help/struct.HelpCtx.html) (TV's
-`hcNoContext`) as the default and [`HelpCtx::custom`](../api/rstv/help/struct.HelpCtx.html#method.custom)
+[`HelpCtx::NO_CONTEXT`](../api/tvision-rs/help/struct.HelpCtx.html) (TV's
+`hcNoContext`) as the default and [`HelpCtx::custom`](../api/tvision-rs/help/struct.HelpCtx.html#method.custom)
 for your own. See [Menus, status line & help](../apps/menus.md).
 
 ## Keys: a closed enum
 
 Keys are the opposite case. The set of physical keys is **fixed** — no app
-invents a new one — so [`Key`](../api/rstv/event/enum.Key.html) is a closed
+invents a new one — so [`Key`](../api/tvision-rs/event/enum.Key.html) is a closed
 `enum` (`Key::Enter`, `Key::F(1)`), not a newtype. Closed sets become enums so you
 get exhaustive `match`; open, app-extensible families become newtypes so the
 value space stays open. That single extensibility test decides every constant

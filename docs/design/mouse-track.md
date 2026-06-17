@@ -51,7 +51,7 @@ auto-repeats while the terminal keeps sending mouse reports
 (`THardwareInfo::getMouseEvent` returns False on an empty queue,
 hardware.cpp:69-78) — on a quiet terminal `evMouseAuto` starves. The widget
 code (scrollbar arrows, editor drag-scroll, menus) was written against the
-original Borland behavior; rstv's **timer-driven synthesizer restores it**.
+original Borland behavior; tvision-rs's **timer-driven synthesizer restores it**.
 
 ## Deviation
 

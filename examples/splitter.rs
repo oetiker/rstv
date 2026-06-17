@@ -34,7 +34,7 @@
 
 use std::io;
 
-use rstv::{
+use tvision_rs::{
     Backend, Button, ButtonFlags, Command, Constraints, Context, CrosstermBackend, Desktop, Event,
     Group, InputLine, Key, KeyEvent, KeyModifiers, Label, ListBox, Menu, MenuBar, Node, Outline,
     Program, Rect, Splitter, StatusDef, StatusLine, SystemClock, Theme, View, alt, delegate,
@@ -204,7 +204,7 @@ impl SplitterApp {
 
         // A window sized to a generous chunk of the desktop.
         let win_rect = Rect::new(r.a.x + 2, r.a.y + 1, r.b.x - 2, r.b.y - 1);
-        let mut win = rstv::Window::new(win_rect, Some("Multi-pane Splitter".to_string()), 1);
+        let mut win = tvision_rs::Window::new(win_rect, Some("Multi-pane Splitter".to_string()), 1);
 
         // The window interior in LOCAL coords: frame-inset by one cell each side.
         let ext = win.state().get_extent();

@@ -18,7 +18,7 @@
 //!
 //! The original framework resolved colours by walking an owner chain of
 //! length-prefixed palette strings and scattered drawing glyphs as literals
-//! through the widget source. rstv collapses both into one [`Theme`] keyed by a
+//! through the widget source. tvision-rs collapses both into one [`Theme`] keyed by a
 //! semantic [`Role`] (deviation D7); each original colour lookup maps to one named
 //! role here.
 
@@ -491,7 +491,7 @@ impl Role {
 /// # Turbo Vision heritage
 ///
 /// Ports the glyph tables in `tvtext1.cpp`. The original encoded the frame box as
-/// a bit-mask fed table plus a sibling tee-join walk; rstv stores plain named box
+/// a bit-mask fed table plus a sibling tee-join walk; tvision-rs stores plain named box
 /// pieces instead and skips the sibling walk (deviation D3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Glyphs {
@@ -735,7 +735,7 @@ impl Theme {
     /// program-owned widgets → one direct hop) down to the final attribute byte.
     /// Those derivation comments are kept deliberately: they are the project's
     /// documented justification for each colour choice (see the `theme` design
-    /// notes). Roles marked "rstv-native" have no inherited chain.
+    /// notes). Roles marked "tvision-rs-native" have no inherited chain.
     pub fn classic_blue() -> Self {
         // BIOS 4-bit palette reminder: 0=black 1=blue 2=green 3=cyan 4=red
         // 5=magenta 6=brown 7=lightgray 8=darkgray 9=lightblue ... F=white.
@@ -790,7 +790,7 @@ impl Theme {
         set(&mut styles, Role::ScrollBarPage, 0x1, 0x3); // blue on cyan (chain: cpScrollBar[1]=0x04 → cpBlueWindow[4]=0x0B → cpAppColor[11]=0x31)
         set(&mut styles, Role::ScrollBarControls, 0x1, 0x3); // blue on cyan (chain: cpScrollBar[2]=cpScrollBar[3]=0x05 → cpBlueWindow[5]=0x0C → cpAppColor[12]=0x31)
 
-        // Generic control states — rstv-native roles (no inherited palette chain).
+        // Generic control states — tvision-rs-native roles (no inherited palette chain).
         set(&mut styles, Role::Normal, 0x0, 0x3); // black on cyan
         set(&mut styles, Role::Focused, 0xF, 0x2); // white on green
         set(&mut styles, Role::Disabled, 0x8, 0x1); // darkgray on blue
@@ -806,7 +806,7 @@ impl Theme {
         set(&mut styles, Role::ListSelected, 0xE, 0x3); // yellow on cyan (chain: cpListViewer[4]=0x1C → cpGrayDialog[28]=0x3B → cpAppColor[59]=0x3E)
         set(&mut styles, Role::ListDivider, 0x1, 0x3); // blue on cyan (chain: cpListViewer[5]=0x1D → cpGrayDialog[29]=0x3C → cpAppColor[60]=0x31)
 
-        // Feedback family — rstv-native roles (no inherited chain).
+        // Feedback family — tvision-rs-native roles (no inherited chain).
         set(&mut styles, Role::Error, 0xF, 0x4); // white on red
         set(&mut styles, Role::Warning, 0x0, 0x6); // black on brown
         set(&mut styles, Role::Info, 0xF, 0x1); // white on blue
@@ -861,7 +861,7 @@ impl Theme {
         set(&mut styles, Role::InputArrow, 0xA, 0x1); // lightgreen on blue (chain: cpInputLine[4]=0x15 → cpGrayDialog[21]=0x34 → cpAppColor[52]=0x1A)
 
         // Scroller / editor content fill. Derivation: a scroller/editor inside a
-        // (blue) window — the realistic case, since rstv collapsed per-window
+        // (blue) window — the realistic case, since tvision-rs collapsed per-window
         // palettes into a single role:
         //   cpScroller[1]=0x06 → cpBlueWindow[6]=0x0D → cpAppColor[0x0D]=0x1E (normal)
         //   cpScroller[2]=0x07 → cpBlueWindow[7]=0x0E → cpAppColor[0x0E]=0x71 (selected)

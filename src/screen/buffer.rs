@@ -7,7 +7,7 @@
 //! The diff algorithm is adapted from ratatui's `Buffer::diff` (MIT). Our `Cell`
 //! (see `cell.rs`) already encodes double-width glyphs with explicit
 //! `wide`/`trail` flags, so the wide-char skipping is driven off those rather
-//! than off `unicode-width`. ratatui's `skip` field is dropped — rstv repaints
+//! than off `unicode-width`. ratatui's `skip` field is dropped — tvision-rs repaints
 //! the whole tree, so there is nothing to opt out of.
 //!
 //! # Turbo Vision heritage
@@ -20,7 +20,7 @@
 
 use crate::screen::Cell;
 
-/// In-memory screen grid. Adapted from the ratatui `Buffer` for rstv's
+/// In-memory screen grid. Adapted from the ratatui `Buffer` for tvision-rs's
 /// whole-tree repaint model.
 ///
 /// Unlike ratatui, `Buffer` stores only `width` × `height` rather than an

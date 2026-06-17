@@ -1208,7 +1208,7 @@ mod tests {
     }
 
     /// DISCRIMINATING: a scrolled field whose selection covers the start
-    /// (`sel_start = 0`, off the visible left edge). Because rstv REDRAWS the
+    /// (`sel_start = 0`, off the visible left edge). Because tvision-rs REDRAWS the
     /// selection (no attr-only paint), the highlighted cells must show the
     /// *visible scrolled glyphs* ("efgh…"), NOT the head of the string ("abcd…").
     /// This is exactly the state `select_all(true, true)` produces on a long
@@ -1465,7 +1465,7 @@ mod tests {
     ///
     /// Note: `sel_start`/`sel_end` are NOT asserted against the saved 1/3 — the
     /// faithful C++ resets `selStart = selEnd = 0` after a printable key
-    /// regardless of the validator outcome (`tinputli.cpp:459`, rstv lines
+    /// regardless of the validator outcome (`tinputli.cpp:459`, tvision-rs lines
     /// 643-645), so those offsets legitimately end at 0 here.
     #[test]
     fn rejected_input_restores_pre_keystroke_state() {

@@ -15,7 +15,7 @@
 //! Ports the `kb*` key-code family, the `TKey` class (`tkeys.h` / `tkey.cpp`),
 //! and `KeyDownEvent` (`system.h`). `TKey`'s canonical form already decomposes
 //! each keystroke into a base code plus a modifier mask (Ctrl+A is `'A'` with the
-//! ctrl-shift mask; Shift+Tab is the Tab code with the shift mask); rstv keeps
+//! ctrl-shift mask; Shift+Tab is the Tab code with the shift mask); tvision-rs keeps
 //! that decomposition as the [`Key`] enum and a separate [`KeyModifiers`]
 //! (deviations D4 and D5).
 
@@ -121,12 +121,12 @@ impl From<Key> for KeyEvent {
 ///
 /// # Turbo Vision heritage
 /// Ports `hotKey`/`hotKeyStr` (`tinputli.cpp`); they returned a null char for the
-/// no-hotkey case, where rstv returns `Option<char>`.
+/// no-hotkey case, where tvision-rs returns `Option<char>`.
 ///
 /// # Examples
 ///
 /// ```
-/// use rstv::event::hot_key;
+/// use tvision_rs::event::hot_key;
 /// assert_eq!(hot_key("~o~k"), Some('O'));  // uppercased
 /// assert_eq!(hot_key("O~k"), Some('K'));  // first char after first '~'
 /// assert_eq!(hot_key("No tilde here"), None);

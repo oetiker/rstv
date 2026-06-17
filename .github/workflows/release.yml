@@ -14,7 +14,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  PAGES_URL: "https://oetiker.github.io/rstv"
+  PAGES_URL: "https://oetiker.github.io/tvision-rs"
 
 jobs:
   version:
@@ -80,12 +80,12 @@ jobs:
 
       - name: Bump crate versions
         run: |
-          # Bumps both published crates and the rstv-macros dependency pin in rstv.
+          # Bumps both published crates and the tvision-rs-macros dependency pin in tvision-rs.
           # set-version also rewrites the workspace members' entries in Cargo.lock;
           # the explicit `cargo update` makes that refresh deterministic. Do NOT
           # swallow its failure — a stale lock would surface later in publish.
-          cargo set-version -p rstv -p rstv-macros "${{ steps.version.outputs.version }}"
-          cargo update -p rstv -p rstv-macros
+          cargo set-version -p tvision-rs -p tvision-rs-macros "${{ steps.version.outputs.version }}"
+          cargo update -p tvision-rs -p tvision-rs-macros
 
       - name: Roll CHANGELOG.md
         run: |
@@ -105,7 +105,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml Cargo.lock rstv-macros/Cargo.toml CHANGELOG.md
+          git add Cargo.toml Cargo.lock tvision-rs-macros/Cargo.toml CHANGELOG.md
           git commit -m "Release ${{ steps.version.outputs.tag }}"
           git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}"
           # Push branch and this one tag in a single atomic invocation (not --tags).
@@ -122,24 +122,24 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Publish rstv-macros
-        run: cargo publish -p rstv-macros --token "${{ secrets.CRATES_IO_TOKEN }}"
+      - name: Publish tvision-rs-macros
+        run: cargo publish -p tvision-rs-macros --token "${{ secrets.CRATES_IO_TOKEN }}"
 
-      - name: Publish rstv (retry while crates.io index propagates)
+      - name: Publish tvision-rs (retry while crates.io index propagates)
         run: |
-          # rstv depends on the just-published rstv-macros; cargo publish verifies
-          # by building, which needs the new rstv-macros in the index. Propagation
+          # tvision-rs depends on the just-published tvision-rs-macros; cargo publish verifies
+          # by building, which needs the new tvision-rs-macros in the index. Propagation
           # is usually seconds but unbounded, so retry with backoff instead of a
           # fixed sleep.
           for attempt in 1 2 3 4 5 6; do
-            if cargo publish -p rstv --token "${{ secrets.CRATES_IO_TOKEN }}"; then
-              echo "Published rstv on attempt $attempt"
+            if cargo publish -p tvision-rs --token "${{ secrets.CRATES_IO_TOKEN }}"; then
+              echo "Published tvision-rs on attempt $attempt"
               exit 0
             fi
-            echo "Attempt $attempt failed (rstv-macros may not be indexed yet); retrying in 30s…"
+            echo "Attempt $attempt failed (tvision-rs-macros may not be indexed yet); retrying in 30s…"
             sleep 30
           done
-          echo "::error::cargo publish -p rstv failed after retries"
+          echo "::error::cargo publish -p tvision-rs failed after retries"
           exit 1
 
   github-release:
@@ -170,7 +170,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.version.outputs.tag }}
-          name: rstv ${{ needs.version.outputs.tag }}
+          name: tvision-rs ${{ needs.version.outputs.tag }}
           body_path: release-notes.md
           draft: false
           prerelease: false
@@ -188,11 +188,11 @@ jobs:
       - name: Install tmux (for screenshots)
         run: sudo apt-get update && sudo apt-get install -y tmux
 
-      - name: Rebase doc URLs to /rstv/${{ needs.version.outputs.tag }}/
+      - name: Rebase doc URLs to /tvision-rs/${{ needs.version.outputs.tag }}/
         run: |
           TAG="${{ needs.version.outputs.tag }}"
-          sed -i "s|^site-url = \"/rstv/\"|site-url = \"/rstv/${TAG}/\"|" docs/book/book.toml
-          sed -i "s|href=\"/rstv/|href=\"/rstv/${TAG}/|g" docs/book/theme/rustdoc-header.html
+          sed -i "s|^site-url = \"/tvision-rs/\"|site-url = \"/tvision-rs/${TAG}/\"|" docs/book/book.toml
+          sed -i "s|href=\"/tvision-rs/|href=\"/tvision-rs/${TAG}/|g" docs/book/theme/rustdoc-header.html
           grep -n 'site-url' docs/book/book.toml
           grep -n 'href=' docs/book/theme/rustdoc-header.html
 
@@ -251,25 +251,25 @@ jobs:
       - name: Add new version to site
         run: |
           TAG="${{ needs.version.outputs.tag }}"
-          rm -rf "site/rstv/$TAG"
-          mkdir -p "site/rstv/$TAG"
-          cp -r new-docs/* "site/rstv/$TAG/"
+          rm -rf "site/tvision-rs/$TAG"
+          mkdir -p "site/tvision-rs/$TAG"
+          cp -r new-docs/* "site/tvision-rs/$TAG/"
 
       - name: Update versions and redirect
         run: |
           chmod +x .github/scripts/manage-doc-versions.sh
-          .github/scripts/manage-doc-versions.sh site/rstv cull
-          .github/scripts/manage-doc-versions.sh site/rstv update-json
-          .github/scripts/manage-doc-versions.sh site/rstv generate-redirect
+          .github/scripts/manage-doc-versions.sh site/tvision-rs cull
+          .github/scripts/manage-doc-versions.sh site/tvision-rs update-json
+          .github/scripts/manage-doc-versions.sh site/tvision-rs generate-redirect
 
       - name: Show final site structure
         run: |
-          ls -la site/rstv/
-          echo "versions.json:"; cat site/rstv/versions.json
+          ls -la site/tvision-rs/
+          echo "versions.json:"; cat site/tvision-rs/versions.json
 
       - uses: actions/configure-pages@v4
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site/rstv
+          path: site/tvision-rs
       - id: deployment
         uses: actions/deploy-pages@v4

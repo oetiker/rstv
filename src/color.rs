@@ -14,7 +14,7 @@
 //! # Turbo Vision heritage
 //!
 //! magiblot packs fg/bg/style into a 64-bit `TColorAttr` whose fg/bg are each a
-//! tagged-union `TColorDesired` (`colors.h`). rstv keeps that four-variant
+//! tagged-union `TColorDesired` (`colors.h`). tvision-rs keeps that four-variant
 //! design but drops the bit-packing: a plain enum plus a struct-of-bools
 //! (deviation D5). The quantization ladder (`mapcolor.cpp`) moves to the
 //! `Backend` (deviation D6).
