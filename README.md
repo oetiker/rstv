@@ -94,6 +94,20 @@ themeable palette. Rendering is a vendored ratatui cell-buffer with whole-tree
 diffing, behind a `Backend` trait (crossterm by default; a headless backend
 drives the snapshot tests).
 
+## How it was built — and where it's going
+
+I ported tvision-rs from C++ using [Claude Code](https://claude.com/claude-code),
+working class-by-class through magiblot/tvision in dependency order, with every
+widget pinned by a snapshot test against the original's behaviour.
+
+The faithful port is the foundation, not the finish line: I intend to grow the
+classic widget set with modern, native-Rust additions. A few have already landed —
+a **truecolor color picker** (a 24-bit successor to the original 16-color
+selector), a **multi-pane splitter**, and a **regex validator** alongside the
+ported picture-mask one — and more are planned.
+
+— [Tobi Oetiker](https://github.com/oetiker)
+
 ## Heritage & license
 
 tvision-rs is licensed under the [MIT License](LICENSE). It carries forward the upstream
