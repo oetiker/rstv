@@ -352,6 +352,14 @@ impl View for SortedListBox {
     fn value(&self) -> Option<FieldValue> {
         Some(FieldValue::Int(self.lv.focused))
     }
+
+    /// Set the focused item and republish the vertical bar. Mirrors [`ListBox::set_value_ctx`].
+    /// The value is an index into the (sorted) item Vec — symmetric with `value()`.
+    fn set_value_ctx(&mut self, v: FieldValue, ctx: &mut Context) {
+        if let FieldValue::Int(idx) = v {
+            list_viewer::focus_item_num(self, idx, ctx);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -908,6 +916,56 @@ mod tests {
             slb.handle_event(&mut ev, &mut ctx);
         }
         assert_eq!(slb.search_pos(), -1, "cmReleasedFocus resets search_pos");
+    }
+
+    // -- SLB 0. set_value_ctx scatter ------------------------------------------
+
+    #[test]
+    fn sorted_lb_set_value_ctx_focuses_the_item() {
+        // Build a SortedListBox with a v-bar sentinel so scroll-bar deferrals
+        // land correctly (mirrors the ListBox harness in new_list_sets_range…).
+        let mut mint_group = Group::new(Rect::new(0, 0, 4, 4));
+        let sentinel =
+            mint_group.insert(Box::new(ListBox::new(Rect::new(0, 0, 1, 1), 1, None, None)));
+
+        let mut slb = SortedListBox::new(Rect::new(0, 0, 20, 8), 1, None, Some(sentinel));
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred: Vec<Deferred> = vec![];
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            // "alpha","beta","charlie" are already in case-insensitive order.
+            slb.new_list(
+                vec!["alpha".into(), "beta".into(), "charlie".into()],
+                &mut ctx,
+            );
+        }
+        // Gather: initial focus is 0.
+        assert_eq!(slb.value(), Some(FieldValue::Int(0)), "initial gather == 0");
+
+        deferred.clear();
+
+        // Scatter index 2 ("charlie").
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            slb.set_value_ctx(FieldValue::Int(2), &mut ctx);
+        }
+
+        // Round-trip: gather must return the scattered index.
+        assert_eq!(
+            slb.value(),
+            Some(FieldValue::Int(2)),
+            "after scatter(2) gather returns 2"
+        );
+
+        // A scroll-bar param deferral for the v-bar must have been queued.
+        assert!(
+            deferred.iter().any(|d| matches!(
+                d,
+                Deferred::ScrollBarSetParams { id, value: Some(_), .. } if *id == sentinel
+            )),
+            "scatter queued a ScrollBarSetParams deferral for the v-bar"
+        );
     }
 
     // -- SLB 8. new_list sorts case-insensitively and resets search ------------
