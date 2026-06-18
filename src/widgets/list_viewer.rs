@@ -2160,10 +2160,8 @@ mod tests {
 
     // -- set_state sfVisible hides scroll bars ---------------------------------
 
-    /// Clearing `sfVisible` on an active+visible list viewer must enqueue
-    /// `SetVisible(_, false)` for both scroll bars.  Before Fix A (the guard
-    /// only checked Active|Selected), this test failed because the Visible arm
-    /// was absent and the deferred vec stayed empty.
+    /// Clearing `sfVisible` on an active+visible list viewer enqueues
+    /// `SetVisible(_, false)` for both scroll bars.
     #[test]
     fn set_state_visible_false_hides_both_scroll_bars() {
         let (_gh, h) = mint_id();

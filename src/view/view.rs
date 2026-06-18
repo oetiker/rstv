@@ -247,19 +247,20 @@ impl DragMode {
     }
 }
 
-/// The four state flags a parent group flips on a child through
+/// The state flags a parent group flips on a child through
 /// [`View::set_state`] — the subset of [`State`] that the focus / activation
-/// machinery drives, and that propagates with side effects.
+/// and visibility machinery drives, with side effects.
 ///
-/// The visibility, occlusion, shadow, and cursor flags are **not** here: their
-/// changes are the dropped occlusion/cursor side effects, flipped directly on
-/// [`ViewState`] (`show`/`hide`/`show_cursor`/…), not through the propagating
-/// [`set_state`](View::set_state) hook.
+/// `Visible` is included here but does **not** propagate to children
+/// (whole-tree redraw means there is no occlusion cache to maintain).
+/// It is delivered per-child by [`Group::set_visible_descendant`](crate::view::Group) so
+/// that widgets owning sibling scroll bars (e.g. `ListViewer`) can react. The
+/// occlusion, shadow, and cursor flags remain excluded because their dropped
+/// side effects are never routed through `set_state` at all.
 ///
 /// # Turbo Vision heritage
-/// The propagating subset of the `sf*` family — `sfActive`/`sfSelected`/
-/// `sfFocused`/`sfDragging`. The directly-flipped flags excluded here are
-/// `sfVisible`/`sfExposed`/`sfShadow`/`sfCursor*`.
+/// The `sf*` flags routed through `set_state`: `sfActive`/`sfSelected`/
+/// `sfFocused`/`sfDragging`/`sfVisible`. Excluded: `sfExposed`/`sfShadow`/`sfCursor*`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StateFlag {
     /// `sfActive` — the view is in the active window/group chain.
@@ -465,9 +466,9 @@ impl ViewState {
         }
     }
 
-    /// Flip the [`State`] bool named by `flag` — the plain field write for the
-    /// four propagating flags (see [`StateFlag`]). The broadcast / propagation
-    /// side effects live in [`View::set_state`], not here.
+    /// Flip the [`State`] bool named by `flag` — the plain field write for each
+    /// propagating [`StateFlag`]. The broadcast / propagation side effects live
+    /// in [`View::set_state`], not here.
     pub fn set_flag(&mut self, flag: StateFlag, enable: bool) {
         match flag {
             StateFlag::Active => self.state.active = enable,

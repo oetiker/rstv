@@ -870,8 +870,7 @@ impl View for Group {
                         .set_state(StateFlag::Focused, enable, ctx);
                 }
             }
-            // Selected and Visible do not propagate to children from the group.
-            // Visible is delivered per-child by set_visible_descendant.
+            // Selected and Visible do not fan out to children; Visible is targeted per-child via set_visible_descendant.
             StateFlag::Selected | StateFlag::Visible => {}
         }
     }
