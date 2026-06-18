@@ -38,3 +38,28 @@ See [Dialogs & data](../apps/dialogs.md) for the user-facing recipe, [Event
 capture](capture.md) for the mechanism modality shares with drag/resize and
 press-and-hold, and [the event loop in depth](../internals/event-loop.md) for
 what each `pump_once` turn does.
+
+## Getting a result back: `exec_view_with`
+
+C++ `execView` returns a `ushort` end command; the caller then reads results out
+of the still-live dialog with `getData` before it is destroyed. tvision-rs keeps
+that shape with
+[`Program::exec_view_with`](../api/tvision-rs/app/struct.Program.html#method.exec_view_with):
+it runs the modal, then — at the **pre-drop window**, while the view is still in
+the tree — hands your `extract` closure the modal's `&mut dyn View` and the end
+command. Whatever the closure returns is handed straight back, **by value**:
+
+```rust,ignore
+let chosen: Option<Color> = program.exec_view_with(Box::new(dialog), |modal, cmd| {
+    (cmd == Command::OK)
+        .then(|| read_the_color_out_of(modal))
+        .flatten()
+});
+```
+
+There is no shared `Rc<Cell>` sink and no `dyn Any` in the framework: the result
+type `R` is named by the caller, never by the framework. This is the by-value
+successor to the old per-dialog `ModalCompletion` "sink" variants. A single field
+crosses as a [`FieldValue`](../api/tvision-rs/data/enum.FieldValue.html) via
+`View::value`; a richer native value (a `Color`, a whole `Theme`) is returned
+directly from `extract` — `Color`/`Theme` are deliberately not `FieldValue`s.
