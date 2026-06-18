@@ -1739,23 +1739,34 @@ impl Program {
                 // TProgram::idle's statusLine->update() (tstatusl.cpp:209):
                 // re-run find_items against the top view's help context + redraw.
                 //
-                // "TheTopView" in tvision-rs = captures.top_modal_view(): the modal pushed
-                // by exec_view_with_completion, or None when no modal is running. When
-                // None, the C++ `TProgram::idle` would get hcNoContext (TopView() == 0)
-                // — faithful: All-range defs match hcNoContext, so the default
-                // status line is shown. This enables context-split (OneOf) status
-                // lines: when a modal opens with a specific helpCtx, the status line
-                // switches to the matching def automatically.
+                // Faithful to C++ TView::TopView() (tview.cpp:879): when an execView
+                // modal is active, captures.top_modal_view() returns its ViewId, and
+                // we read that modal's get_help_ctx(). When no modal is running
+                // (top_modal_view() == None), C++ TopView() does NOT return 0 — it
+                // walks UP the owner chain to the first sfModal view (the application
+                // root) and returns it; TGroup::getHelpCtx then recurses DOWN via the
+                // current chain to the focused leaf. Our root `group` IS that sfModal
+                // app root, so the None arm reads group.get_help_ctx() directly (Task
+                // 4 made get_help_ctx recursive). This surfaces a non-modal desktop
+                // window's focused control to the status line (gap #3 fix).
                 //
                 // No explicit redraw is needed — the whole-tree redraw runs every
                 // pump cycle after this arm, so set_help_ctx's internal state
                 // update is picked up on the next render.
                 if let Some(sl_id) = *status_line {
-                    // Step 1: read top modal's help ctx (immutable borrow via find_mut).
-                    let top_ctx = captures
-                        .top_modal_view()
-                        .and_then(|modal_id| group.find_mut(modal_id).map(|v| v.get_help_ctx()))
-                        .unwrap_or(crate::help::HelpCtx::NO_CONTEXT);
+                    // Step 1: read top view's help ctx (immutable borrow via find_mut).
+                    let top_ctx = match captures.top_modal_view() {
+                        Some(modal_id) => group
+                            .find_mut(modal_id)
+                            .map(|v| v.get_help_ctx())
+                            .unwrap_or(crate::help::HelpCtx::NO_CONTEXT),
+                        // No execView modal: faithful to C++ TView::TopView() (tview.cpp:879) —
+                        // when TheTopView == 0 it walks UP to the first sfModal view, the
+                        // application root, whose TGroup::getHelpCtx (group.rs) recurses DOWN
+                        // the current chain to the focused leaf. Our root `group` IS that modal
+                        // app root, so read its (now-recursive, Task 4) help context.
+                        None => group.get_help_ctx(),
+                    };
                     // Step 2: update status line (separate find_mut borrow).
                     use crate::status::StatusLine;
                     if let Some(sl) = group
@@ -9128,6 +9139,75 @@ mod tests {
                 def_with_modal,
                 Some(0),
                 "modal with app.find helpCtx → OneOf def is index 0"
+            );
+        }
+
+        // -- 8. Non-modal: idle path bubbles focused leaf help ctx ---------------
+
+        /// REGRESSION TEST (gap #3): when no execView modal is active, the idle
+        /// status-line arm must read `group.get_help_ctx()` (which recurses down the
+        /// `current` chain to the focused leaf), not hard-code `NO_CONTEXT`.
+        ///
+        /// C++ baseline: `TStatusLine::update` calls `TopView()->getHelpCtx()`.
+        /// `TView::TopView()` with no modal (`TheTopView == 0`) walks *up* the owner
+        /// chain to the first `sfModal` view — the application root — whose
+        /// `TGroup::getHelpCtx` then recurses *down* via `current`. Our root `group`
+        /// IS that modal app root.
+        ///
+        /// Setup: a `Program` with a `OneOf(["app.search"]) + All` status line. A
+        /// focusable leaf with `help_ctx = "app.search"` is inserted into the desktop
+        /// (via `desktop_insert`, which focuses it). No modal is pushed. A single
+        /// `pump_once` with no pending events triggers the idle arm. The status line
+        /// must select def index 0 (the OneOf def keyed on "app.search"), NOT index 1
+        /// (the All def, which would be selected if top_ctx were NO_CONTEXT).
+        #[test]
+        fn status_line_bubbles_focused_leaf_help_ctx_without_modal() {
+            let find_ctx = crate::help::HelpCtx::custom("app.search");
+            let (mut program, _handle, sl) = program_oneof(40, 10, find_ctx);
+
+            // Build a minimal selectable view with the matching help_ctx.
+            struct HelpLeaf {
+                st: crate::view::ViewState,
+            }
+            impl crate::view::View for HelpLeaf {
+                fn state(&self) -> &crate::view::ViewState {
+                    &self.st
+                }
+                fn state_mut(&mut self) -> &mut crate::view::ViewState {
+                    &mut self.st
+                }
+                fn draw(&mut self, _ctx: &mut DrawCtx) {}
+            }
+            use crate::view::Rect;
+            let bounds = Rect::new(2, 2, 20, 4);
+            let mut leaf = HelpLeaf {
+                st: crate::view::ViewState::new(bounds),
+            };
+            leaf.st.help_ctx = find_ctx;
+            // Make selectable so desktop_insert can focus it.
+            leaf.st.options.selectable = true;
+
+            // Insert into the desktop — this focuses the leaf, making it the
+            // current of the desktop, which in turn is the current of the root group.
+            program.desktop_insert(Box::new(leaf));
+            // Clear RECEIVED_FOCUS broadcasts so the next pump_once hits the idle arm.
+            program.out_events.clear();
+
+            // No modal is active; pump_once must take the None branch and call
+            // group.get_help_ctx(), which recurses root → desktop → leaf → find_ctx.
+            program.pump_once();
+
+            let def_no_modal = program
+                .group_mut()
+                .find_mut(sl)
+                .and_then(|v| v.as_any_mut())
+                .and_then(|a| a.downcast_ref::<StatusLine>())
+                .expect("status line found")
+                .selected_def();
+            assert_eq!(
+                def_no_modal,
+                Some(0),
+                "non-modal desktop leaf with app.search helpCtx → OneOf def is index 0"
             );
         }
     }
