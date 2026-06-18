@@ -59,7 +59,7 @@ Top-level index of the audit. One row per reference section; links to the per-se
 | TIndicator | 458–460 | 4 | 4 | 1 | 0 | 0 | 6 | [TIndicator.md](reference/TIndicator.md) |
 | TInputLine | 460–464 | 14 | 7 | 3 | 0 | 0 | 13 | [TInputLine.md](reference/TInputLine.md) |
 | TItemList | 464 | 0 | 3 | 0 | 0 | 0 | 0 | [TItemList.md](reference/TItemList.md) |
-| TLabel | 465–467 | 4 | 3 | 3 | 0 | 2 | 3 | [TLabel.md](reference/TLabel.md) |
+| TLabel | 465–467 | 4 | 3 | 3 | 0 | 0 | 3 | [TLabel.md](reference/TLabel.md) |
 | TListBox | 467–470 | 4 | 5 | 1 | 0 | 0 | 6 | [TListBox.md](reference/TListBox.md) |
 | TListViewer | 470–474 | 13 | 6 | 2 | 0 | 2 | 12 | [TListViewer.md](reference/TListViewer.md) |
 | TLookupValidator | 474–475 | 0 | 2 | 0 | 0 | 0 | 1 | [TLookupValidator.md](reference/TLookupValidator.md) |
@@ -117,10 +117,38 @@ Top-level index of the audit. One row per reference section; links to the per-se
 | TView | 560–576 | 28 | 45 | 5 | 0 | 0 | 28 | [TView.md](reference/TView.md) |
 | TWildStr | 577 | 0 | 1 | 0 | 0 | 0 | 0 | [TWildStr.md](reference/TWildStr.md) |
 | TWindow | 577–581 | 11 | 10 | 6 | 0 | 0 | 13 | [TWindow.md](reference/TWindow.md) |
-| **TOTAL** | — | **476** | **621** | **461** | **1** | **5** | **542** | — |
+| **TOTAL** | — | **476** | **621** | **461** | **1** | **3** | **542** | — |
 
-**Headline:** of 1559 catalogued reference entries, **476 ported** + **621 idiomatic-equivalent** = 1097 present; **461 deliberately not-ported** (DOS/EMS/stream/Pascal substrate + subsystems superseded by extensions, each with a written reason); **1 missing** (candidate gap) and **5 suspect** (present-but-divergent). Zero unresolved entries.
+**Headline:** of 1559 catalogued reference entries, **476 ported** + **621 idiomatic-equivalent** = 1097 present; **461 deliberately not-ported** (DOS/EMS/stream/Pascal substrate + subsystems superseded by extensions, each a written reason); **1 missing** (candidate gap) and **3 suspect** (present-but-divergent). Zero unresolved entries.
 
-## Verification
+## Verification (Task 14)
 
-_(filled below in Task 14: TOC reconciliation + anti-hallucination spot check)_
+**TOC reconciliation:** all 109 Part-3 reference sections (every `T*` class + folded
+types + the 5 `Globals-*` constant/procedure slices) have a `reference/` file and a
+matrix row. The reconciliation pass found exactly one unassigned section —
+`TWildStr` (p. 577, a wildcard path-string alias) — which was audited as a catch-up
+(`reference/TWildStr.md`, EQUIVALENT). No other Part-3 entry is unaccounted for.
+
+**Anti-hallucination spot check:** a fresh reviewer verified a 17-file sample
+(TView, TProgram, TEditor + one per batch + every gap-bearing file) against `src/`
+and the C++ source.
+- **All 6 high-priority gap claims confirmed real:** the 1 MISSING (TMenuView
+  `GetHelpCtx`) and 3 SUSPECT (TListViewer `set_state` missing-`sfVisible`,
+  TListViewer `handleEvent` no-base-call, TApplication `WriteShellMsg` dropped
+  virtual hook). Two over-cautious TLabel SUSPECTs were reclassified to OK
+  (documented deviations; the visible label-marker gap is retained in
+  `gap-report.md` §2b).
+- **Corrected 3 hallucinated internal-symbol citations** the reviewer caught:
+  `Desktop` (was `Program::desktop_mut` → `Program::desktop() -> Option<ViewId>`),
+  TView `Next`/`NextView` (was `Group::next_view`/`NextView` → `Group::find_next`),
+  and TOutlineViewer `OV_*` visibility (was `pub(crate)` → private `const`).
+- **Systemic caveat:** on a few `EQUIVALENT`/`N/A` rows for *private/internal*
+  symbols the auditor cited plausible-but-fabricated names without opening the file.
+  **Public-API symbol citations, the buckets/concepts, and the gap-report
+  (MISSING + SUSPECT) all held up and are trustworthy.** A targeted re-check of
+  every cited *private* symbol name is recommended as a follow-up; it does not
+  change any gap conclusion.
+
+**Bottom line:** the audit is sound for its purpose — the actionable findings
+(1 missing, 3 wrong, the NOT-PORTED register, and the doc scorecard) are verified;
+low-confidence items are confined to internal-symbol name citations and are flagged.

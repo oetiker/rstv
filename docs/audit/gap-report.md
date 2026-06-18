@@ -2,7 +2,7 @@
 
 Derived from `reference/*.md`. See [`README.md`](README.md) for the axes. Back to [coverage-matrix](coverage-matrix.md).
 
-**Summary:** 1 missing · 5 wrong (suspect) · 461 deliberately not-ported (register below). Each missing/wrong item below is a candidate fix; the register is the do-not-re-flag list.
+**Summary:** 1 missing · 3 wrong (suspect) · 461 deliberately not-ported (register below). Each missing/wrong item below is a candidate fix; the register is the do-not-re-flag list. _(Task 14: 2 over-cautious TLabel SUSPECTs reclassified to OK — documented deviations; the visible label-marker gap is retained in §2b.)_
 
 ## 1. Missing — capability the guide documents that has no counterpart
 
@@ -14,14 +14,6 @@ RESOLVED (was UNSURE): CANDIDATE GAP — needs human confirmation. Guide: a drop
 ### TApplication — `WriteShellMsg` (virtual method) (guide p. 381)
 - Rust: `println!` inline in `program_handle_event` (`src/app/program.rs:3319`)
 - Guide: virtual procedure; default prints "Type EXIT to return..." (DOS) or the SIGTSTP message (unix). Rust inlines the print statement directly in `program_handle_event` rather than exposing a virtual/overridable hook. The printed text matches the magiblot unix branch. However, the virtual override point is **not preserved** — user code cannot customize the shell message without forking the crate. This is an undocumented loss of extensibility. Not a behavior-correctness bug (message text is correct) but a deliberate API reduction that is not called out in any D-rule or comment. SUSPECT on the "intentional deviation not documented" axis.
-
-### TLabel — `Draw` (method) (guide p. 466)
-- Rust: `tv::Label::draw` (impl `View::draw`)
-- Guide: "draws with appropriate colors from default palette." magiblot `draw`: fills row with `color`, draws text at column 1 via `moveCStr`, then conditionally draws a marker glyph at column 0 via `showMarkers`/`specialChars[scOff]`. Rust: fills row, draws `~`-marked text at column 1 via `put_cstr` — **column 0 is left as fill space**, `showMarkers` / `specialChars` decoration is not implemented. The struct doc explicitly notes "Marker decoration (the optional `^…^` highlight brackets) is not modeled — the label always draws the plain form." This is a documented deviation, so flagged `SUSPECT` only to surface it clearly: the omission is intentional and commented, but it is a visible behavioral gap (the `^` / marker glyph at column 0 never appears).
-
-### TLabel — `HandleEvent` (method) (guide p. 466)
-- Rust: `tv::Label::handle_event` (impl `View::handle_event`)
-- Guide: responds to `evMouseDown` and shortcut key events by selecting the linked control; responds to `cmReceivedFocus`/`cmReleasedFocus` broadcasts to update `Light`. Three differences relative to magiblot worth noting: (1) **focusLink selectable guard**: magiblot's `focusLink` checks `link->options & ofSelectable` before calling `link->focus()` — if the link is not selectable, `focusLink` still clears the event but skips the focus call. Rust `focus_link` calls `ctx.request_focus(id)` unconditionally (the selectable gate is delegated to `Group::focus_descendant`). This is functionally equivalent for all realistic cases (`focus_descendant` silently no-ops on non-selectable), but the test `focus_descendant_finds_but_skips_non_selectable` confirms the behavior; the selectable-gate difference is undocumented in `focus_link`'s rustdoc. (2) **Light update mechanism**: magiblot tests `link->state & sfFocused` at broadcast time (polls the link's current state). Rust uses `source == link` to identify which view changed and maps `RECEIVED_FOCUS` → `light = true`, `RELEASED_FOCUS` → `light = false` (tracks transitions). Functionally equivalent; the struct doc notes this as the broadcast-tracking design. (3) **drawView call**: magiblot calls `drawView()` inside `handleEvent` after updating `light`. Rust relies on the whole-tree redraw on every pump tick (D9) — no inline `drawView`. Documented in struct doc. Items (2) and (3) are documented deviations; item (1) is not explicitly documented in `focus_link`.
 
 ### TListViewer — `handleEvent` (method) (guide p. 472)
 - Rust: `tv::list_viewer::handle_event(this, ev, ctx)` free function
