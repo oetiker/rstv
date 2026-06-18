@@ -1566,7 +1566,7 @@ impl Program {
     /// `docs/design/async-modal-from-view.md`) — the asymmetric twin of the
     /// handle_event paths.
     ///
-    /// We are BETWEEN pump iterations (called from `exec_view_with_completion`'s
+    /// We are BETWEEN pump iterations (called from `exec_view_capture`'s
     /// retval loop, holding `&mut self`), so the event-gated deferred drain inside
     /// [`pump_once`](Self::pump_once) will NEVER fire here. A modal view's `valid`
     /// (e.g. a [`FileEditor`](crate::widgets::FileEditor) modified-save prompt) that
@@ -10142,9 +10142,10 @@ mod tests {
             assert_eq!(program.capture_len(), 0, "ModalFrame popped on OK");
         }
 
-        /// OK extracts the ThemeEditorBody's modified working theme BY VALUE — the
-        /// path Program::theme_editor uses (exec_view_with), replacing the old
-        /// Rc/RefCell sink that went away with the deleted ThemeEdit variant.
+        /// OK extracts the ThemeEditorBody's modified working theme BY VALUE,
+        /// exercising the public `exec_view_with` wrapper over the same core
+        /// (`exec_view_capture`) that `Program::theme_editor` uses — replacing the
+        /// old Rc/RefCell sink that went away with the deleted ThemeEdit variant.
         #[test]
         fn theme_editor_ok_installs_new_theme() {
             use crate::color::{Color, Style};
