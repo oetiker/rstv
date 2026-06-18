@@ -878,9 +878,9 @@ impl MenuSession {
                 continue;
             };
             match level.menu.items.get(idx) {
-                Some(MenuItem::Command { name, help_ctx, .. })
-                | Some(MenuItem::SubMenu { name, help_ctx, .. })
-                    if !name.is_empty() && *help_ctx != HelpCtx::NO_CONTEXT =>
+                Some(MenuItem::Command { help_ctx, .. })
+                | Some(MenuItem::SubMenu { help_ctx, .. })
+                    if *help_ctx != HelpCtx::NO_CONTEXT =>
                 {
                     return *help_ctx;
                 }
@@ -969,15 +969,13 @@ impl CaptureHandler for MenuSession {
     }
 
     fn menu_help_ctx(&self) -> Option<HelpCtx> {
-        // Return None only when the result is NO_CONTEXT so the stack scan can
-        // skip non-menu handlers cheaply; a session with a highlighted item that
-        // has NO_CONTEXT also returns None (keeps the existing non-menu path).
-        let ctx = self.help_ctx();
-        if ctx == HelpCtx::NO_CONTEXT {
-            None
-        } else {
-            Some(ctx)
-        }
+        // An open menu preempts the help context of any view behind it —
+        // including when the highlighted item has NO_CONTEXT — matching C++
+        // `TStatusLine::update` calling `TopView()->getHelpCtx()` where
+        // `TopView()` is the active `TMenuView` while a menu is open.
+        // Always returns `Some` so `CaptureStack::active_menu_help_ctx` stops
+        // at this (topmost) handler and does not fall through to views below.
+        Some(self.help_ctx())
     }
 }
 
@@ -1288,14 +1286,7 @@ mod tests {
     #[test]
     fn help_ctx_fallback_cases_return_no_context() {
         // No current on any level.
-        let bar = make_level(
-            Menu::builder()
-                .submenu("~F~ile", None, |m| m.command("Exit", Command::QUIT))
-                .build(),
-            None,
-            true,
-        );
-        let session = MenuSession::new(vec![bar], Point::new(80, 25));
+        let session = MenuSession::new(vec![make_bar()], Point::new(80, 25));
         assert_eq!(
             session.help_ctx(),
             HelpCtx::NO_CONTEXT,
@@ -1307,19 +1298,7 @@ mod tests {
             .command("~O~pen", Command::OPEN) // NO_CONTEXT by default
             .build();
         let box_level = make_level(box_menu, Some(0), false);
-        let session2 = MenuSession::new(
-            vec![
-                make_level(
-                    Menu::builder()
-                        .submenu("~F~ile", None, |m| m.command("Exit", Command::QUIT))
-                        .build(),
-                    None,
-                    true,
-                ),
-                box_level,
-            ],
-            Point::new(80, 25),
-        );
+        let session2 = MenuSession::new(vec![make_bar(), box_level], Point::new(80, 25));
         assert_eq!(
             session2.help_ctx(),
             HelpCtx::NO_CONTEXT,
@@ -1332,19 +1311,7 @@ mod tests {
             default: None,
         };
         let sep_level = make_level(sep_menu, Some(0), false);
-        let session3 = MenuSession::new(
-            vec![
-                make_level(
-                    Menu::builder()
-                        .submenu("~F~ile", None, |m| m.command("Exit", Command::QUIT))
-                        .build(),
-                    None,
-                    true,
-                ),
-                sep_level,
-            ],
-            Point::new(80, 25),
-        );
+        let session3 = MenuSession::new(vec![make_bar(), sep_level], Point::new(80, 25));
         assert_eq!(
             session3.help_ctx(),
             HelpCtx::NO_CONTEXT,
@@ -1394,6 +1361,127 @@ mod tests {
             session.help_ctx(),
             BOX_CTX,
             "deepest level's item context must win over the bar's"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // FIX D tests — disabled items, menu_help_ctx / active_menu_help_ctx semantics
+    // ---------------------------------------------------------------------------
+
+    /// Build the "File" bar level used by the fallback test cases (DRYs the three
+    /// inline repetitions that each needed the same empty bar).
+    fn make_bar() -> MenuLevel {
+        make_level(
+            Menu::builder()
+                .submenu("~F~ile", None, |m| m.command("Exit", Command::QUIT))
+                .build(),
+            None,
+            true,
+        )
+    }
+
+    /// `help_ctx` does NOT skip a **disabled** item that has a non-NO_CONTEXT
+    /// `help_ctx`. The C++ `getHelpCtx` walk (`tmnuview.cpp:453-468`) checks
+    /// `helpCtx != hcNoContext` — it does not filter by disabled.
+    #[test]
+    fn help_ctx_disabled_item_with_context_is_returned() {
+        const OPEN_CTX: HelpCtx = HelpCtx::custom("test.open_disabled");
+
+        let box_menu = Menu {
+            items: vec![MenuItem::Command {
+                name: "~O~pen".to_string(),
+                command: Command::OPEN,
+                key_code: None,
+                param: None,
+                help_ctx: OPEN_CTX,
+                disabled: true, // disabled, but context still surfaced
+            }],
+            default: None,
+        };
+        let box_level = make_level(box_menu, Some(0), false);
+        let session = MenuSession::new(vec![make_bar(), box_level], Point::new(80, 25));
+
+        assert_eq!(
+            session.help_ctx(),
+            OPEN_CTX,
+            "disabled item with non-NO_CONTEXT help_ctx must still be returned"
+        );
+    }
+
+    /// `menu_help_ctx` returns `Some(NO_CONTEXT)` — not `None` — when the
+    /// highlighted item has `NO_CONTEXT`. This makes an open menu preempt any view
+    /// behind it, matching C++ `TopView()->getHelpCtx()` semantics.
+    #[test]
+    fn menu_help_ctx_yields_some_no_context_when_item_is_no_context() {
+        let box_menu = Menu::builder()
+            .command("~O~pen", Command::OPEN) // NO_CONTEXT by default
+            .build();
+        let box_level = make_level(box_menu, Some(0), false);
+        let session = MenuSession::new(vec![make_bar(), box_level], Point::new(80, 25));
+
+        // help_ctx() must be NO_CONTEXT …
+        assert_eq!(session.help_ctx(), HelpCtx::NO_CONTEXT);
+        // … but menu_help_ctx() must return Some, not None, so it preempts.
+        assert_eq!(
+            session.menu_help_ctx(),
+            Some(HelpCtx::NO_CONTEXT),
+            "open menu yields Some(NO_CONTEXT) to preempt views below it"
+        );
+    }
+
+    /// `CaptureStack::active_menu_help_ctx` returns the topmost handler's context
+    /// (not a lower handler's), and returns `None` when the stack is empty.
+    #[test]
+    fn active_menu_help_ctx_uses_topmost_handler_only() {
+        use crate::capture::CaptureStack;
+
+        const ITEM_CTX: HelpCtx = HelpCtx::custom("test.item_ctx");
+
+        // A session with a NO_CONTEXT highlighted item on the stack.
+        let no_ctx_session = {
+            let box_menu = Menu::builder()
+                .command("~O~pen", Command::OPEN) // NO_CONTEXT
+                .build();
+            let box_level = make_level(box_menu, Some(0), false);
+            MenuSession::new(vec![make_bar(), box_level], Point::new(80, 25))
+        };
+
+        let mut stack = CaptureStack::new();
+        // Empty stack → None.
+        assert_eq!(stack.active_menu_help_ctx(), None, "no handlers → None");
+
+        stack.push(Box::new(no_ctx_session));
+        // Topmost handler has NO_CONTEXT → Some(NO_CONTEXT), not None.
+        assert_eq!(
+            stack.active_menu_help_ctx(),
+            Some(HelpCtx::NO_CONTEXT),
+            "open menu with NO_CONTEXT item yields Some(NO_CONTEXT)"
+        );
+
+        // Now build a session whose top level has a real context.
+        let ctx_session = {
+            let box_menu = Menu {
+                items: vec![MenuItem::Command {
+                    name: "~S~ave".to_string(),
+                    command: Command::SAVE,
+                    key_code: None,
+                    param: None,
+                    help_ctx: ITEM_CTX,
+                    disabled: false,
+                }],
+                default: None,
+            };
+            let box_level = make_level(box_menu, Some(0), false);
+            MenuSession::new(vec![make_bar(), box_level], Point::new(80, 25))
+        };
+
+        // Replace the stack with just this session.
+        let mut stack2 = CaptureStack::new();
+        stack2.push(Box::new(ctx_session));
+        assert_eq!(
+            stack2.active_menu_help_ctx(),
+            Some(ITEM_CTX),
+            "topmost session with real context yields Some(ctx)"
         );
     }
 

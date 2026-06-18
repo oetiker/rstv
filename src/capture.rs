@@ -82,7 +82,7 @@ pub trait CaptureHandler {
     }
 
     /// Returns the help context of the currently highlighted menu item, if this
-    /// handler is an active [`MenuSession`](crate::menu::MenuSession).
+    /// handler is a [`MenuSession`](crate::menu::MenuSession).
     ///
     /// Used by the status-line refresh to surface per-item help context while a
     /// menu is open. **Default is `None`** — only `MenuSession` overrides this.
@@ -310,13 +310,16 @@ impl CaptureStack {
     }
 
     /// Returns the help context from an active [`MenuSession`] on the stack, if
-    /// any. Scans all handlers top-down for the first one that returns `Some` from
-    /// [`CaptureHandler::menu_help_ctx`].
+    /// any. Consults **only the topmost handler**: a menu preempts the help
+    /// context iff it is the topmost capture handler, matching C++
+    /// `TopView()->getHelpCtx()` where `TopView()` is the active `TMenuView`.
+    /// Checking only the top handler avoids a scan that would let a menu sitting
+    /// *below* a dialog wrongly win.
     ///
     /// Used by the status-line refresh to surface per-item help while a menu is
     /// open, without disturbing the existing `top_modal_view` path.
     pub fn active_menu_help_ctx(&self) -> Option<crate::help::HelpCtx> {
-        self.handlers.iter().rev().find_map(|h| h.menu_help_ctx())
+        self.handlers.last().and_then(|h| h.menu_help_ctx())
     }
 
     /// Offer `ev` to the handlers top-down (last pushed first).

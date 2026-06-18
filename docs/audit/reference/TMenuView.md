@@ -29,6 +29,6 @@ Rust module(s): `src/menu/menu_view.rs`, `src/menu/menu_session.rs`, `src/menu/m
 
 ## Summary
 
-- PORTED: 5   EQUIVALENT: 7   NOT-PORTED: 2   MISSING: 0   UNSURE: 0
-- SUSPECT: 0   |   doc<3 (public): 8   |   → concept: 0
+- PORTED: 6   EQUIVALENT: 8   NOT-PORTED: 2   MISSING: 0   UNSURE: 0
+- SUSPECT: 0   |   doc<3 (public): 9   |   → concept: 0
 - All entries are EQUIVALENT or PORTED with documented deviations. `GetHelpCtx` is ported as `MenuSession::help_ctx()`, wired into the status-line refresh via `CaptureStack::active_menu_help_ctx()`; the `parentMenu` chain walk becomes a level-stack scan (deviation D3/D9).

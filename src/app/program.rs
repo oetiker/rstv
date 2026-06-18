@@ -1752,22 +1752,16 @@ impl Program {
                 // update is picked up on the next render.
                 if let Some(sl_id) = *status_line {
                     // Step 1: read the effective help ctx.
-                    //
-                    // Priority: an active MenuSession on the capture stack overrides
-                    // the normal top-modal-view path, because the open menu is a
-                    // capture handler (not a focused subtree) and `top_modal_view`
-                    // deliberately skips it (`is_modal_gate` == false for
-                    // MenuSession). This matches C++ `TStatusLine::update` calling
-                    // `TopView()->getHelpCtx()` where `TopView()` is the active
-                    // `TMenuView` while a menu is open.
-                    let top_ctx = if let Some(menu_ctx) = captures.active_menu_help_ctx() {
-                        menu_ctx
-                    } else {
+                    // Priority: an open MenuSession on the capture stack wins —
+                    // it is the topmost handler and its `menu_help_ctx` yields
+                    // `Some` even for NO_CONTEXT, matching C++ `TopView()->
+                    // getHelpCtx()` where `TopView()` is the active `TMenuView`.
+                    let top_ctx = captures.active_menu_help_ctx().unwrap_or_else(|| {
                         captures
                             .top_modal_view()
                             .and_then(|modal_id| group.find_mut(modal_id).map(|v| v.get_help_ctx()))
                             .unwrap_or(crate::help::HelpCtx::NO_CONTEXT)
-                    };
+                    });
                     // Step 2: update status line (separate find_mut borrow).
                     use crate::status::StatusLine;
                     if let Some(sl) = group
