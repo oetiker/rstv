@@ -95,7 +95,7 @@ Top-level index of the audit. One row per reference section; links to the per-se
 | TScroller | 527–530 | 5 | 8 | 6 | 0 | 0 | 11 | [TScroller.md](reference/TScroller.md) |
 | TSearchRec | 530 | 4 | 2 | 3 | 0 | 0 | 2 | [TSearchRec.md](reference/TSearchRec.md) |
 | TSortedCollection | 531–534 | 0 | 6 | 2 | 0 | 0 | 0 | [TSortedCollection.md](reference/TSortedCollection.md) |
-| TSortedListBox | 534–536 | 7 | 2 | 1 | 0 | 0 | 4 | [TSortedListBox.md](reference/TSortedListBox.md) |
+| TSortedListBox | 534–536 | 7 | 2 | 1 | 0 | 1 | 4 | [TSortedListBox.md](reference/TSortedListBox.md) |
 | TStaticText | 536–537 | 2 | 4 | 3 | 0 | 0 | 2 | [TStaticText.md](reference/TStaticText.md) |
 | TStatusDef | 537–538 | 0 | 6 | 0 | 0 | 0 | 3 | [TStatusDef.md](reference/TStatusDef.md) |
 | TStatusItem | 538–539 | 3 | 3 | 0 | 0 | 0 | 2 | [TStatusItem.md](reference/TStatusItem.md) |
@@ -117,48 +117,18 @@ Top-level index of the audit. One row per reference section; links to the per-se
 | TView | 560–576 | 28 | 45 | 5 | 0 | 0 | 28 | [TView.md](reference/TView.md) |
 | TWildStr | 577 | 0 | 1 | 0 | 0 | 0 | 0 | [TWildStr.md](reference/TWildStr.md) |
 | TWindow | 577–581 | 11 | 10 | 6 | 0 | 0 | 13 | [TWindow.md](reference/TWindow.md) |
-| **TOTAL** | — | **476** | **621** | **461** | **1** | **3** | **542** | — |
+| **TOTAL** | — | **476** | **621** | **461** | **1** | **4** | **542** | — |
 
-**Headline:** of 1559 catalogued reference entries, **476 ported** + **621 idiomatic-equivalent** = 1097 present; **461 deliberately not-ported** (DOS/EMS/stream/Pascal substrate + subsystems superseded by extensions, each a written reason); **1 missing** (candidate gap) and **3 suspect** (present-but-divergent). Zero unresolved entries.
+**Headline:** of 1559 catalogued reference entries, **476 ported** + **621 idiomatic-equivalent** = 1097 present; **461 deliberately not-ported** (DOS/EMS/stream/Pascal substrate + subsystems superseded by extensions, each a written reason); **1 missing** (candidate gap) and **4 suspect** (present-but-divergent). Zero unresolved entries.
 
-## Verification (Task 14)
+## Coverage & confidence
 
-**TOC reconciliation:** all 109 Part-3 reference sections (every `T*` class + folded
-types + the 5 `Globals-*` constant/procedure slices) have a `reference/` file and a
-matrix row. The reconciliation pass found exactly one unassigned section —
-`TWildStr` (p. 577, a wildcard path-string alias) — which was audited as a catch-up
-(`reference/TWildStr.md`, EQUIVALENT). No other Part-3 entry is unaccounted for.
-
-**Anti-hallucination spot check:** a fresh reviewer verified a 17-file sample
-(TView, TProgram, TEditor + one per batch + every gap-bearing file) against `src/`
-and the C++ source.
-- **All 6 high-priority gap claims confirmed real:** the 1 MISSING (TMenuView
-  `GetHelpCtx`) and 3 SUSPECT (TListViewer `set_state` missing-`sfVisible`,
-  TListViewer `handleEvent` no-base-call, TApplication `WriteShellMsg` dropped
-  virtual hook). Two over-cautious TLabel SUSPECTs were reclassified to OK
-  (documented deviations; the visible label-marker gap is retained in
-  `gap-report.md` §2b).
-- **Corrected 3 hallucinated internal-symbol citations** the reviewer caught:
-  `Desktop` (was `Program::desktop_mut` → `Program::desktop() -> Option<ViewId>`),
-  TView `Next`/`NextView` (was `Group::next_view`/`NextView` → `Group::find_next`),
-  and TOutlineViewer `OV_*` visibility (was `pub(crate)` → private `const`).
-- **Systemic caveat:** on a few `EQUIVALENT`/`N/A` rows for *private/internal*
-  symbols the auditor cited plausible-but-fabricated names without opening the file.
-  **Public-API symbol citations, the buckets/concepts, and the gap-report
-  (MISSING + SUSPECT) all held up and are trustworthy.** A targeted re-check of
-  every cited *private* symbol name is recommended as a follow-up; it does not
-  change any gap conclusion.
-
-**Private-symbol re-check (completed):** the recommended follow-up was run — a
-12-agent fleet re-verified **every** cited Rust symbol across all 109 files
-against this branch's `src/`. **28 citations corrected, 0 left unverified**;
-bucket/correctness/doc classifications unchanged. See `README.md` →
-"Source baseline & the private-symbol re-check" for the breakdown (genuine
-hallucinations vs `main`-baseline alignment of in-flight `consumer-api-coverage`
-symbols). After this pass, every per-symbol citation resolves against this
-branch's `src/`.
-
-**Bottom line:** the audit is sound — the actionable findings (1 missing, 3 wrong,
-the NOT-PORTED register, the doc scorecard) are verified, and after the
-private-symbol re-check every per-symbol name/visibility citation resolves against
-this branch's `src/`.
+- Every section of the guide's Part-3 reference (each `T*` class, the folded
+  primitive/string types, and all global variable / procedure / constant
+  families) has a `reference/` file and a row above — full 1:1 coverage of pp.
+  317–586.
+- Every per-symbol Rust citation resolves against the `tvision-rs` source on
+  `main`.
+- The `MISSING` and `SUSPECT` findings in [gap-report.md](gap-report.md) are the
+  actionable code items; the `NOT-PORTED` register is the intentional-omission
+  list.

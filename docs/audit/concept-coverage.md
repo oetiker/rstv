@@ -5,7 +5,7 @@ possibilities* that aren't a single named symbol, plus every `→ concept` doc
 route flagged during the Part 3 sweep. Input to a later mdBook pass. See
 [`README.md`](README.md).
 
-## Capability checklist (Task 12)
+## Capability checklist
 
 Legend for the mdBook column: a **chapter link** means the concept's *how-it-fits*
 is explained there; **GAP** means the capability is present in code but the
@@ -165,7 +165,7 @@ means a deliberately-dropped subsystem (the mdBook documents the drop, so no gap
 | Resources subsystem (`TResourceFile`, keyed object store) | 309–314 | **NOT-PORTED** — depends on streams; dropped | `port/dropped.md` |
 | String list resources (`TStringList`, localizable strings) | 313–314 | **NOT-PORTED** — part of dropped resources | `port/dropped.md` |
 
-## → concept routes from Part 3 (appended by controller)
+## `→ concept` routes from the per-symbol reference
 
 Per-symbol audit rows that flagged the doc gap as conceptual (belongs in the mdBook narrative, not a longer rustdoc comment):
 
