@@ -228,6 +228,9 @@ Each phase is independently shippable and reviewed (subagent-driven + two-stage
 review). Phases 1–4 are behavior-preserving refactors; Phase 5 adds the new
 capability. The ~40 downcasts retire across Phase 2 + Phase 4.
 
+**Docs land WITH the phase that introduces the surface, never as a trailing
+pass** (so the guide never lags and the doctest gate stays green) — see §9.
+
 ---
 
 ## 6. What stays separate (resisting over-unification)
@@ -267,3 +270,50 @@ capability. The ~40 downcasts retire across Phase 2 + Phase 4.
 | `execView(p)` returns command, view readable | view-launched: `request_exec_view` → `BrokerMsg::ModalResult`; top-level: `exec_view_with<R>` by value |
 | `infoPtr` as subject | `Event::Broadcast.source` (unchanged) |
 | `TStreamable` | out of scope (persistence only; stays parked) |
+
+---
+
+## 9. Documentation (part of "done", per phase)
+
+This introduces new **public** API (`request_exec_view`, `exec_view_with`, the
+broker hook for widget authors, the widened `FieldValue`) and a new **conceptual
+model** (the three-channel "recipient picks the channel" rule). The mdBook guide
+(`docs/book/src/`) and rustdoc must be updated **as part of the phase that lands
+each piece** — not a trailing dump. Conventions: rustdoc is user-facing (strip
+porting bookkeeping; quarantine any C++ lineage into a `# Turbo Vision heritage`
+section, per house rule); new guide ```` ```rust ```` blocks need a hidden
+`# use tvision_rs as tv;` and compile under `cargo xtask test`.
+
+**Guide chapters to update (existing pages — extend, don't add a stray page):**
+- **`internals/brokering.md`** ("Cross-view brokering & ViewId") — **the conceptual
+  home.** Rewrite the per-variant/downcast description as the unified
+  `BrokerMsg` + `Deferred::Broker` + `View::apply_broker` model, and add the
+  **three-channel decision table** (view→`FieldValue`; top-level→`exec_view_with<R>`
+  by value; view-wanting-a-big-native-value→consumer `Rc<RefCell<T>>`). (Phase 2/4)
+- **`port/modal.md`** ("Modal execView → one loop") — add `request_exec_view`
+  (view-launched) and `exec_view_with<R>` (top-level), with **`tcv`'s Info box as
+  the worked example** via an example-backed `{{#rustdoc_include}}`. (Phase 3 & 5)
+- **`apps/dialogs.md`** ("Dialogs & data") — widened `FieldValue`; the consumer
+  recipe "build a custom modal, exec it, read its result," referencing the
+  decision table. (Phase 1, 5)
+- **`internals/custom-view.md`** ("Writing your own View") — widget authors
+  implement `apply_broker`/`value()` instead of relying on a framework downcast.
+  (Phase 1, 2)
+- **`port/deferred.md`** + **`internals/deferred.md`** — the consolidated
+  `Deferred::Broker`/`OpenModal` variants replacing the `Sync*`/`Set*` family. (Phase 2, 5)
+- **`port/handles.md`** ("Pointers & infoPtr → handles") — refine the `infoPtr`
+  story: subject stays `Event::Broadcast.source`; *payload* is now the typed
+  `BrokerMsg`. (Phase 2)
+- **`reference/symbol-map.md`** / **`reference/deviations.md`** — add the new
+  symbols (`request_exec_view`, `exec_view_with`, `apply_broker`) and note the
+  data-movement consolidation against the relevant D-rule(s) (D3/D4/D9/D10).
+
+**Rustdoc:** every new public item (`Context::request_exec_view`,
+`Program::exec_view_with`, `BrokerMsg` + its variants, `View::apply_broker`, the
+new `FieldValue` variants) gets user-facing rustdoc with the heritage section
+convention.
+
+**Verification (each phase):** `cargo xtask test` (guide doctests compile),
+`cargo xtask docs` (regenerate screenshots + build + link-check), and
+`grep -rl rustdoc_include docs/book/book` must be empty after any
+`{{#rustdoc_include}}` edit.
