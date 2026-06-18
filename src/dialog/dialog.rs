@@ -2,7 +2,7 @@
 
 use crate::command::Command;
 use crate::event::{Event, Key};
-use crate::view::{Context, GrowMode, Rect, View, ViewId};
+use crate::view::{Context, DragMode, GrowMode, Rect, View, ViewId};
 // These are used only by the test module (via `use super::*`).
 #[cfg(test)]
 use crate::view::{DrawCtx, StateFlag, ViewState};
@@ -114,7 +114,7 @@ impl Dialog {
     /// Mirrors [`Window::set_flags`]; used by `FileDialog` and `ChDirDialog` to
     /// add the grow flag on top of the Dialog defaults (`move | close`). Re-pushes
     /// to the frame child so the grow handle draws immediately.
-    pub(crate) fn set_flags(&mut self, flags: crate::window::WindowFlags) {
+    pub fn set_flags(&mut self, flags: WindowFlags) {
         self.window.set_flags(flags);
     }
 
@@ -122,8 +122,47 @@ impl Dialog {
     ///
     /// Mirrors [`Window::flags`]; exposed so `FileDialog` / `ChDirDialog` tests
     /// can assert the grow flag is set post-construction.
-    pub(crate) fn flags(&self) -> crate::window::WindowFlags {
+    pub fn flags(&self) -> WindowFlags {
         self.window.flags()
+    }
+
+    /// Override the colour scheme after construction. Mirrors [`Window::set_palette`].
+    pub fn set_palette(&mut self, palette: WindowPalette) {
+        self.window.set_palette(palette);
+    }
+
+    /// Override the grow mode after construction. Mirrors [`Window::set_grow_mode`].
+    pub fn set_grow_mode(&mut self, grow_mode: GrowMode) {
+        self.window.set_grow_mode(grow_mode);
+    }
+
+    /// Override the drag mode after construction. Mirrors [`Window::set_drag_mode`].
+    pub fn set_drag_mode(&mut self, drag_mode: DragMode) {
+        self.window.set_drag_mode(drag_mode);
+    }
+
+    /// Builder form of [`set_flags`](Self::set_flags).
+    pub fn with_flags(mut self, flags: WindowFlags) -> Self {
+        self.set_flags(flags);
+        self
+    }
+
+    /// Builder form of [`set_palette`](Self::set_palette).
+    pub fn with_palette(mut self, palette: WindowPalette) -> Self {
+        self.set_palette(palette);
+        self
+    }
+
+    /// Builder form of [`set_grow_mode`](Self::set_grow_mode).
+    pub fn with_grow_mode(mut self, grow_mode: GrowMode) -> Self {
+        self.set_grow_mode(grow_mode);
+        self
+    }
+
+    /// Builder form of [`set_drag_mode`](Self::set_drag_mode).
+    pub fn with_drag_mode(mut self, drag_mode: DragMode) -> Self {
+        self.set_drag_mode(drag_mode);
+        self
     }
 }
 
@@ -441,7 +480,34 @@ mod tests {
         );
     }
 
-    // -- 6. button_row -------------------------------------------------------
+    // -- 6. consumer API: public setters/builders ----------------------------
+
+    #[test]
+    fn consumer_can_add_grow_flag_and_change_palette() {
+        use crate::window::{WindowFlags, WindowPalette};
+        let d = Dialog::new(Rect::new(0, 0, 40, 12), Some("Resizable".into()))
+            .with_flags(WindowFlags {
+                r#move: true,
+                close: true,
+                grow: true,
+                ..WindowFlags::default()
+            })
+            .with_palette(WindowPalette::Cyan);
+        assert!(d.flags().grow, "consumer added the grow flag publicly");
+        assert!(d.flags().r#move && d.flags().close);
+        // palette pushed to the frame child:
+        let mut d = d;
+        let frame_id = d.window.frame_id();
+        let frame = d
+            .window
+            .child_mut(frame_id)
+            .and_then(|v| v.as_any_mut())
+            .and_then(|a| a.downcast_mut::<crate::frame::Frame>())
+            .expect("dialog window has a Frame child");
+        assert_eq!(frame.palette(), WindowPalette::Cyan);
+    }
+
+    // -- 7. button_row -------------------------------------------------------
 
     #[test]
     fn button_row_center_places_two_buttons_symmetrically() {
