@@ -131,6 +131,12 @@ impl Application {
         &mut self.program
     }
 
+    /// Register a closure that produces the shell-suspend message shown when
+    /// `Command::DOS_SHELL` fires — delegates to [`Program::set_shell_msg_hook`].
+    pub fn set_shell_msg_hook(&mut self, hook: Box<dyn Fn() -> String>) {
+        self.program.set_shell_msg_hook(hook);
+    }
+
     // -- tile/cascade layout rectangle ---------------------------------------
 
     /// The rectangle the tile/cascade commands lay windows into:

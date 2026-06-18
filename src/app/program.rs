@@ -362,6 +362,13 @@ pub struct Program {
     /// after `ClipboardEditorReceive` and passed to the `Context` clipboard snapshot
     /// so `update_commands` can gate paste correctly without a live tree borrow.
     clipboard_has_selection: bool,
+    /// Optional hook that produces the shell-suspend message printed before the
+    /// terminal is yielded to the shell (`Command::DOS_SHELL`). When `None` the
+    /// platform default is used — see [`default_shell_msg`].
+    ///
+    /// Successor to `TApplication::writeShellMsg` (virtual in C++); set via
+    /// [`Program::set_shell_msg_hook`].
+    shell_msg_hook: Option<Box<dyn Fn() -> String>>,
 }
 
 /// What to do with a view-triggered modal's result, run AFTER the modal loop ends
@@ -588,6 +595,7 @@ impl Program {
             app_commands: VecDeque::new(),
             clipboard_editor_id: None,
             clipboard_has_selection: false,
+            shell_msg_hook: None,
         }
     }
 
@@ -604,6 +612,34 @@ impl Program {
     /// The status-line child's id, if a status line was created.
     pub fn status_line(&self) -> Option<ViewId> {
         self.status_line
+    }
+
+    /// Register a closure that produces the shell-suspend message shown to the
+    /// user when `Command::DOS_SHELL` suspends the application (e.g. via Ctrl-Z
+    /// on unix).  The hook is called each time the command fires; when not set
+    /// the platform default from [`default_shell_msg`] is used (Windows: "Type
+    /// EXIT to return..."; Unix: the SIGTSTP return instruction).
+    ///
+    /// # Turbo Vision heritage
+    /// Replaces the virtual `TApplication::writeShellMsg` override point
+    /// (`tapplica.cpp`). The C++ default printed `"Type EXIT to return..."` on
+    /// Windows/DOS and the `fg`-instruction on unix; that same branching logic
+    /// lives in [`default_shell_msg`].
+    pub fn set_shell_msg_hook(&mut self, hook: Box<dyn Fn() -> String>) {
+        self.shell_msg_hook = Some(hook);
+    }
+
+    /// Produce the current shell-suspend message: call the registered hook when
+    /// one is set, otherwise fall back to the platform default.
+    ///
+    /// This is extracted so the message-production path can be tested without
+    /// triggering the actual suspend/SIGTSTP/resume sequence.
+    #[cfg(test)]
+    pub(crate) fn shell_msg(&self) -> String {
+        self.shell_msg_hook
+            .as_ref()
+            .map(|h| h())
+            .unwrap_or_else(default_shell_msg)
     }
 
     /// Request the (modal) loop end with `cmd`: store it as the end state;
@@ -1662,6 +1698,7 @@ impl Program {
             app_commands,
             clipboard_editor_id,
             clipboard_has_selection,
+            shell_msg_hook,
         } = self;
 
         // 1. Resize check — the realization of setScreenMode/cmScreenChanged.
@@ -1899,6 +1936,10 @@ impl Program {
                                     end_state,
                                     app_commands,
                                     renderer,
+                                    shell_msg_hook
+                                        .as_ref()
+                                        .map(|h| h())
+                                        .unwrap_or_else(default_shell_msg),
                                 );
                             }
                         }
@@ -3213,6 +3254,26 @@ fn event_wait_timeout(timers: &TimerQueue, now: u64) -> Option<Duration> {
     }
 }
 
+/// The platform-default shell-suspend message: the text printed before the
+/// terminal is yielded to the shell (`Command::DOS_SHELL`).
+///
+/// Mirrors the two branches of `TApplication::writeShellMsg` (`tapplica.cpp`):
+/// - Windows/DOS: `"Type EXIT to return..."`
+/// - Unix: the SIGTSTP return instruction.
+///
+/// Users may replace this with a custom message via
+/// [`Program::set_shell_msg_hook`].
+fn default_shell_msg() -> String {
+    #[cfg(not(unix))]
+    {
+        "Type EXIT to return...".to_string()
+    }
+    #[cfg(unix)]
+    {
+        "The application has been stopped. You can return by entering 'fg'.".to_string()
+    }
+}
+
 /// The program's own event handling (Alt-N window selection, quit, tile/cascade,
 /// DOS-shell), then delegation to the embedded group's three-phase router.
 ///
@@ -3221,6 +3282,7 @@ fn event_wait_timeout(timers: &TimerQueue, now: u64) -> Option<Duration> {
 ///
 /// # Turbo Vision heritage
 /// Ports `TProgram::handleEvent` (`tprogram.cpp`).
+#[allow(clippy::too_many_arguments)]
 fn program_handle_event(
     group: &mut Group,
     desktop: Option<ViewId>,
@@ -3229,6 +3291,7 @@ fn program_handle_event(
     end_state: &mut Option<Command>,
     app_commands: &mut VecDeque<Command>,
     renderer: &mut Renderer,
+    shell_msg: String,
 ) {
     // Modal-isolation note: program-level interception (this Alt-N block + the
     // cmQuit catch below) is NOT suppressed while a modal is active. C++'s nested
@@ -3311,7 +3374,7 @@ fn program_handle_event(
         && cmd == Command::DOS_SHELL
     {
         renderer.backend_mut().suspend();
-        println!("The application has been stopped. You can return by entering 'fg'.");
+        println!("{shell_msg}");
         #[cfg(all(unix, not(test)))]
         {
             extern crate libc;
@@ -10977,5 +11040,45 @@ mod tests {
         program.out_events.push_back(noop_broadcast());
         // Must not panic; the pump simply skips the missing id.
         program.pump_once();
+    }
+
+    // ---------------------------------------------------------------------------
+    // shell_msg hook tests
+    // ---------------------------------------------------------------------------
+
+    /// With no hook set, `shell_msg()` returns the platform default message.
+    #[test]
+    fn shell_msg_default_returns_platform_string() {
+        let (program, _handle, _clock) = program_with_desktop(80, 25);
+        let msg = program.shell_msg();
+        assert_eq!(
+            msg,
+            default_shell_msg(),
+            "no-hook path must equal default_shell_msg()"
+        );
+        // Spot-check the unix text on unix targets so the actual string is exercised.
+        #[cfg(unix)]
+        assert!(
+            msg.contains("fg"),
+            "unix default must mention 'fg': {msg:?}"
+        );
+    }
+
+    /// With a hook registered, `shell_msg()` returns the hook's string.
+    #[test]
+    fn shell_msg_hook_overrides_default() {
+        let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+        program.set_shell_msg_hook(Box::new(|| "custom message".to_string()));
+        assert_eq!(program.shell_msg(), "custom message");
+    }
+
+    /// The hook is called each time (not just once); replacing it again works.
+    #[test]
+    fn shell_msg_hook_replaceable() {
+        let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+        program.set_shell_msg_hook(Box::new(|| "first".to_string()));
+        assert_eq!(program.shell_msg(), "first");
+        program.set_shell_msg_hook(Box::new(|| "second".to_string()));
+        assert_eq!(program.shell_msg(), "second");
     }
 }
