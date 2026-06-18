@@ -1,14 +1,18 @@
 # Unified typed data-movement substrate (design)
 
 **Date:** 2026-06-18
-**Status:** design v3 (two adversarial reviews incorporated) — awaiting owner review → writing-plans
+**Status:** design v4 (three reviews incorporated; TV-spirit/idiomatic/DRY pass) — awaiting owner review → writing-plans
 **Origin:** Porting the `tcv` example faithfully (its `Desktop^.ExecView(InfoBox)`)
 surfaced consumer-API gap #2 (no generic view-launched modal). Investigating
 *why* it wasn't ported revealed a deeper issue: C++'s one loose data-movement
 mechanism (`void*`/`infoPtr`, `getData`/`setData`, `message`, `TStreamable`) was
-ported into **several different typed solutions at different sites**, including
-~40 `as_any` downcasts in `program.rs` — the one un-Rusty residue in an otherwise
-typed port. Objective (owner): **clean it up** — a single typed *currency* and one
+ported into **several different typed solutions at different sites**. `program.rs`
+carries on the order of ~40 `as_any` downcasts, but they are **not** all
+data-movement: roughly the cluster-B sync brokers, the cluster-D modal-result
+reads, and the cluster-E `Rc` sinks are the un-Rusty data-movement residue this
+design removes — the rest (~half: structural parent→child pushes, `desktop_insert`,
+FileDialog readback, and test scaffolding) are a different category and stay (§4.4,
+§6.6). Objective (owner): **clean up the data-movement residue** — a single typed *currency* and one
 *right mechanism per kind of data movement*, applied **uniformly** (the framework
 is pre-release; retrofit cost is immaterial), faithful to Turbo Vision and
 consistent with the port's lingo. The generic `ExecView` capability is built on it.
@@ -125,7 +129,7 @@ pub enum FieldValue {
     Text(String),
     Int(i32),
     Bool(bool),
-    Bits(u32),                       // cluster controls; a packed Color
+    Bits(u32),                       // cluster controls (checkbox/radio bit words)
     List(Vec<FieldValue>),           // an ORDERED record == C++ getData's offset walk
 }
 ```
@@ -142,13 +146,21 @@ must be justified as a deliberate *deviation* (like a D-rule), not as "the image
 `getData`."
 
 Every data-bearing view implements `value()`/`set_value()` honestly:
-`CheckBoxes`/`RadioButtons` → `Bits`, `ColorPicker` → `Bits` (packed RGB), and a
+`CheckBoxes`/`RadioButtons` → `Bits` (the bit word), and a
 `Dialog`/`Group` gathers its children into an ordered `List` via `gather_data` (and
 scatters a `List` back via `scatter_data`, in child order). `List` is the typed
 image of C++ `getData(void *rec)`'s offset-addressed walk — so a whole dialog's
-result is one `FieldValue::List`, **read without downcasting any child**. A whole
-`Theme` is the one value too large/structured to
-pack and is returned by the by-value path (§3.3), not via `FieldValue`.
+result is one `FieldValue::List`, **read without downcasting any child**.
+
+**`Color` is NOT a `FieldValue`.** `Color` is a deliberate 4-variant enum
+(`Default`/`Bios`/`Indexed`/`Rgb`, `color.rs:32`) — faithful to `TColorDesired`
+*minus the bit-packing* — so it does **not** pack into `Bits(u32)` (that would
+lose three of the four cases). This is not a new constraint: `ModalCompletion::ColorPick`'s
+own doc (`program.rs:392`) already records "NOT a `FieldValue` … `FieldValue::Color`
+is forbidden; the `color()` accessor is the contract." `Color` therefore rides the
+**by-value path** (`exec_view_with<R>`, §3.3), alongside a whole `Theme` — the two
+values too rich/structured to pack into `FieldValue`. `ColorPicker` exposes its
+native `color()`; it is not a `value()`/`FieldValue` implementor.
 
 ### 3.2 Sync signals → defaulted per-capability `View` methods (no god-enum)
 
@@ -158,22 +170,29 @@ method** instead of a pump downcast — extending the pattern the port already u
 for `apply_list_scroll`/`set_menu_current`/`update_menu_commands`:
 
 ```rust
-// src/view/view.rs — one defaulted method per sync capability (no Self params; object-safe)
-fn apply_scroll_delta(&mut self, _dx: i32, _dy: i32, _ctx: &mut Context) {}
+// src/view/view.rs — defaulted, object-safe (no Self params). Cluster B is NOT
+// one method per Deferred variant — the scroll-sync FAMILY shares ONE hook.
+//
+// The five "a sibling scrolled, apply the delta and resync" brokers today —
+// SyncScrollerDelta→Scroller, SyncEditorDelta→Editor, SyncOutlineViewerDelta→
+// Outline, IndicatorSetValue→Indicator, PageStackSync→PageStack — collapse into
+// a single scroll-sync hook, joining the existing `apply_list_scroll`:
+fn apply_scroll_sync(&mut self, _delta: ScrollDelta, _ctx: &mut Context) {}
+// Genuinely distinct, non-scroll sync kinds keep their own defaulted method
+// (e.g. menu state) — only where the signature truly differs:
 fn set_scroll_params(&mut self, _p: ScrollParams) {}
-fn apply_outline_delta(&mut self, _d: i32, _ctx: &mut Context) {}
-fn apply_editor_delta(&mut self, _d: EditorDelta, _ctx: &mut Context) {}
-fn set_indicator_pos(&mut self, _loc: Point, _modified: bool) {}
-// … one per existing Deferred::Sync*/Set* kind
 ```
 
 The pump's deferred-drain resolves `group.find_mut(target)` and calls the typed
 method — **virtual dispatch to the concrete widget, never a downcast**. Each method
 is defaulted, so widgets implement only the one(s) they answer (the compiler names
-it; no `match { _ => {} }` arm-dropping). Cluster-B downcast sites retire this way
-**where the resulting method reads as naturally as the downcast it removes**
-(§2.1) — the common case; a genuinely one-off poke may stay if a method would only
-add trait noise, with its reason recorded. **Each new `View` method needs a forwarder in
+it; no `match { _ => {} }` arm-dropping). The five scroll-family brokers above are a
+**five-into-one** collapse (a `ScrollDelta` carrying the per-widget delta shape),
+not five parallel methods — the real DRY win, beyond merely de-downcasting each in
+place. The exact `ScrollDelta` shape and which (if any) sync genuinely resists the
+shared hook is settled per-widget in Phase 3 under the §2.1 test (a sync stays
+separate only if folding it in makes the hook murkier than the downcast it removes,
+reason recorded). **Each new `View` method needs a forwarder in
 `tvision-rs-macros/src/specs.rs` AND an entry in `tests/delegate_view.rs`** (the
 spy test) — mechanical, mirroring the existing `apply_list_scroll` forwarder.
 
@@ -190,8 +209,11 @@ ordered `List`) and deliver it to the requester by id — **no multi-child downc
 typed result. Find/Replace stop downcasting `CheckBoxes`/`InputLine` children and
 instead `gather_data` the modal into an ordered `List` the editor consumes. The multi-view
 *routing* (which editor to write) is by-id and stays; only the *reads* go
-downcast-free. `ThemeColorPick` folds into the theme-editor view recomposing its
-own style from the delivered `Color` (the "second view" it reads is itself).
+downcast-free. `ThemeColorPick` is the one cluster-D result that is **not** a
+`FieldValue` (its payload is a `Color`, §3.1): the theme-editor view recomposes its
+style from its *own* embedded picker child via the native `color()` accessor (the
+"second view" it reads is itself), so it never crosses a `FieldValue` boundary — a
+deliberate exception, recorded, not a downcast we claim to delete.
 
 **`Program`-launched modals (cluster E)** use a generic by-value return:
 
@@ -210,9 +232,11 @@ pub fn exec_view_with<R>(
 `R` is caller-named and returned by value — the framework never names it (no
 `dyn Any`, no `Rc` cell). `color_dialog`/`theme_editor` switch to it; the
 `ColorPick`/`ThemeEdit` `ModalCompletion` variants and both `Rc<Cell>`/
-`Rc<RefCell>` sinks are **deleted**. (A *view* wanting a big native result — none
-exists today — would use a consumer-owned `Rc<RefCell<T>>` it passes into the
-modal; documented escape hatch, no framework change.)
+`Rc<RefCell>` sinks are **deleted**. No `Rc<RefCell>` "escape hatch" is documented
+or kept: there is no view today wanting a big native result the `FieldValue` path
+can't carry, and enshrining one would re-bless the shared-cell pattern this phase
+removes. If such a need ever arises, it is a new design question, not a standing
+recommendation.
 
 ### 3.4 Generic `ExecView` (gap #2) — the first consumer
 
@@ -314,12 +338,17 @@ land WITH each phase (§9), never trailing.
   completions. Mitigation: strictly widget-by-widget, behavior-preserving,
   snapshot-verified after each; the `delegate_view` spy test guards each new trait
   method's forwarder.
-- **`FieldValue` for `Theme`:** a `Color` packs into `Bits`, but a whole `Theme`
-  does not pack cleanly — intentionally returned by value via `exec_view_with<R>`,
-  not shoehorned into `FieldValue`. Keep that boundary.
-- **Trait-surface growth:** ~10 new defaulted `View` methods for sync. Accepted:
-  defaulted (widgets implement only what they answer), compiler-guided, and the
-  honest idiomatic shape (vs a god-enum). Each needs a macro forwarder + spy entry.
+- **`FieldValue` for `Color`/`Theme`:** neither packs into `FieldValue` — `Color`
+  is a 4-variant enum (`color.rs:32`, not a `u32`) and `Theme` is far larger. Both
+  are intentionally returned/read by value (`exec_view_with<R>` for the
+  `Program`-launched color/theme dialogs; the native `color()` accessor for the
+  theme editor's own picker child). Keep that boundary — `FieldValue::Color` is an
+  explicit non-goal already enforced at `program.rs:392`.
+- **Trait-surface growth:** far fewer than one-method-per-variant — the scroll
+  family is one shared `apply_scroll_sync` hook (§3.2), so the net add is a small
+  handful of defaulted methods, not ~10. Accepted: defaulted (widgets implement
+  only what they answer), compiler-guided, and the honest idiomatic shape (vs a
+  god-enum). Each needs a macro forwarder + spy entry.
 - **`List` ordering contract:** `gather_data`/`scatter_data` are positional/ordered
   (faithful `getData`'s offset walk) and `List` is inherently positional, matching
   the existing `Vec<Option<FieldValue>>` — keep child order stable across
@@ -358,7 +387,7 @@ Vision heritage` section); new guide ```` ```rust ```` blocks need a hidden
 - **`apps/dialogs.md`** ("Dialogs & data") — the widened `FieldValue` as the data
   currency, `gather`/`scatter` ordered records (`List`), and the consumer recipe "build a
   custom modal, exec it, read its result," with the modal-result decision rule
-  (view→`FieldValue` / top-level→`exec_view_with<R>` / view-wanting-big-native→`Rc<RefCell>`). (Phases 2, 5)
+  (view→`FieldValue`; top-level native/`Color`/`Theme`→`exec_view_with<R>`). (Phases 2, 5)
 - **`port/modal.md`** ("Modal execView → one loop") — `request_exec_view` +
   `exec_view_with<R>`, with `tcv`'s Info box as the worked example via
   `{{#rustdoc_include}}`. (Phases 1 & 5)
