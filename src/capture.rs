@@ -81,6 +81,15 @@ pub trait CaptureHandler {
         false
     }
 
+    /// Returns the help context of the currently highlighted menu item, if this
+    /// handler is an active [`MenuSession`](crate::menu::MenuSession).
+    ///
+    /// Used by the status-line refresh to surface per-item help context while a
+    /// menu is open. **Default is `None`** — only `MenuSession` overrides this.
+    fn menu_help_ctx(&self) -> Option<crate::help::HelpCtx> {
+        None
+    }
+
     /// Update the handler's cached gating bounds for its associated view, called
     /// by [`CaptureStack::sync_gate_bounds`] before each dispatch so a handler
     /// that gates events by the view's *position* (e.g. a modal frame) follows
@@ -298,6 +307,16 @@ impl CaptureStack {
         self.handlers
             .last()
             .and_then(|h| if h.is_modal_gate() { h.view() } else { None })
+    }
+
+    /// Returns the help context from an active [`MenuSession`] on the stack, if
+    /// any. Scans all handlers top-down for the first one that returns `Some` from
+    /// [`CaptureHandler::menu_help_ctx`].
+    ///
+    /// Used by the status-line refresh to surface per-item help while a menu is
+    /// open, without disturbing the existing `top_modal_view` path.
+    pub fn active_menu_help_ctx(&self) -> Option<crate::help::HelpCtx> {
+        self.handlers.iter().rev().find_map(|h| h.menu_help_ctx())
     }
 
     /// Offer `ev` to the handlers top-down (last pushed first).
