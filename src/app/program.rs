@@ -438,7 +438,6 @@ enum ModalCompletion {
         /// `true` = foreground, `false` = background.
         fg: bool,
     },
-
 }
 
 impl Program {
@@ -1183,24 +1182,17 @@ impl Program {
         // value at close (spec §6.6: a helper reaching its own known child; a whole
         // Theme is too large to be a FieldValue, spec C-1). No Rc sink, no variant.
         let new_theme = self
-            .exec_view_capture(
-                Box::new(d),
-                None,
-                Some(te_id),
-                None,
-                false,
-                |modal, cmd| {
-                    if cmd == Command::OK {
-                        modal
-                            .find_mut(te_id)
-                            .and_then(|v| v.as_any_mut())
-                            .and_then(|a| a.downcast_mut::<ThemeEditorBody>())
-                            .map(|te| te.working_theme().clone())
-                    } else {
-                        None
-                    }
-                },
-            )
+            .exec_view_capture(Box::new(d), None, Some(te_id), None, false, |modal, cmd| {
+                if cmd == Command::OK {
+                    modal
+                        .find_mut(te_id)
+                        .and_then(|v| v.as_any_mut())
+                        .and_then(|a| a.downcast_mut::<ThemeEditorBody>())
+                        .map(|te| te.working_theme().clone())
+                } else {
+                    None
+                }
+            })
             .2;
         if let Some(new_theme) = new_theme {
             self.set_theme(new_theme);
@@ -3247,7 +3239,6 @@ fn apply_modal_completion(
             }
             None
         }
-
     }
 }
 
