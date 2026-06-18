@@ -629,17 +629,12 @@ impl Program {
         self.shell_msg_hook = Some(hook);
     }
 
-    /// Produce the current shell-suspend message: call the registered hook when
-    /// one is set, otherwise fall back to the platform default.
-    ///
-    /// This is extracted so the message-production path can be tested without
-    /// triggering the actual suspend/SIGTSTP/resume sequence.
+    /// Thin test accessor over [`resolve_shell_msg`]: returns the same string
+    /// the production `DOS_SHELL` branch prints, without triggering the actual
+    /// suspend/SIGTSTP/resume sequence.
     #[cfg(test)]
     pub(crate) fn shell_msg(&self) -> String {
-        self.shell_msg_hook
-            .as_ref()
-            .map(|h| h())
-            .unwrap_or_else(default_shell_msg)
+        resolve_shell_msg(&self.shell_msg_hook)
     }
 
     /// Request the (modal) loop end with `cmd`: store it as the end state;
@@ -1936,10 +1931,7 @@ impl Program {
                                     end_state,
                                     app_commands,
                                     renderer,
-                                    shell_msg_hook
-                                        .as_ref()
-                                        .map(|h| h())
-                                        .unwrap_or_else(default_shell_msg),
+                                    shell_msg_hook,
                                 );
                             }
                         }
@@ -3274,6 +3266,13 @@ fn default_shell_msg() -> String {
     }
 }
 
+/// Resolve the shell-suspend message: the registered hook if set, else the
+/// platform default. The single source of truth for both the DOS_SHELL
+/// handler and the tests.
+fn resolve_shell_msg(hook: &Option<Box<dyn Fn() -> String>>) -> String {
+    hook.as_ref().map(|h| h()).unwrap_or_else(default_shell_msg)
+}
+
 /// The program's own event handling (Alt-N window selection, quit, tile/cascade,
 /// DOS-shell), then delegation to the embedded group's three-phase router.
 ///
@@ -3291,7 +3290,7 @@ fn program_handle_event(
     end_state: &mut Option<Command>,
     app_commands: &mut VecDeque<Command>,
     renderer: &mut Renderer,
-    shell_msg: String,
+    shell_msg_hook: &Option<Box<dyn Fn() -> String>>,
 ) {
     // Modal-isolation note: program-level interception (this Alt-N block + the
     // cmQuit catch below) is NOT suppressed while a modal is active. C++'s nested
@@ -3374,7 +3373,7 @@ fn program_handle_event(
         && cmd == Command::DOS_SHELL
     {
         renderer.backend_mut().suspend();
-        println!("{shell_msg}");
+        println!("{}", resolve_shell_msg(shell_msg_hook));
         #[cfg(all(unix, not(test)))]
         {
             extern crate libc;
