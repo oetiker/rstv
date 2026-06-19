@@ -115,6 +115,57 @@ whole UI.
 > ranges were `[min, max]` numeric intervals. tvision-rs replaces the integer with a
 > `&'static str` key and the numeric range with `HelpCtxRange`.
 
+## Context-sensitive hints
+
+Beyond switching which status-line items appear, the status line can show a
+**free-form hint string** to the right of the items — a short message that
+changes as the focused view changes context. This is the `hint` provider.
+
+By default no hint is shown (`None`). Install one with
+[`StatusLine::with_hint`](../api/tvision-rs/status/status_line/struct.StatusLine.html#method.with_hint)
+(builder) or
+[`StatusLine::set_hint`](../api/tvision-rs/status/status_line/struct.StatusLine.html#method.set_hint)
+(post-construction). The provider is a closure `Fn(HelpCtx) -> Option<String>`;
+it receives the *current* help context and returns the text to show (or `None`
+to show nothing):
+
+```rust
+# use tvision_rs as tv;
+# use tv::help::HelpCtx;
+# use tv::status::{StatusDef, StatusLine};
+# use tv::Rect;
+# #[allow(unused_variables)]
+# fn _demo() {
+let defs = StatusDef::list()
+    .def_all(|d| d)
+    .build();
+
+let line = StatusLine::new(Rect::new(0, 23, 80, 24), defs)
+    .with_hint(|ctx| match ctx {
+        c if c == HelpCtx::custom("myapp.editor") =>
+            Some("F2 Save  F3 Open  Ctrl-F Find".to_string()),
+        c if c == HelpCtx::custom("myapp.browser") =>
+            Some("Enter Select  Esc Back  F5 Refresh".to_string()),
+        _ => None,
+    });
+# let _ = line;
+# }
+```
+
+The `Program` idle loop reads the focused view's `help_ctx` from its `ViewState`
+and calls `StatusLine::set_help_ctx` at the start of each pump — so the hint
+updates automatically as the user moves focus. The status line re-draws itself
+when the context changes (it skips the redraw if the context has not changed,
+making it idempotent).
+
+**Combining defs with hints:** the two mechanisms are independent. Defs swap the
+entire item list; the hint overlays a text string at the right end of the line.
+Use `def_one_of` when you want *different command buttons* per context; use
+`with_hint` for a short advisory string that supplements a shared button set.
+
+Source: `src/status/status_line.rs` (`StatusLine::set_hint`, `StatusLine::with_hint`,
+`StatusLine::set_help_ctx`), `src/status/mod.rs` (`HelpCtxRange`, `StatusDef`).
+
 ## See also
 
 - [Your first app](../getting-started/first-app.md) — the menu bar and status
