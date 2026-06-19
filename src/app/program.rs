@@ -2433,10 +2433,12 @@ impl Program {
                             //
                             // On a TAB_BAR_CHANGED broadcast, PageStack queues
                             // this. The pump resolves `tab_bar`, reads its
-                            // `value()` (FieldValue::Int index), downcasts
-                            // `page_stack` to `PageStack`, and calls
-                            // `set_active(idx, &mut ctx)`. Mirrors
-                            // ScrollSync but reads one bar into one index.
+                            // `value()` (FieldValue::Int index), then calls
+                            // `apply_page_sync(idx, &mut ctx)` on `page_stack`
+                            // through the trait method (virtual dispatch, no
+                            // downcast) — which switches the active page via
+                            // `set_active`. Mirrors ScrollSync but reads one
+                            // bar into one index.
                             Deferred::PageStackSync {
                                 page_stack,
                                 tab_bar,
