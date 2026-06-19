@@ -697,6 +697,7 @@ fn no_case_pos(needle: &str, haystack: &str) -> usize {
     0
 }
 
+// ANCHOR: info_dialog
 /// Build the Info dialog for entry `e` — the original `TDirBox.HandleEvent`
 /// `InfoBox`, now a real custom `Dialog` launched via `request_exec_view`
 /// (consumer-API gap #2 closed).
@@ -731,6 +732,7 @@ fn build_info_dialog(e: &Entry) -> Dialog {
 
     dialog
 }
+// ANCHOR_END: info_dialog
 
 // ---------------------------------------------------------------------------
 // DirBox — port of `TDirBox : TListBox`, the search-as-you-type catalog list.
@@ -746,6 +748,8 @@ struct DirBox {
     lv: ListViewerState,
     /// The accumulated search string (`TDirBox.Search`). Empty = browse mode.
     search: String,
+    /// One-shot guard for the post-insert scrollbar wiring (see `ensure_inited`).
+    inited: bool,
 }
 
 impl DirBox {
@@ -756,7 +760,29 @@ impl DirBox {
         DirBox {
             lv,
             search: String::new(),
+            inited: false,
         }
+    }
+
+    /// Publish the vertical scrollbar's range + page/arrow steps.
+    ///
+    /// `ListViewerState::new` cannot reach the sibling scrollbar (no `Context`),
+    /// so it leaves the bar at its default `max = 0` — a zero-range bar whose
+    /// thumb is pinned and never moves. The scrollbar must be told the list
+    /// length (`set_range` → bar `max = range - 1`) and its page/arrow steps
+    /// (`update_steps`) *after insertion*, with a `Context`. `ListBox` does this
+    /// via its `new_list` consumer; `DirBox` populates from a static `CATALOG`
+    /// in the constructor, so it runs the same publish lazily on the first
+    /// `handle_event` (the earliest point a `Context` and a resolvable bar id
+    /// are both available). Idempotent via `self.inited`.
+    fn ensure_inited(&mut self, ctx: &mut Context) {
+        if self.inited {
+            return;
+        }
+        self.inited = true;
+        let range = self.lv.range;
+        list_viewer::set_range(self, range, ctx);
+        list_viewer::update_steps(self, ctx);
     }
 
     /// `TDiskCol.FindNext` — first index `>= start` whose line contains `key`
@@ -895,6 +921,10 @@ impl View for DirBox {
     }
 
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
+        // Publish the scrollbar range/steps on the first event we see (the
+        // earliest point we hold a Context and the sibling bar id resolves).
+        self.ensure_inited(ctx);
+
         // Info / About commands (from the buttons, broadcast) — open the
         // matching modal. The list is the natural handler for Info because it
         // owns the focused entry. (`TDirBox.HandleEvent` did the same via the
@@ -1242,6 +1272,77 @@ mod tests {
         app.program.pump_once();
         screen.push_key(Key::Esc, KeyModifiers::default());
         app.program.pump_once();
+    }
+
+    /// Regression guard for the dead scrollbar: `ListViewerState::new` leaves the
+    /// sibling vertical bar at its default `max = 0`, so without the post-insert
+    /// `set_range` + `update_steps` publish (`DirBox::ensure_inited`) the bar is a
+    /// zero-range column (all `▓`, the `sb_page_no_range` glyph) whose thumb never
+    /// moves. After the fix the bar shows a `■` thumb that walks down the column as
+    /// the focus moves. We focus the list, page down, and assert the thumb glyph
+    /// appears and is not pinned at the top arrow row.
+    #[test]
+    fn scrollbar_thumb_moves_with_focus() {
+        use tvision_rs::{MouseButtons, MouseEvent};
+        let (backend, screen) = HeadlessBackend::new(80, 25);
+        let mut app = TcvApp::new(Box::new(backend));
+        app.program.pump_once();
+
+        // Glyphs: thumb '■' (U+25A0), no-range fill '▓' (U+2593).
+        let thumb = '\u{25A0}';
+        let no_range = '\u{2593}';
+
+        // Focus the list (and run its lazy scrollbar init) by clicking a row,
+        // releasing the mouse-track capture so subsequent keys reach the DirBox.
+        screen.push_event(Event::MouseDown(MouseEvent {
+            position: Point::new(10, 5),
+            buttons: MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
+        app.program.pump_once();
+        screen.push_event(Event::MouseUp(MouseEvent {
+            position: Point::new(10, 5),
+            buttons: MouseButtons::default(),
+            ..Default::default()
+        }));
+        app.program.pump_once();
+
+        // The bar must not be a dead no-range column: a real thumb glyph exists.
+        let before = screen.snapshot();
+        assert!(
+            before.contains(thumb),
+            "scrollbar should show a movable thumb (■), not a dead no-range bar; got:\n{before}"
+        );
+        assert!(
+            !before.lines().any(|l| l.matches(no_range).count() > 1),
+            "scrollbar must not render as an all-▓ no-range column; got:\n{before}"
+        );
+
+        // Find the thumb's row in the rightmost-ish columns before scrolling.
+        let row_of_thumb =
+            |frame: &str| -> Option<usize> { frame.lines().position(|l| l.contains(thumb)) };
+        let top_row = row_of_thumb(&before);
+
+        // Drive the focus to the end of the (62-entry) catalog; the thumb must
+        // travel downward.
+        for _ in 0..CATALOG.len() {
+            screen.push_key(Key::Down, KeyModifiers::default());
+            app.program.pump_once();
+        }
+        let after = screen.snapshot();
+        let bottom_row = row_of_thumb(&after);
+        assert!(
+            after.contains(thumb),
+            "thumb should still render after scrolling to the end; got:\n{after}"
+        );
+        assert!(
+            bottom_row > top_row,
+            "scrollbar thumb should move DOWN as focus moves to the catalog end \
+             (top_row={top_row:?}, bottom_row={bottom_row:?});\nbefore:\n{before}\nafter:\n{after}"
+        );
     }
 
     /// Regression guard for the search-overlay column bug: `put_str` returns the
