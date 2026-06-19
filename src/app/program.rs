@@ -649,10 +649,17 @@ impl Program {
     ///
     /// Only one idle callback is held; a second call replaces the first.
     ///
+    /// The hook fires on the idle passes of **any** loop level, including while a
+    /// modal dialog, message box, or other `exec_view` is open — so a clock keeps
+    /// ticking during a dialog rather than freezing. It does **not** re-enter
+    /// itself: while the hook runs, it is taken out, so a modal it opens will not
+    /// fire the hook recursively.
+    ///
     /// # Turbo Vision heritage
     ///
     /// The successor to overriding `TProgram::idle`, which Turbo Vision called
-    /// once per event-less loop pass (the guide's clock / heap-display pattern).
+    /// once per event-less loop pass (the guide's clock / heap-display pattern),
+    /// including during modal `execute()` loops.
     pub fn set_on_idle(&mut self, f: impl FnMut(&mut Program) + 'static) {
         self.on_idle = Some(Box::new(f));
     }
