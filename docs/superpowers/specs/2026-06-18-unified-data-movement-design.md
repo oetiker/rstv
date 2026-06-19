@@ -1,7 +1,7 @@
 # Unified typed data-movement substrate (design)
 
 **Date:** 2026-06-18
-**Status:** design v4 (three reviews incorporated; TV-spirit/idiomatic/DRY pass) — awaiting owner review → writing-plans
+**Status:** design v5 (three reviews + extensibility pass: `FieldValue::Custom` open seam for third-party components, §3.5) — awaiting owner review → writing-plans
 **Origin:** Porting the `tcv` example faithfully (its `Desktop^.ExecView(InfoBox)`)
 surfaced consumer-API gap #2 (no generic view-launched modal). Investigating
 *why* it wasn't ported revealed a deeper issue: C++'s one loose data-movement
@@ -16,6 +16,14 @@ FileDialog readback, and test scaffolding) are a different category and stay (§
 *right mechanism per kind of data movement*, applied **uniformly** (the framework
 is pre-release; retrofit cost is immaterial), faithful to Turbo Vision and
 consistent with the port's lingo. The generic `ExecView` capability is built on it.
+
+**Dual objective (owner):** the unified mechanism must serve **both** the
+framework's own widgets **and** user-written components — the open, typed
+interchange C++ achieved with `void*` but *without* erasing type safety across the
+board. So the design must stay **open to third-party components and data structures
+they invent**, not just tidy the framework's known widgets. This is the §3.5 open
+story (three typed paths; `FieldValue::Custom` for user-invented payloads); it is a
+first-class goal, not an afterthought.
 
 > **v2 note.** v1 proposed a `BrokerMsg` god-enum + `Deferred::Broker` +
 > `apply_broker`. An adversarial TV-porting/Rust-framework review rejected it:
@@ -77,7 +85,15 @@ DRY means *one way to do each kind*, not one mechanism for both.
   validated by `tcv`'s real Info box.
 - Applied **broadly but with judgment** (pre-release, so retrofit cost is no
   excuse to skip a genuine improvement) — see §2.1.
-- **No `Box<dyn Any>` in the data path.** (Honest scope below.)
+- **No *framework-internal* `dyn Any`.** The pump never downcasts to its own known
+  widget types. A *deliberate, typed-at-the-edges* `dyn Any` escape exists for
+  user-invented payloads (`FieldValue::Custom`, §3.1) — that is the framework being
+  correctly agnostic about types only the user owns, not a leak. (Honest scope below;
+  the open/extensible story is §3.5.)
+- **Open to third-party components.** A user's own widgets must have a unified,
+  *typed* means to interchange data — both with framework widgets (via the
+  well-known scalars) and with each other (via `Custom`) — without reopening C++'s
+  anonymous-`void*` wound. See §3.5.
 
 ### 2.1 Guiding principle: apply where it helps, not where it burdens
 
@@ -114,6 +130,14 @@ decision, not an omission.
   FileDialog readback. These are "a parent reaches a *known* child to push display
   state," a different category from data movement. We do **not** claim to remove them.
 - No serialization/`serde` (in-process; `TStreamable`→serde stays parked for persistence).
+- **No startup wiring-declaration registry** (a DI-container that statically
+  validates "producer A emits what consumer B expects"). It would force every
+  consumer to declare its data dependencies up front — ceremony TV and idiomatic
+  Rust both avoid — and for a statically-linked program a `cargo test` catches the
+  same mismatch *earlier* than any runtime startup gate. We instead make a mismatch
+  *loud* (the `value_as::<T>()` accessor) and offer an *optional* per-component
+  self-test (§3.5), which is the realistic slice of the "surface problems early"
+  idea. (Rationale: §3.5, §6.7.)
 
 ---
 
@@ -131,8 +155,14 @@ pub enum FieldValue {
     Bool(bool),
     Bits(u32),                       // cluster controls (checkbox/radio bit words)
     List(Vec<FieldValue>),           // an ORDERED record == C++ getData's offset walk
+    Custom(Rc<dyn Any>),             // user-invented payloads; downcast at the edge (§3.5)
 }
 ```
+
+(`Rc<dyn Any>`, not `Box`, because `FieldValue` is `Clone` — `List` needs it — and
+`Rc` gives cheap clone + `downcast_ref`. The `Custom` escape is the open
+extensibility seam; see §3.5 for why it is *not* the framework-internal `dyn Any`
+smell this design removes.)
 
 **No keyed/`Map` variant.** C++ `getData(void *rec)` is *positional and anonymous*
 — it walks children in order writing each child's `dataSize()` bytes at a running
@@ -251,6 +281,97 @@ recommendation.
 `tcv`'s Info box (read-only, OK = `cmCancel`) exercises only the command path; the
 `FieldValue` path serves input dialogs.
 
+### 3.5 Extensibility: third-party components (the open story)
+
+The original objective is a *unified, typed* interchange for **both** framework
+widgets **and** user-written components — what C++ achieved with `void*`/`getData`
+but at the price of erasing *everything*, including its own well-known fields. The
+port keeps the safety and stays open via **three paths**, each typed at the layer
+that owns the type:
+
+1. **Modal result** → `exec_view_with<R>` (§3.3). Generic over `R`: a user's
+   component, launched modally, returns *any* native type by value. Already open;
+   no framework change.
+2. **Field data** → `FieldValue`. Well-known shapes (`Text/Int/Bool/Bits/List`)
+   for interop with framework widgets and generic consumers; `Custom(Rc<dyn Any>)`
+   for user-invented payloads.
+3. **Notification** → `Event::Broadcast { command, source }`. `Command` is an open
+   newtype (users mint their own namespaced commands), so a user component can
+   notify siblings; the data it then needs is read via path 2.
+
+**Why `Custom` is not the smell we removed.** The downcasts this design deletes are
+the *framework* downcasting to its *own* concrete widgets in the pump — a smell,
+because the framework knew the closed set. `Custom(Rc<dyn Any>)` is the *user*
+round-tripping the *user's own* type through a framework that legitimately cannot
+know it: the type knowledge lives at both edges (producer and consumer are user
+code), and the framework moves the payload **opaquely, never inspecting it**. That
+is precisely what `std::any` is for — the correct boundary, not a leak. The result
+is *more* honest than C++: C++ erased even its own fields; we erase **only** the
+genuinely-unknowable user payload, and keep everything else statically typed.
+
+**Typed-at-the-edges, validated at runtime, fail-safe.** `Custom` is read with a
+`downcast` — a **runtime** check (one `TypeId` integer comparison; not reflection,
+not a string/hash lookup — effectively free, and only on the `Custom` path; the
+scalars are a plain enum `match` with zero `Any` cost). It is type-**safe** (a
+mismatch yields `None`, never a misread or UB) but not compile-**checked** across
+the `value()` boundary, because the value crosses the object-safe `dyn View`
+boundary, which cannot carry a generic `value<T>()` without giving up the
+heterogeneous view tree. So the recommended accessor is **loud, not silent**:
+
+```rust
+// src/data.rs — fail LOUD with a descriptive error, not a silent None
+impl FieldValue {
+    pub fn custom<T: Any>(v: T) -> Self { FieldValue::Custom(Rc::new(v)) }
+    pub fn as_custom<T: Any>(&self) -> Option<Rc<T>>; // raw, for match arms
+    pub fn value_as<T: Any>(&self) -> Result<Rc<T>, FieldTypeError>; // RECOMMENDED
+}
+```
+
+`value_as::<T>()` turns a contract mismatch into a clear error (`"expected T, found
+<other>"`) **at first execution**, so a stale producer/consumer wiring announces
+itself instead of going quietly wrong.
+
+**Latent-mismatch risk, bounded.** A producer/consumer type disagreement is not
+caught at build time and surfaces when its path first runs — the classic erasure
+tradeoff. It is small and bounded: both ends share *one named, exported type* (the
+compiler does check that type exists and is spelled right at both ends), so a
+mismatch is *contract drift*, not a silent type slip; the scalar path has **zero**
+latent risk (exhaustive `match`); `value_as` makes the failure loud; and **one
+test exercising the actual A→B exchange** converts "random future time" into
+"`cargo test`."
+
+**Distributable components choose their openness.** A component shipped in a crate
+exports its payload type publicly — the exported type *is* the contract. It may
+expose data as `Custom(MyType)` (rich, typed; consumers depend on the crate) and/or
+as scalars/`List` (dependency-free, any generic consumer can read it). C++'s
+`void*` could only ever do the first, unsafely. Caveat to document: `TypeId` is
+per-type-per-version, so a diamond dependency pulling the crate at two
+semver-incompatible versions yields distinct types — `Custom` fails closed to
+`None`/error across that boundary (inherent to any `Any`-based plugin; handled by
+dependency discipline, not by this design).
+
+**Tightly-coupled own components can skip erasure entirely.** Two of *your own*
+components willing to be coupled can share a typed `Rc<RefCell<MyState>>` directly
+and get full compile-time checking — `FieldValue::Custom` is only the price of
+routing data through the framework's *generic* plumbing (gather/scatter,
+broker-by-id), not a mandate.
+
+**Optional per-component self-test (the realistic slice of "register & exercise at
+startup").** A component author may ship a round-trip self-check proving its own
+data machinery (`value()`/`set_value()`/`Custom`) is internally sound:
+
+```rust
+// what a component author writes; collected via `inventory` so an app can run all
+fn data_self_check() -> Result<(), String>;  // produce → consume → assert round-trip
+```
+
+The framework offers an *optional* `inventory`-collected `Program::self_check() ->
+Result<(), Vec<String>>` an app can assert in an integration test (or run behind a
+debug flag at startup). This catches a component's **self-consistency** early.
+Cross-component **wiring** is deliberately *not* validated here (it would require
+the rejected dependency-declaration registry, §6.7); that stays covered by
+`value_as` + the one A→B test. Self-test is opt-in: simple apps ignore it entirely.
+
 ---
 
 ## 4. Why this is right
@@ -261,7 +382,10 @@ One currency for field data (`FieldValue`), one mechanism for sync (defaulted
 one mechanism for all (which was the v1 god-enum mistake) and not two vocabularies
 for the same kind (the v1 `FieldValue`-vs-`BrokerMsg` overlap). `FieldValue::List`
 genuinely removes the cluster-D multi-child read downcasts; the trait-method sync
-genuinely removes the cluster-B downcasts.
+genuinely removes the cluster-B downcasts. The `Custom` escape does **not** add a
+second currency: it is the *same* `FieldValue` channel carrying a payload the
+framework declines to interpret — one currency, with one open slot for user types
+(§3.5).
 
 ### 4.2 The ownership split is forced
 A `Program` method *can* hold the `exec_view_with` closure; a downward-borrowed
@@ -279,10 +403,13 @@ is C++ `execView` returning a value to a method caller. `Event::Broadcast.source
 is `infoPtr`-as-subject, unchanged.
 
 ### 4.4 Honest scope (no overclaim)
-Removes the **data-movement** downcasts (clusters B and D-reads). Does **not**
-remove non-data structural `as_any` (parent→child display pushes, `desktop_insert`,
-FileDialog readback) — a different category, kept and documented. "Zero `dyn Any`"
-applies to the data path only.
+Removes the **framework-internal data-movement** downcasts (clusters B and
+D-reads). Does **not** remove non-data structural `as_any` (parent→child display
+pushes, `desktop_insert`, FileDialog readback) — a different category, kept and
+documented. The remaining `dyn Any` is *user-owned*, by design: `FieldValue::Custom`
+(the user round-tripping their own type, §3.5). So "no `dyn Any`" means *the
+framework never downcasts to its own types* — not that erasure is banned for the
+user's open extensibility seam.
 
 ---
 
@@ -295,11 +422,14 @@ proof of value.** Each phase is subagent-driven + two-stage-reviewed, snapshot-v
   threaded into `exec_view_with_completion`, invoked pre-drop). Migrate
   `color_dialog`/`theme_editor`; delete the two `Rc` sinks + `ColorPick`/`ThemeEdit`
   variants. Single-view result, sound borrow. Highest reduction-per-risk.
-- **Phase 2 — widen `FieldValue` + honest `value()`.** Add `Bool`/`Bits`/`List`/
-  `List`; implement `value()`/`set_value()` on `CheckBoxes`/`RadioButtons`/
-  `ColorPicker`; make `gather_data`/`scatter_data` produce/consume an ordered
-  `List`. Snapshot
-  dialogs unchanged.
+- **Phase 2 — widen `FieldValue` + honest `value()` + the open seam.** Add
+  `Bool`/`Bits`/`List` and `Custom(Rc<dyn Any>)` with the `custom`/`as_custom`/
+  loud `value_as::<T>() -> Result<_, FieldTypeError>` accessors (§3.5); implement
+  `value()`/`set_value()` on `CheckBoxes`/`RadioButtons` (not `ColorPicker` — Color
+  is by-value, C-1); make `gather_data`/`scatter_data` produce/consume an ordered
+  `List`. Snapshot dialogs unchanged. (The optional `inventory`-collected
+  `Program::self_check()` + the `data_self_check` convention, §3.5, can land here or
+  as a small follow-on — it is opt-in and additive.)
 - **Phase 3 — sync signals → trait methods.** Widget-by-widget: add the defaulted
   `View` method (+ `specs.rs` forwarder + `delegate_view` entry), move the pump's
   downcast call to the method, verify, repeat. Retire each cluster-B downcast as
@@ -329,6 +459,12 @@ land WITH each phase (§9), never trailing.
 5. **The two modal-result paths** — distinct by ownership (§4.2).
 6. **Non-data structural `as_any`** — parent→child display pushes, `desktop_insert`,
    FileDialog readback: a different category, kept (§4.4).
+7. **Startup wiring-declaration registry** — rejected (§2 non-goals). Validating
+   "producer A emits what consumer B expects" at startup needs every consumer to
+   declare its data dependencies up front; a `cargo test` catches the same mismatch
+   earlier for a statically-linked program. We keep the *optional, opt-in*
+   per-component **self-test** (self-consistency only) and the loud `value_as`
+   accessor (§3.5) — not a wiring graph.
 
 ---
 
@@ -353,6 +489,12 @@ land WITH each phase (§9), never trailing.
   (faithful `getData`'s offset walk) and `List` is inherently positional, matching
   the existing `Vec<Option<FieldValue>>` — keep child order stable across
   gather/scatter (no keyed `Map`, deliberately; see §3.1).
+- **`Custom` latent mismatch:** a producer/consumer type disagreement is
+  runtime-checked, not compile-checked, so it can surface late (§3.5). Bounded by:
+  the shared exported type (mismatch = contract drift, not a silent slip), the
+  loud `value_as::<T>() -> Result` accessor, zero latent risk on the scalar path,
+  and one A→B test. `TypeId` is per-version: a diamond dependency at incompatible
+  versions fails closed (`None`/error) — document for component authors.
 
 ---
 
@@ -361,6 +503,7 @@ land WITH each phase (§9), never trailing.
 | C++ | This design |
 |---|---|
 | `getData`/`setData(void *rec)` / `dataSize` | widened `FieldValue` (ordered `List` = the positional record) + `value`/`set_value`; `gather_data`/`scatter_data` |
+| `void*` payload of a *user* type | `FieldValue::Custom(Rc<dyn Any>)` — but typed-at-the-edges: producer & consumer share a named type, mismatch fails closed (§3.5), not C++'s silent reinterpret |
 | `message(target, evBroadcast/evCommand, cmX, infoPtr)` | per-capability defaulted `View` method delivered via `Deferred::Sync*` (deferred, return-less successor — D3/D9) |
 | `infoPtr` as subject | `Event::Broadcast.source` (unchanged) |
 | `execView(p)` returns to a method caller | `exec_view_with<R>` (by value) |
@@ -372,10 +515,12 @@ land WITH each phase (§9), never trailing.
 ## 9. Documentation (part of "done", per phase)
 
 New **public** API (`request_exec_view`, `exec_view_with`, the widened
-`FieldValue`, the new sync `View` methods for widget authors) and a new
-**conceptual model** (field-data-currency vs sync-signal vs by-value-result; the
-three-channel modal-result rule). The mdBook guide (`docs/book/src/`) and rustdoc
-update **as part of the phase that lands each piece**. Conventions: rustdoc is
+`FieldValue` incl. `Custom`/`value_as`, the new sync `View` methods for widget
+authors, the optional `Program::self_check`) and a new **conceptual model**
+(field-data-currency vs sync-signal vs by-value-result; the three-channel
+modal-result rule; the **three open extensibility paths** for third-party
+components, §3.5). The mdBook guide (`docs/book/src/`) and rustdoc update **as part
+of the phase that lands each piece**. Conventions: rustdoc is
 user-facing (strip porting bookkeeping; quarantine C++ lineage into a `# Turbo
 Vision heritage` section); new guide ```` ```rust ```` blocks need a hidden
 `# use tvision_rs as tv;` and compile under `cargo xtask test`.
@@ -394,6 +539,12 @@ Vision heritage` section); new guide ```` ```rust ```` blocks need a hidden
 - **`internals/custom-view.md`** ("Writing your own View") — widget authors
   implement the sync `View` methods + `value()`/`set_value()` instead of relying
   on a framework downcast. (Phases 2, 3)
+- **`apps/extensibility.md`** (NEW — "Third-party components & data interchange") —
+  the §3.5 open story: the three open paths; `FieldValue::Custom` with the
+  `value_as` loud accessor; typed-at-the-edges/runtime-checked/fail-safe; the
+  typed-vs-generic exposure choice for distributable crates and the `TypeId`-version
+  caveat; share-typed-state-directly for compile-time coupling; the optional
+  per-component `data_self_check` + `Program::self_check()`. (Phase 2)
 - **`port/handles.md`** ("Pointers & infoPtr → handles") — refine: subject stays
   `Event::Broadcast.source`; field data is `FieldValue`; sync is a typed method. (Phase 3)
 - **`port/deferred.md`** + **`internals/deferred.md`** — the `Deferred::Sync*`
