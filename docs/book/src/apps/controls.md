@@ -114,6 +114,185 @@ addition:
 When a final-form check fails, the validator can pop an informational error
 message box explaining what is wrong, then return focus to the field.
 
+## Validating a field
+
+Setting [`Options::validate`](../api/tvision-rs/view/struct.Options.html#structfield.validate)
+(`ofValidate`) on a control tells the owning group to ask the control whether it
+is ready to give up focus *before* moving focus away. The check runs through
+[`View::valid`](../api/tvision-rs/view/trait.View.html#method.valid) with the
+command `Command::RELEASED_FOCUS`.
+
+For an `InputLine` with a validator, this is wired automatically: the input line
+sets `ofValidate` for you, and its `valid` override calls the validator's
+`validate` method. If the field is not yet valid, `valid` returns `false` —
+which causes `Group::focus_child` to refuse the focus transfer and keep the
+cursor in the current field.
+
+```rust
+# use tvision_rs as tv;
+# fn _demo() {
+use tv::widgets::{InputLine, LimitMode};
+use tv::RangeValidator;
+
+// An input line that only accepts integers in [1, 100].
+// ofValidate is set automatically because a validator is attached.
+let line = InputLine::new(
+    tv::Rect::new(3, 3, 20, 4),
+    64,
+    Some(Box::new(RangeValidator::new(1, 100))),
+    LimitMode::MaxBytes,
+);
+# let _ = line;
+# }
+```
+
+The user cannot Tab away or dismiss the dialog with OK until every validated
+field reports `is_valid`. Source: `src/view/group.rs` (`Group::focus_child`
+validate gate).
+
+## Validating without closing
+
+Validation runs at two moments:
+
+1. **Focus release** — `valid(Command::RELEASED_FOCUS)`: only the *current*
+   (focused) control is asked. The group's `valid` override for this command
+   delegates to the current child exclusively (`src/view/group.rs`).
+2. **Modal close** — `valid(cmd)` for any other command (e.g. `Command::OK`):
+   the group walks **all** children, calling `valid` on each and stopping at the
+   first that returns `false` (a `firstThat` walk).
+
+This means you can also call `group.valid(Command::OK, ctx)` programmatically —
+from a button handler for instance — to force a full validation pass without
+closing the dialog. The dialog's own `handle_event` for `Command::OK` runs
+exactly this check before it calls `ctx.end_modal(Command::OK)`.
+
+Source: `src/view/group.rs` (`Group::valid`), `src/dialog/dialog.rs`
+(`Dialog::handle_event` OK branch).
+
+> **Turbo Vision heritage:** `TGroup::valid` had the same two arms — one for
+> `cmReleasedFocus` (current only) and one for all other commands (all children).
+> tvision-rs ports both behaviors verbatim.
+
+## When validation fails {#validator-error-dialogs}
+
+When [`Validator::is_valid`](../api/tvision-rs/validate/trait.Validator.html#method.is_valid)
+returns `false`, the validator's
+[`error`](../api/tvision-rs/validate/trait.Validator.html#method.error) method is
+called. This is where the user sees an informational message box explaining what
+is wrong.
+
+A leaf view cannot run a modal dialog inline — it holds only `&mut Context`, not
+the `Program`. Instead, `error` requests the message box through the async-modal
+seam:
+[`Context::request_message_box`](../api/tvision-rs/view/struct.Context.html#method.request_message_box)
+queues a `Deferred::RequestMessageBox` entry; the event loop builds and runs the
+dialog at the end of the current pump tick. The call parameters include an
+optional `answer_to: Option<ViewId>` and `then_command: Option<Command>` — when
+these are `None` (the validator error case), the message box is **informational
+only**: the user clicks OK, the box closes, and focus returns to the invalid
+field. No round-trip answer is needed.
+
+Here is how a concrete validator implements `error` (from `src/validate.rs`,
+`FilterValidator::error`):
+
+```rust,ignore
+fn error(&self, ctx: &mut Context) {
+    ctx.request_message_box(
+        "Invalid character in input".to_string(),
+        tvision_rs::dialog::MessageBoxKind::Error,
+        tvision_rs::dialog::MessageBoxButtons::ok(),
+        None,  // answer_to — no round-trip needed
+        None,  // then_command
+    );
+}
+```
+
+When you write a custom validator, override both `is_valid` and `error`:
+
+```rust
+# use tvision_rs as tv;
+use tv::validate::Validator;
+use tv::view::Context;
+
+struct NoSpaceValidator;
+
+impl Validator for NoSpaceValidator {
+    fn is_valid(&self, s: &str) -> bool {
+        !s.contains(' ')
+    }
+
+    fn error(&self, ctx: &mut Context) {
+        ctx.request_message_box(
+            "Spaces are not allowed.".to_string(),
+            tv::dialog::MessageBoxKind::Error,
+            tv::dialog::MessageBoxButtons::ok(),
+            None,
+            None,
+        );
+    }
+}
+```
+
+The provided `validate` method calls `is_valid` and then `error` for you —
+override `is_valid` and `error` rather than `validate` itself.
+
+Source: `src/validate.rs` (`Validator::error`, `FilterValidator::error`),
+`src/view/context.rs` (`Context::request_message_box`).
+
+## History lists
+
+A [`THistory`](../api/tvision-rs/widgets/struct.THistory.html) dropdown icon lets
+users recall previous entries for an input field. It pairs with a `u8`
+**channel id** (the `history_id`) that identifies which history list the icon
+reads and writes.
+
+Place the icon immediately to the right of the input line (it is 3 cells wide:
+`▐↓▌`) and pass the input's `ViewId` and the channel id:
+
+```rust
+# use tvision_rs as tv;
+# fn _demo(dialog: &mut tv::Dialog) {
+use tv::widgets::{InputLine, THistory, LimitMode};
+
+// Insert the input line first to get its ViewId.
+let input_id = dialog.insert_child(Box::new(
+    InputLine::new(tv::Rect::new(3, 3, 30, 4), 64, None, LimitMode::MaxBytes)
+));
+
+// Place the recall icon immediately to the right.
+let _hist_id = dialog.insert_child(Box::new(
+    THistory::new(tv::Rect::new(30, 3, 33, 4), input_id, 42)
+));
+# }
+```
+
+The channel id `42` (any `u8`) is the key for the global history store. When
+the user confirms an entry in the field (the input's value is saved on dialog
+OK), call
+[`history_add(id, text)`](../api/tvision-rs/widgets/fn.history_add.html) to push
+the string into the store. On the next open, the `↓` button pops a scrollable
+recall list sorted newest-first; picking an entry writes it back into the linked
+input.
+
+The store is **process-global** and **byte-budgeted** (default 1024 bytes across
+all channels). The oldest entries across all channels are evicted when the budget
+is exceeded. Access the store directly with
+[`history_str(id, index)`](../api/tvision-rs/widgets/fn.history_str.html) and
+[`history_count(id)`](../api/tvision-rs/widgets/fn.history_count.html) when you
+need to pre-populate or audit entries.
+
+The icon is **not selectable** — clicking it does not steal focus from the linked
+input — and it opts into **post-processing** so it sees key events after the
+focused input, leaving the `↓` arrow key available as a keyboard trigger.
+
+Source: `src/widgets/history.rs` (`THistory`, `HistoryViewer`, `HistoryWindow`,
+`history_add`, `history_str`, `history_count`).
+
+> **Turbo Vision heritage:** `THistory` / `THistoryViewer` / `THistoryWindow`
+> port one-to-one. The global byte store (`histlist.cpp`) is reimplemented as a
+> thread-local `Vec<HistRec>`, dropping the original front-sentinel bookkeeping
+> in favor of a cleaner read contract.
+
 ## Where to go next
 
 - [Dialogs & data](dialogs.md) — put these controls in a modal dialog and gather

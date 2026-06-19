@@ -120,6 +120,115 @@ per child, `None` where a child has no transferable value), and `scatter_data`
 distributes a matching vector back in the same child order. Seed before
 `exec_view`, gather after it returns `Command::OK`.
 
+## Tab order and data transfer
+
+Both **Tab navigation** and **gather/scatter data order** follow the single
+`children` `Vec` in the group — specifically, the **insertion order** (oldest
+first, as stored in `children[0]`, `children[1]`, …). The children are stored
+back-to-front for painting, and forward for data transfer: `gather_data` walks
+them oldest-first and returns one `Option<FieldValue>` per child.
+
+```text
+inserted 1st → children[0]  (Tab: first stop; gather: slot 0)
+inserted 2nd → children[1]  (Tab: second stop; gather: slot 1)
+…
+inserted last → children[n] (Tab: last stop; gather: slot n)
+```
+
+`Tab` calls `Group::focus_next(forwards: true, ctx)`, which iterates
+`children` in forward order and wraps around. `Shift-Tab` iterates in
+reverse. **Disabled or invisible children are skipped** — they remain in the
+`children` slice but `focus_next` steps over them.
+
+When you assemble a dialog, insert controls in the order you want the Tab key to
+visit them — typically top-to-bottom, then left-to-right. Buttons are usually
+inserted last so they receive focus after all the data fields.
+
+Gather (the dialog walking its children to collect values) follows the same
+forward order. Scatter distributes values in the **same** order. The index in
+the `Vec<Option<FieldValue>>` that `gather_data` returns corresponds 1:1 to the
+insertion slot: index 0 is the first-inserted child, index 1 is the second, and
+so on.
+
+```rust
+# use tvision_rs as tv;
+# use tv::{Command, Dialog, Rect};
+# use tv::widgets::{Button, ButtonFlags, InputLine, LimitMode};
+# #[allow(unused_variables)]
+# fn _demo() {
+let mut dialog = Dialog::new(Rect::new(0, 0, 40, 10), Some("Login".into()));
+
+// Insert in Tab order: name first, password second, button last.
+let name_id   = dialog.insert_child(Box::new(InputLine::new(Rect::new(3, 3, 34, 4), 64, None, LimitMode::MaxBytes)));
+let pass_id   = dialog.insert_child(Box::new(InputLine::new(Rect::new(3, 5, 34, 6), 64, None, LimitMode::MaxBytes)));
+let _btn_id   = dialog.insert_child(Box::new(Button::new(Rect::new(15, 7, 25, 9), "~O~K", Command::OK, ButtonFlags { default: true, ..Default::default() })));
+
+// After exec_view returns Command::OK, gather in the same order:
+// gathered[0] = name, gathered[1] = password, gathered[2] = None (button has no value).
+# }
+```
+
+Source: `src/view/group.rs` (`Group::gather_data`, `Group::scatter_data`,
+`Group::focus_next`).
+
+> **Turbo Vision heritage:** in C++ `TGroup::getData`/`setData` walked the same
+> circular sibling ring in forward order; the ring order was insertion order
+> (newest at the front, so a full walk from `last->next` gives oldest first). The
+> tvision-rs `Vec` stores oldest at index 0, preserving the same forward walk.
+
+## The change-directory dialog
+
+[`ChDirDialog`](../api/tvision-rs/dialog/struct.ChDirDialog.html) is a ready-made
+directory chooser: a path input line with a history recall icon, a collapsible
+directory tree (`DirListBox`), and action buttons. Build it with
+[`ChDirDialog::new`](../api/tvision-rs/dialog/struct.ChDirDialog.html#method.new):
+
+```rust
+# use tvision_rs as tv;
+# fn _demo(program: &mut tv::Program) {
+use tv::dialog::{ChDirDialog, CD_NORMAL};
+
+let mut cd = ChDirDialog::new(CD_NORMAL, 0);
+let result = program.exec_view(Box::new(cd));
+# let _ = result;
+# }
+```
+
+The `opts` parameter is a bitmask:
+
+| Constant | Effect |
+| --- | --- |
+| `CD_NORMAL` | Standard dialog, loads the current directory tree on open |
+| `CD_NO_LOAD_DIR` | Skip the initial directory scan (faster first open) |
+| `CD_HELP_BUTTON` | Add a Help button at the right |
+
+The second argument is the `history_id` (`u8`) for the path input's recall
+dropdown — use a non-zero id to enable history recall, or `0` to skip it (the
+gallery example uses `0`).
+
+When the user navigates the tree and double-clicks a directory (or types a path
+and presses Chdir), the dialog writes the chosen path into its input field and
+dismisses with `Command::OK`. Read the result from the dialog's input:
+
+```rust,ignore
+use tv::dialog::{ChDirDialog, CD_NORMAL};
+use tv::data::FieldValue;
+
+let mut cd = ChDirDialog::new(CD_NORMAL, 0);
+if program.exec_view(Box::new(cd)) == tv::Command::OK {
+    // The path is available after exec_view returns — gather from the child
+    // or std::env::current_dir() if ChDirDialog has already changed directories.
+    if let Ok(path) = std::env::current_dir() {
+        println!("Changed to {}", path.display());
+    }
+}
+```
+
+The dialog is growable (the `WindowFlags::grow` flag is set internally) so the
+user can resize it, and the tree grows with the dialog bounds via `GrowMode`.
+
+Source: `src/dialog/filedlg.rs` (`ChDirDialog::new`, `DirListBox`, `DirCollection`).
+
 ## See also
 
 - [Windows & the desktop](windows.md) — the non-modal sibling of a dialog.
