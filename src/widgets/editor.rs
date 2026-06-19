@@ -1835,7 +1835,7 @@ impl View for Editor {
                             ctx.request_mouse_track(h, Event::MouseWheel(m));
                         }
                         if let Some(id) = self.state.id() {
-                            ctx.request_sync_editor_delta(id, self.h_scroll_bar, self.v_scroll_bar);
+                            ctx.request_scroll_sync(id, self.h_scroll_bar, self.v_scroll_bar);
                         }
                         // :580-581 — setCurPtr(getMousePtr(where),
                         // selectMode); selectMode |= smExtend.
@@ -2125,7 +2125,7 @@ impl View for Editor {
                     && (*source == self.h_scroll_bar || *source == self.v_scroll_bar) =>
             {
                 if let Some(id) = self.state.id() {
-                    ctx.request_sync_editor_delta(id, self.h_scroll_bar, self.v_scroll_bar);
+                    ctx.request_scroll_sync(id, self.h_scroll_bar, self.v_scroll_bar);
                 }
                 // Do NOT consume the scroll-bar-changed broadcast: by codebase
                 // convention broadcasts are left live for sibling views (the
@@ -2189,10 +2189,22 @@ impl View for Editor {
     }
 
     /// Concrete-reach hatch: the pump downcasts to `&mut Editor` for the
-    /// `SyncEditorDelta` / `EditorPaste` brokers, and for the `FindPick` /
+    /// `EditorPaste` broker, and for the `FindPick` /
     /// `ReplacePick` completion to set search state.
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         Some(self)
+    }
+
+    /// Read both scroll bars' values and apply the delta via [`apply_scroll_delta`].
+    ///
+    /// Unlike the scroller/outline, the editor **preserves `None`** — a missing
+    /// bar skips that axis rather than scrolling to 0. `apply_scroll_delta` is
+    /// the editor's `TEditor::checkScrollBar` body; `ctx` is live so the editor
+    /// may queue scrollbar param write-backs for the next pump.
+    ///
+    /// [`apply_scroll_delta`]: Editor::apply_scroll_delta
+    fn apply_scroll_sync(&mut self, h: Option<i32>, v: Option<i32>, ctx: &mut Context) {
+        self.apply_scroll_delta(h, v, ctx);
     }
 
     /// Cache the user's answer to the "Replace this occurrence?" prompt, routed
@@ -2682,13 +2694,13 @@ impl View for FileEditor {
 /// [`Editor`], a [`Memo`], or a [`FileEditor`].
 ///
 /// `FileEditor::as_any_mut` returns the `FileEditor` itself (so the save-as
-/// brokers can downcast to it), NOT the inner `Editor`. The editor cross-view brokers
-/// (`SyncEditorDelta` / `EditorPaste`) target the inserted view's id — which, in an
-/// `EditWindow`, IS a `FileEditor` — yet they need the inner `Editor`. This helper
-/// bridges that: it tries the `FileEditor` downcast first (peeling to its
-/// `.editor`), and otherwise falls back to a direct `Editor` downcast (covering a
-/// plain `Editor` and a `Memo`, both of whose `as_any_mut` forward to the inner
-/// `Editor`). The `is::<>()`-first form avoids the NLL conditional-borrow error.
+/// brokers can downcast to it), NOT the inner `Editor`. The `EditorPaste` broker
+/// targets the inserted view's id — which, in an `EditWindow`, IS a `FileEditor` —
+/// yet it needs the inner `Editor`. This helper bridges that: it tries the
+/// `FileEditor` downcast first (peeling to its `.editor`), and otherwise falls back
+/// to a direct `Editor` downcast (covering a plain `Editor` and a `Memo`, both of
+/// whose `as_any_mut` forward to the inner `Editor`). The `is::<>()`-first form
+/// avoids the NLL conditional-borrow error.
 pub(crate) fn editor_mut(v: &mut dyn View) -> Option<&mut Editor> {
     let any = v.as_any_mut()?;
     if any.is::<FileEditor>() {
@@ -3540,7 +3552,7 @@ mod tests {
         assert!(
             cx.deferred
                 .iter()
-                .any(|d| matches!(d, Deferred::SyncEditorDelta { editor, .. } if *editor == id))
+                .any(|d| matches!(d, Deferred::ScrollSync { target, .. } if *target == id))
         );
     }
 
@@ -4553,10 +4565,10 @@ mod tests {
         assert!(
             cx.deferred.iter().any(|d| matches!(
                 d,
-                Deferred::SyncEditorDelta { editor, h, v }
-                    if *editor == id && *h == Some(hbar) && *v == Some(vbar)
+                Deferred::ScrollSync { target, h, v }
+                    if *target == id && *h == Some(hbar) && *v == Some(vbar)
             )),
-            "SyncEditorDelta self-posted (the swallowed-broadcast workaround)"
+            "ScrollSync self-posted (the swallowed-broadcast workaround)"
         );
         // The unconditional body still ran: selection extended to the wheel pos.
         assert_eq!((e.sel_start, e.sel_end), (2, 8), "setCurPtr tail ran");

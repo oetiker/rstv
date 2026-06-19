@@ -2239,30 +2239,6 @@ impl Program {
                             }
                             // -- the TEditor cross-view brokers ----
                             //
-                            // Read direction (TEditor::checkScrollBar):
-                            // resolve each bar, read its `value`, then
-                            // downcast the editor and call apply_scroll_delta
-                            // (its checkScrollBar body). Like ScrollSync
-                            // but the editor is NOT a Scroller, so it is its own
-                            // concrete downcast target.
-                            Deferred::SyncEditorDelta { editor, h, v } => {
-                                let dx = h
-                                    .and_then(|id| group.find_mut(id))
-                                    .and_then(|view| view.value())
-                                    .and_then(field_int);
-                                let dy = v
-                                    .and_then(|id| group.find_mut(id))
-                                    .and_then(|view| view.value())
-                                    .and_then(field_int);
-                                // The editor id may resolve to a FileEditor (in an
-                                // EditWindow) or a plain Editor/Memo — editor_mut
-                                // peels to the inner Editor in either case.
-                                if let Some(ed) =
-                                    group.find_mut(editor).and_then(crate::widgets::editor_mut)
-                                {
-                                    ed.apply_scroll_delta(dx, dy, &mut ctx);
-                                }
-                            }
                             // Indicator write (TEditor::doUpdate →
                             // indicator->setValue): resolve the indicator,
                             // downcast, set_value.

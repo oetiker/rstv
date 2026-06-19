@@ -302,22 +302,6 @@ pub enum Deferred {
     RecordHistory { link: ViewId, history_id: u8 },
 
     // -- the editor cross-view brokers ---------------------------
-    /// **Read direction for an editor** (on a scrollbar-changed broadcast).
-    /// Resolve the `h`/`v` scrollbars, read each `value`
-    /// (via [`View::value`](crate::view::View::value)), downcast `editor` to
-    /// [`Editor`](crate::widgets::Editor) and call `apply_scroll_delta(dx, dy)`
-    /// (which updates the delta and redraws only on a change). The editor is **not**
-    /// a `Scroller`, so it cannot reuse
-    /// [`ScrollSync`](Self::ScrollSync). Touches the **view-tree**
-    /// family, so the insertion-order drain stays order-equivalent.
-    SyncEditorDelta {
-        /// The editor whose `delta` to update.
-        editor: ViewId,
-        /// The horizontal scrollbar to read `value` from (`None` = no h bar).
-        h: Option<ViewId>,
-        /// The vertical scrollbar to read `value` from (`None` = no v bar).
-        v: Option<ViewId>,
-    },
     /// **Indicator write**: update an editor's position/modified indicator.
     /// Resolve `indicator`, downcast to [`Indicator`](crate::widgets::Indicator),
     /// and call `set_value(location, modified)`. The editor (a leaf) cannot mutate
@@ -1380,20 +1364,6 @@ impl<'a> Context<'a> {
     pub fn open_replace_dialog(&mut self, editor_id: ViewId) {
         self.deferred
             .push(Deferred::OpenReplaceDialog { editor_id });
-    }
-
-    /// Request the editor `editor` re-read its scrollbars' values and update its
-    /// `delta` — **deferred** ([`Deferred::SyncEditorDelta`]). The editor (a leaf
-    /// view) cannot read its window-frame sibling bars itself; the pump brokers the
-    /// read. `h`/`v` are the bar [`ViewId`]s (`None` = no bar).
-    pub fn request_sync_editor_delta(
-        &mut self,
-        editor: ViewId,
-        h: Option<ViewId>,
-        v: Option<ViewId>,
-    ) {
-        self.deferred
-            .push(Deferred::SyncEditorDelta { editor, h, v });
     }
 
     /// Request the editor's `indicator` display `location`/`modified` —
