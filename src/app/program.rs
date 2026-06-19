@@ -4326,7 +4326,10 @@ mod tests {
             }
             program.pump_and_drive();
         }
-        // Final scan (catch a re-injection queued by the last drive).
+        // Final scan: the re-injected `then_cmd` may have been queued by the
+        // final `pump_and_drive` iteration and not yet consumed by a subsequent
+        // pump, so the in-loop scan could miss it.  Check once more after the
+        // loop to catch this case.
         if program
             .out_events
             .iter()

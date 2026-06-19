@@ -702,15 +702,19 @@ fn no_case_pos(needle: &str, haystack: &str) -> usize {
 /// `InfoBox`, now a real custom `Dialog` launched via `request_exec_view`
 /// (consumer-API gap #2 closed).
 ///
-/// The dialog is titled "Information", sized 52 × 10, and shows the entry's
+/// The dialog is titled "Information", sized 62 × 10, and shows the entry's
 /// six fields as static text rows (one `StaticText` spanning all six lines).
 /// An OK `Button` whose command is `Command::CANCEL` closes the modal
 /// (read-only-info convention: `cmCancel` means "dismiss", nothing is read back).
+///
+/// Width is chosen so the longest description in the catalog
+/// ("Description: Cosmo's Cosmic Adventure episode 1 shareware", 57 chars)
+/// fits on one row without wrapping: content width = w - 4 = 58 >= 57.
 fn build_info_dialog(e: &Entry) -> Dialog {
-    // Inner content width: 52 - 2 (frame) - 2 (margin each side) = 46 chars.
+    // Inner content width: 62 - 2 (frame) - 2 (margin each side) = 58 chars.
     // Inner content height: 10 - 2 (top/bottom frame) = 8 usable rows.
     // Layout: rows 1-6 = static text, row 7 = spacer, row 8-9 = button (h=2).
-    let w: i32 = 52;
+    let w: i32 = 62;
     let h: i32 = 10;
     let mut dialog = Dialog::new(Rect::new(0, 0, w, h), Some("Information".to_string()));
 
@@ -1326,7 +1330,7 @@ mod tests {
             |frame: &str| -> Option<usize> { frame.lines().position(|l| l.contains(thumb)) };
         let top_row = row_of_thumb(&before);
 
-        // Drive the focus to the end of the (62-entry) catalog; the thumb must
+        // Drive the focus to the end of the catalog; the thumb must
         // travel downward.
         for _ in 0..CATALOG.len() {
             screen.push_key(Key::Down, KeyModifiers::default());
@@ -1474,6 +1478,86 @@ mod tests {
             frame.contains(entry.desc),
             "frame should contain description '{}'; got:\n{frame}",
             entry.desc
+        );
+        assert!(
+            frame.contains("OK"),
+            "frame should contain 'OK' button; got:\n{frame}"
+        );
+        assert!(
+            frame.contains("Information"),
+            "frame should contain the dialog title 'Information'; got:\n{frame}"
+        );
+    }
+
+    /// Extended builder test: `build_info_dialog` for the entry with the LONGEST
+    /// description renders all six labelled fields (disk, file, date, size,
+    /// description, scan date) without clipping.  This is the regression guard
+    /// for Fix 1 — the dialog must be wide enough that the "Description:" line
+    /// does NOT wrap and push "Scan Date" off the bottom of the text box.
+    ///
+    /// Entry used: COSMO1.ZIP on GAMES05 — "Cosmo's Cosmic Adventure episode 1
+    /// shareware" (57-char "Description: ..." line, the longest in the catalog).
+    ///
+    /// The test intentionally renders standalone on a [`HeadlessBackend`] sized
+    /// to the dialog's own dimensions (no app pump needed), exactly like the
+    /// existing `build_info_dialog_renders_entry_fields_and_ok_button` test.
+    #[test]
+    fn build_info_dialog_long_desc_renders_all_six_fields() {
+        use tvision_rs::{Buffer, DrawCtx, Renderer};
+
+        // CATALOG[40] = COSMO1.ZIP — the longest "Description: ..." line (57 chars).
+        let entry = &CATALOG[40];
+        assert_eq!(
+            entry.file, "COSMO1.ZIP",
+            "index 40 must be the COSMO1 entry"
+        );
+
+        let mut dialog = build_info_dialog(entry);
+        let bounds = dialog.state().get_bounds();
+        let w = bounds.b.x as u16;
+        let h = bounds.b.y as u16;
+
+        let (backend, screen) = HeadlessBackend::new(w, h);
+        let mut r = Renderer::new(Box::new(backend));
+        let theme = Theme::classic_blue();
+        r.render(|buf: &mut Buffer| {
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            dialog.draw(&mut dc);
+        });
+
+        let frame = screen.snapshot();
+
+        // All six labelled fields must appear in the rendered frame.
+        assert!(
+            frame.contains(entry.disk),
+            "frame should contain disk label '{}'; got:\n{frame}",
+            entry.disk
+        );
+        assert!(
+            frame.contains(entry.file),
+            "frame should contain file name '{}'; got:\n{frame}",
+            entry.file
+        );
+        assert!(
+            frame.contains(entry.date),
+            "frame should contain file date '{}'; got:\n{frame}",
+            entry.date
+        );
+        assert!(
+            frame.contains("449024"),
+            "frame should contain size '449024'; got:\n{frame}"
+        );
+        assert!(
+            frame.contains(entry.desc),
+            "frame should contain description '{}'; got:\n{frame}",
+            entry.desc
+        );
+        // Scan date is the sixth field — this assertion fails if the description
+        // wraps and pushes scan date off the bottom of the text box.
+        assert!(
+            frame.contains(entry.scan),
+            "frame should contain scan date '{}' (Fix 1 guard: clipped if dialog too narrow); got:\n{frame}",
+            entry.scan
         );
         assert!(
             frame.contains("OK"),

@@ -1324,8 +1324,8 @@ impl<'a> Context<'a> {
     ///
     /// `then_command` is `None` for a fire-and-forget modal (e.g. a read-only info
     /// dialog). To act on the result, the `requester` overrides
-    /// [`View::set_modal_answer`](crate::view::View::set_modal_answer) to cache the close command and acts on
-    /// `then_command` when it is re-posted.
+    /// [`View::set_modal_answer`](crate::view::View::set_modal_answer) to cache
+    /// the close command and acts on `then_command` when it is re-posted.
     ///
     /// **Data-back path deliberately not built:** the result is the close command
     /// only (via `RouteModalAnswer` → `set_modal_answer`). A future input-dialog
