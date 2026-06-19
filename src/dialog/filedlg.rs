@@ -1690,39 +1690,86 @@ fn valid_file_name(s: &str) -> bool {
 const INVALID_DRIVE_TEXT: &str = "Invalid drive or directory";
 const INVALID_FILE_TEXT: &str = "Invalid file name";
 
+// ---------------------------------------------------------------------------
+// FileDialog option flags (options bitmask passed to FileDialog::new)
+//
+// Typical combinations:
+//   Open dialog:    FD_OPEN_BUTTON | FD_NO_LOAD_DIR (if pre-constructed)
+//   Save-as dialog: FD_OK_BUTTON | FD_REPLACE_BUTTON
+//   With clear:     FD_OPEN_BUTTON | FD_CLEAR_BUTTON
+//   With help:      FD_OPEN_BUTTON | FD_HELP_BUTTON
+//
+// Use at most one of FD_OK_BUTTON / FD_OPEN_BUTTON (they trigger the same
+// command, Command::FILE_OPEN; they differ only in button label).
+// FD_NO_LOAD_DIR may be OR-ed with any button combination.
+// ---------------------------------------------------------------------------
+
 /// Insert an "OK" button that closes the dialog with the selected filename.
 ///
 /// Pass in the `options` bitmask to [`FileDialog::new`] to add this button.
 /// Both `FD_OK_BUTTON` and [`FD_OPEN_BUTTON`] trigger `Command::FILE_OPEN`
-/// (the same close command); the label is "OK" vs "Open". Use at most one.
+/// (the same close command); the label is "OK" vs "Open". Use at most one of
+/// the two. Common combination: `FD_OK_BUTTON | FD_REPLACE_BUTTON` for a
+/// save-as dialog that can overwrite.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `fdOKButton` (`tfileinp.h`).
 pub const FD_OK_BUTTON: u16 = 0x0001;
 /// Insert an "Open" button that closes the dialog with the selected filename.
 ///
-/// Like `FD_OK_BUTTON` but labels the button "Open". Use for a classic
-/// file-open dialog; use `FD_OK_BUTTON` when the OK label is more appropriate.
+/// Like [`FD_OK_BUTTON`] but labels the button "Open". Use for a classic
+/// file-open dialog (e.g. `FD_OPEN_BUTTON | FD_NO_LOAD_DIR`); use
+/// [`FD_OK_BUTTON`] when the OK label fits better (e.g. a save-as dialog).
+/// Use at most one of the two.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `fdOpenButton` (`tfileinp.h`).
 pub const FD_OPEN_BUTTON: u16 = 0x0002;
 /// Insert a "Replace" button that closes the dialog with the selected filename.
 ///
 /// Signals the caller (via `Command::FILE_REPLACE`) that the user accepted an
-/// overwrite. Use for save-as dialogs alongside or instead of `FD_OK_BUTTON`.
+/// overwrite. Use for save-as dialogs alongside [`FD_OK_BUTTON`] (the user can
+/// click OK without overwrite confirmation, or Replace to explicitly confirm).
+///
+/// # Turbo Vision heritage
+///
+/// Ports `fdReplaceButton` (`tfileinp.h`).
 pub const FD_REPLACE_BUTTON: u16 = 0x0004;
 /// Insert a "Clear" button that closes the dialog without a filename.
 ///
 /// Signals the caller (via `Command::FILE_CLEAR`) that the associated file
 /// should be cleared/unlinked. The dialog's `valid()` always passes for this
 /// command (no path check), and [`FileDialog::value`] returns an empty string.
+/// Combine with [`FD_OPEN_BUTTON`] or [`FD_OK_BUTTON`] to offer both open and
+/// clear choices in the same dialog.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `fdClearButton` (`tfileinp.h`).
 pub const FD_CLEAR_BUTTON: u16 = 0x0008;
 /// Insert a "Help" button (posts `Command::HELP`; does not close the dialog).
 ///
 /// The help button is never the default and never triggers path validation.
 /// Wire a `Command::HELP` handler in the owning program to make it useful.
+/// May be OR-ed with any other button flag.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `fdHelpButton` (`tfileinp.h`).
 pub const FD_HELP_BUTTON: u16 = 0x0010;
 /// Skip the initial directory read when the dialog opens.
 ///
 /// By default [`FileDialog::reset_current`] reads the process current directory
 /// into the file list on first show. Pass `FD_NO_LOAD_DIR` to suppress that
 /// read — useful when the dialog is constructed before its owner is on screen,
-/// or when the listing is populated by other means.
+/// or when the listing is populated by other means. May be OR-ed with any
+/// button flag combination.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `fdNoLoadDir` (`tfileinp.h`).
 pub const FD_NO_LOAD_DIR: u16 = 0x0100;
 
 // --- Change-directory dialog options ----------------------------------------

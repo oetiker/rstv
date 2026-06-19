@@ -98,7 +98,7 @@ to a `Key` variant optionally combined with a `KeyModifiers` field — see the
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `MaxLineLength` (constant, `Editors` unit) | 350 | PORTED | OK | `src/widgets/editor.rs`: `const MAX_LINE_LENGTH: i32 = 256` | 1 | Private constant used as the editor line-limit. Doc score 1: the constant is `pub(crate)`/private and carries only its value; publicly the `Editor::new` doc does not surface the 256 limit. Could score 2 if the limit were mentioned in the `Editor` rustdoc. |
+| `MaxLineLength` (constant, `Editors` unit) | 350 | PORTED | OK | `src/widgets/editor.rs`: `const MAX_LINE_LENGTH: i32 = 256` | N/A | Module-private `const` (no `pub` or `pub(crate)`). Used as the editor line-limit internally. Not a public API symbol. |
 
 ---
 
@@ -114,8 +114,8 @@ to a `Key` variant optionally combined with a `KeyModifiers` field — see the
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `mbLeftButton` ($01) | 350 | EQUIVALENT | OK | `MouseButtons { left: true, .. }` | 3 | `mb*` bit-word → `MouseButtons` struct-of-bools (deviation D5). `left` field. Documented in `MouseButtons` rustdoc. |
-| `mbRightButton` ($02) | 350 | EQUIVALENT | OK | `MouseButtons { right: true, .. }` | 3 | `right` field of `MouseButtons`. |
+| `mbLeftButton` ($01) | 350 | EQUIVALENT | OK | `MouseButtons { left: true, .. }` | 3 | `mb*` bit-word → `MouseButtons` struct-of-bools (deviation D5). `left` field. Documented in `MouseButtons` rustdoc with a usage example. |
+| `mbRightButton` ($02) | 350 | EQUIVALENT | OK | `MouseButtons { right: true, .. }` | 3 | `right` field of `MouseButtons`. Documented with a code example in the struct doc. |
 
 ---
 
@@ -132,7 +132,7 @@ to a `Key` variant optionally combined with a `KeyModifiers` field — see the
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `MenuBar` (global variable `PMenuBar`, `App` unit) | 351 | EQUIVALENT | OK | `Program::menu_bar() -> Option<ViewId>` (`src/app/program.rs`) | 2 | The C++ global `MenuBar` pointer becomes a `ViewId` handle owned by `Program`, resolved via `menu_bar()`. The variable is not a singleton global (multiple programs are possible). Doc score 2: the accessor is documented (what), "when to use" is implicit. |
+| `MenuBar` (global variable `PMenuBar`, `App` unit) | 351 | EQUIVALENT | OK | `Program::menu_bar() -> Option<ViewId>` (`src/app/program.rs`) | 3 | Rustdoc: "handle is stable for the application lifetime. Use it to resolve the menu bar view when you need to update its items at runtime… For command-enablement, prefer `enable_command` / `disable_command`." Heritage note cites `TProgram::menuBar` global. |
 
 ---
 
@@ -148,7 +148,7 @@ to a `Key` variant optionally combined with a `KeyModifiers` field — see the
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `Message` (function, `Views` unit) | 351 | EQUIVALENT | OK | `Group::broadcast` / `View::handle_event` with `Event::Broadcast { command, source }` or `Event::Command` | 2 | The C++ `Message(view, evBroadcast, cmd, infoPtr)` free function finds a view and calls `handleEvent`. In tvision-rs, the pump broadcasts via `Group::handle_event`, routing `Event::Broadcast` or `Event::Command` through the tree. A direct message injection is available via `Context::request_message_box` for async cases and `Program::pump_once` for test-driven dispatch. No single `message()` free function; the functionality is absorbed into the event-loop routing. Doc score 2 for the routing functions (what they do). |
+| `Message` (function, `Views` unit) | 351 | EQUIVALENT | OK | `Group::broadcast` / `View::handle_event` with `Event::Broadcast { command, source }` or `Event::Command` | N/A | The C++ `Message(view, evBroadcast, cmd, infoPtr)` free function finds a view and calls `handleEvent`. In tvision-rs the pump broadcasts via `Group::handle_event`. No single `message()` free function; the functionality is absorbed into event-loop routing. No single public symbol to document. |
 
 ---
 
@@ -167,17 +167,17 @@ The C++ `mfXXXX` packed `aOptions` word is replaced by two typed enums: `Message
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `mfWarning` ($0000) | 352 | EQUIVALENT | OK | `MessageBoxKind::Warning` | 2 | Title → `"Warning"`. `MessageBoxKind` is documented (what); "when to combine with buttons" example would bring to 3. |
-| `mfError` ($0001) | 352 | EQUIVALENT | OK | `MessageBoxKind::Error` | 2 | Title → `"Error"`. |
-| `mfInformation` ($0002) | 352 | EQUIVALENT | OK | `MessageBoxKind::Information` | 2 | Title → `"Information"`. |
-| `mfConfirmation` ($0003) | 352 | EQUIVALENT | OK | `MessageBoxKind::Confirmation` | 2 | Title → `"Confirm"`. |
+| `mfWarning` ($0000) | 352 | EQUIVALENT | OK | `MessageBoxKind::Warning` | 3 | `MessageBoxKind` rustdoc now has a usage table (Warning/Error/Information/Confirmation → when to use each), a heritage note, and each variant has a one-line description. |
+| `mfError` ($0001) | 352 | EQUIVALENT | OK | `MessageBoxKind::Error` | 3 | See `MessageBoxKind` rustdoc above. |
+| `mfInformation` ($0002) | 352 | EQUIVALENT | OK | `MessageBoxKind::Information` | 3 | See `MessageBoxKind` rustdoc above. |
+| `mfConfirmation` ($0003) | 352 | EQUIVALENT | OK | `MessageBoxKind::Confirmation` | 3 | See `MessageBoxKind` rustdoc above. |
 | `mfInsertInApp` ($0004) | 352 | NOT-PORTED | — | — | N/A | Inserts the dialog into the application group rather than running it as a free-floating modal. tvision-rs always inserts the modal into the root group (deviation D9); no "insert into app" vs "insert into desktop" distinction exists. |
-| `mfOKButton` ($0100) | 352 | EQUIVALENT | OK | `MessageBoxButtons { ok: true, .. }` | 2 | `MessageBoxButtons::ok()` constructor. |
-| `mfCancelButton` ($0200) | 352 | EQUIVALENT | OK | `MessageBoxButtons { cancel: true, .. }` | 2 | `cancel` field of `MessageBoxButtons`. |
-| `mfYesButton` ($0400) | 352 | EQUIVALENT | OK | `MessageBoxButtons { yes: true, .. }` | 2 | `yes` field of `MessageBoxButtons`. |
-| `mfNoButton` ($0800) | 352 | EQUIVALENT | OK | `MessageBoxButtons { no: true, .. }` | 2 | `no` field of `MessageBoxButtons`. |
-| `mfOKCancel` (shorthand) | 352 | EQUIVALENT | OK | `MessageBoxButtons::ok_cancel()` | 2 | Convenience constructor documented in `MessageBoxButtons::ok_cancel`. |
-| `mfYesNoCancel` (shorthand) | 352 | EQUIVALENT | OK | `MessageBoxButtons::yes_no_cancel()` | 2 | Convenience constructor documented. |
+| `mfOKButton` ($0100) | 352 | EQUIVALENT | OK | `MessageBoxButtons { ok: true, .. }` | 3 | `MessageBoxButtons` rustdoc now has a combination table (ok/ok_cancel/yes_no/yes_no_cancel + when to use each), heritage note, and each field has docs explaining when to use it and combination advice. |
+| `mfCancelButton` ($0200) | 352 | EQUIVALENT | OK | `MessageBoxButtons { cancel: true, .. }` | 3 | See `MessageBoxButtons` rustdoc above. |
+| `mfYesButton` ($0400) | 352 | EQUIVALENT | OK | `MessageBoxButtons { yes: true, .. }` | 3 | See `MessageBoxButtons` rustdoc above. |
+| `mfNoButton` ($0800) | 352 | EQUIVALENT | OK | `MessageBoxButtons { no: true, .. }` | 3 | See `MessageBoxButtons` rustdoc above. |
+| `mfOKCancel` (shorthand) | 352 | EQUIVALENT | OK | `MessageBoxButtons::ok_cancel()` | 3 | Constructor documented in `MessageBoxButtons::ok_cancel`. Combination table in struct doc. |
+| `mfYesNoCancel` (shorthand) | 352 | EQUIVALENT | OK | `MessageBoxButtons::yes_no_cancel()` | 3 | Constructor documented. Combination table in struct doc. |
 
 ---
 
@@ -185,7 +185,7 @@ The C++ `mfXXXX` packed `aOptions` word is replaced by two typed enums: `Message
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `MinWinSize` (constant, `Dialogs` unit) | 352 | PORTED | OK | `Window::size_limits` returns `min = Point::new(16, 6)` (`src/window/window.rs:1234`) | 2 | C++ `MinWinSize = TPoint{16,6}`. Rust: the `size_limits` override hard-codes `Point::new(16, 6)` as the floor. The test `title_and_size_limits` asserts this (line 1389). Documented in the `zoom` method comment ("min = 16×6") but not in a named public constant. Doc score 2 — the constant's meaning is implied by the override but there is no named `pub const MIN_WIN_SIZE` with its own rustdoc. |
+| `MinWinSize` (constant, `Dialogs` unit) | 352 | PORTED | OK | `Window::size_limits` returns `min = Point::new(16, 6)` (`src/window/window.rs:1234`) | N/A | C++ `MinWinSize = TPoint{16,6}`. Rust: the `size_limits` override hard-codes `Point::new(16, 6)` as the floor. There is no named `pub const MIN_WIN_SIZE`; the value lives inside an impl method override. Not a public constant symbol. The test `title_and_size_limits` asserts this value. |
 
 ---
 
@@ -193,7 +193,7 @@ The C++ `mfXXXX` packed `aOptions` word is replaced by two typed enums: `Message
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `MouseButtons` (global variable `Byte`, `Drivers` unit) | 352 | EQUIVALENT | OK | `MouseEvent::buttons: MouseButtons` struct-of-bools delivered with each `Event::MouseDown/Up/Move/Auto` | 2 | The C++ global `MouseButtons` holds the current button state; in tvision-rs button state is carried per-event in `MouseEvent::buttons` (event-local, no process global). The `MouseButtons` struct in `src/event/mod.rs` is the type-level analog. Doc score 2 (what it models); the "no global, event-local" design choice is not documented in rustdoc. |
+| `MouseButtons` (global variable `Byte`, `Drivers` unit) | 352 | EQUIVALENT | OK | `MouseEvent::buttons: MouseButtons` struct-of-bools delivered with each `Event::MouseDown/Up/Move/Auto` | 3 | `MouseButtons` struct has a code example (left/right click handler), heritage note (`mb*` bitmask → struct-of-bools). `MouseEvent::buttons` field doc explains event-local vs. global design. |
 
 ---
 
@@ -225,7 +225,7 @@ The C++ `mfXXXX` packed `aOptions` word is replaced by two typed enums: `Message
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `MouseWhere` (global variable `TPoint`, `Drivers` unit) | 353 | EQUIVALENT | OK | `MouseEvent::position: Point` carried in each mouse event | 2 | C++ global `MouseWhere` holds the current mouse position in global coords; tvision-rs carries position per-event in `MouseEvent::position`. No global mutable cursor; the last known position is maintained by the backend and the pump's `mouse_auto` synthesizer state. Same design note as `MouseButtons` global → event-local. |
+| `MouseWhere` (global variable `TPoint`, `Drivers` unit) | 353 | EQUIVALENT | OK | `MouseEvent::position: Point` carried in each mouse event | 3 | `MouseEvent::position` rustdoc now explains: absolute screen coordinates; use `Context::make_local` to convert to view-local; always set (even on `MouseAuto`). Heritage note: ports `MouseWhere` global → event-local `position` (no mutable global). |
 
 ---
 
@@ -233,9 +233,9 @@ The C++ `mfXXXX` packed `aOptions` word is replaced by two typed enums: `Message
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `MoveBuf` (procedure, `Drivers` unit) | 353 | EQUIVALENT | OK | `DrawBuffer::move_buf(&mut self, indent, src: &[Cell])` (`src/screen/draw_buffer.rs:191`) | 2 | Ports `MoveBuf` (copy a block of pre-built cells). The raw `Word`/attribute pair buffer becomes a typed `&[Cell]` slice (deviation D6). Doc score 2 (what). The "how/when vs MoveChar" use-case distinction is not explicit. |
+| `MoveBuf` (procedure, `Drivers` unit) | 353 | EQUIVALENT | OK | `DrawBuffer::move_buf(&mut self, indent, src: &[Cell])` (`src/screen/draw_buffer.rs:209`) | 3 | Rustdoc now explains when to use `move_buf` vs `move_char`/`move_str`/`move_cstr` (pre-built cells vs. single char vs. string vs. control string). Heritage note added. |
 | `MoveChar` (procedure, `Drivers` unit) | 353 | EQUIVALENT | OK | `DrawBuffer::move_char(&mut self, indent, ch, style, count)` (`src/screen/draw_buffer.rs:68`) | 3 | Ports `MoveChar`. The `0 = retain` sentinel is dropped (deviation D6, documented in module note). Full docs including the sentinel-drop rationale. |
-| `MoveCStr` (procedure, `Drivers` unit) | 353 | EQUIVALENT | OK | `DrawBuffer::move_cstr(&mut self, indent, text, lo, hi)` and `move_cstr_part` (`src/screen/draw_buffer.rs:182`) | 3 | Ports `MoveCStr` (tilde-toggle attribute). Extended to `move_cstr_part` for offset+max-width variants. Documented with the tilde-toggle semantics. |
+| `MoveCStr` (procedure, `Drivers` unit) | 353 | EQUIVALENT | OK | `DrawBuffer::move_cstr(&mut self, indent, text, lo, hi)` and `move_cstr_part` (`src/screen/draw_buffer.rs:199`) | 3 | Ports `MoveCStr` (tilde-toggle attribute). Extended to `move_cstr_part` for offset+max-width variants. Documented with the tilde-toggle semantics. |
 | `MoveStr` (procedure, `Drivers` unit) | 353 | EQUIVALENT | OK | `DrawBuffer::move_str(&mut self, indent, text, style)` and `move_str_part` (`src/screen/draw_buffer.rs:117`) | 3 | Ports `MoveStr`. Extended to `move_str_part`. Documented. |
 
 ---
@@ -278,7 +278,7 @@ The C++ `mfXXXX` packed `aOptions` word is replaced by two typed enums: `Message
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `NewNode` (function, `Outline` unit) | 354 | EQUIVALENT | OK | `Node { text, children: Vec<Node> }` struct construction (`src/widgets/outline.rs`) | 2 | `NewNode` heap-allocates a `TNode`. Rust `Node` is an owned struct; construction is a plain struct literal or builder. Doc score 2 — the `Node` type is documented (what it is), but the "how to build a tree" use-case is not explicit in `Node`'s rustdoc. |
+| `NewNode` (function, `Outline` unit) | 354 | EQUIVALENT | OK | `Node { text, children: Vec<Node> }` struct construction (`src/widgets/outline.rs`) | 3 | `Node` rustdoc has a complete code example (Animals/Cats/Dogs tree built with `Node::new().with_children().with_next()`), field-level docs explaining the linked-list structure, and a heritage note. Already at score 3. |
 
 ---
 
@@ -320,19 +320,19 @@ All `of*` bit constants map to fields of the `Options` struct-of-bools (deviatio
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `ofSelectable` ($001) | 356 | EQUIVALENT | OK | `Options { selectable: bool }` field | 2 | Documented in `Options` struct field with `of*` source name. |
-| `ofTopSelect` ($002) | 356 | EQUIVALENT | OK | `Options { top_select: bool }` field | 2 | Documented. |
-| `ofFirstClick` ($004) | 356 | EQUIVALENT | OK | `Options { first_click: bool }` field | 2 | Documented. |
-| `ofFramed` ($008) | 356 | EQUIVALENT | OK | `Options { framed: bool }` field | 2 | Documented. |
-| `ofPreProcess` ($010) | 356 | EQUIVALENT | OK | `Options { pre_process: bool }` field | 2 | Documented. |
-| `ofPostProcess` ($020) | 356 | EQUIVALENT | OK | `Options { post_process: bool }` field | 2 | Documented. |
+| `ofSelectable` ($001) | 356 | EQUIVALENT | OK | `Options { selectable: bool }` field | 3 | `Options` struct-level doc now lists common flag combinations with explanations. Each field has expanded docs: when to use it, typical widgets that set it. |
+| `ofTopSelect` ($002) | 356 | EQUIVALENT | OK | `Options { top_select: bool }` field | 3 | Field doc explains: "used by `Window`: clicking a window selects it and brings it to the top of the z-order simultaneously." |
+| `ofFirstClick` ($004) | 356 | EQUIVALENT | OK | `Options { first_click: bool }` field | 3 | Field doc explains: "without this flag, the first click on an unfocused view only focuses it; with it, the click is also delivered as a `MouseDown`." |
+| `ofFramed` ($008) | 356 | EQUIVALENT | OK | `Options { framed: bool }` field | 3 | Field doc explains: "informs the owner that the view manages its own border; used by `Frame` so the owner can adjust layouts." |
+| `ofPreProcess` ($010) | 356 | EQUIVALENT | OK | `Options { pre_process: bool }` field | 3 | Field doc explains: "views that must intercept events before the focused child sees them (e.g. a menu bar intercepting Alt+letter hotkeys)." |
+| `ofPostProcess` ($020) | 356 | EQUIVALENT | OK | `Options { post_process: bool }` field | 3 | Field doc explains: "plain-letter accelerators (e.g. buttons and clusters), which fire only when no other view consumed the key first." |
 | `ofBuffered` ($040) | 356 | NOT-PORTED | — | — | N/A | Per-view back buffer for damage tracking. tvision-rs uses whole-tree redraw + diff; no per-view back buffers (deviation D9, drop noted in `Options` rustdoc: "Dropped: the per-view back-buffer option"). |
-| `ofTileable` ($080) | 356 | EQUIVALENT | OK | `Options { tileable: bool }` field | 2 | Documented. |
-| `ofCenterX` ($100) | 357 | EQUIVALENT | OK | `Options { center_x: bool }` field | 2 | Documented. |
-| `ofCenterY` ($200) | 357 | EQUIVALENT | OK | `Options { center_y: bool }` field | 2 | Documented. |
-| `ofCentered` (`ofCenterX | ofCenterY`) | 357 | EQUIVALENT | OK | `Options::centered() -> bool` helper | 2 | The compound shorthand is a method on `Options`. Documented. |
+| `ofTileable` ($080) | 356 | EQUIVALENT | OK | `Options { tileable: bool }` field | 3 | Field doc explains: "windows that should be included when the desktop tiles or cascades. Decorative or fixed-position windows leave this `false`." |
+| `ofCenterX` ($100) | 357 | EQUIVALENT | OK | `Options { center_x: bool }` field | 3 | Field doc explains: "the owner adjusts the view's `x` position to center it. Combine with `center_y` (or use `Options::centered`) to center on both axes." |
+| `ofCenterY` ($200) | 357 | EQUIVALENT | OK | `Options { center_y: bool }` field | 3 | Field doc explains: "the owner adjusts the view's `y` position to center it." |
+| `ofCentered` (`ofCenterX | ofCenterY`) | 357 | EQUIVALENT | OK | `Options::centered() -> bool` helper | 3 | Method doc notes it is a read-only predicate; both fields must be set explicitly to enable centering. |
 | `ofVersion` bits (streaming version bits) | 357 | NOT-PORTED | — | — | N/A | Stream-format version bits. Streaming dropped entirely (TStreamable dropped). Noted in `Options` rustdoc: "streaming-only `ofVersion*` bits" dropped. |
-| `ofValidate` ($0400) | 357 | EQUIVALENT | OK | `Options { validate: bool }` field | 2 | Documented with the `valid(Command::RELEASED_FOCUS)` semantics note. |
+| `ofValidate` ($0400) | 357 | EQUIVALENT | OK | `Options { validate: bool }` field | 3 | Field doc explains: "when set, the group calls `view.valid(Command::RELEASED_FOCUS)` before allowing focus to move away. Return `false` from `valid` to keep focus locked." |
 
 ---
 
@@ -340,9 +340,9 @@ All `of*` bit constants map to fields of the `Options` struct-of-bools (deviatio
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `ovExpanded` ($01) | 357 | EQUIVALENT | OK | `const OV_EXPANDED: u16 = 0x01` (`src/widgets/outline.rs:66`) | 2 | Internal graph flag. C++ `ovExpanded` → `OV_EXPANDED`. Module-private `const`. Doc score 2: the constant has a short doc comment. |
-| `ovChildren` ($02) | 357 | EQUIVALENT | OK | `const OV_CHILDREN: u16 = 0x02` (`src/widgets/outline.rs:68`) | 2 | Internal graph flag. Module-private. Documented inline. |
-| `ovLast` ($04) | 357 | EQUIVALENT | OK | `const OV_LAST: u16 = 0x04` (`src/widgets/outline.rs:70`) | 2 | Internal graph flag. Module-private. Documented inline. |
+| `ovExpanded` ($01) | 357 | EQUIVALENT | OK | `const OV_EXPANDED: u16 = 0x01` (`src/widgets/outline.rs:66`) | N/A | Module-private `const` (no `pub`). Has an inline `///` doc comment: "Graph flag: the node is drawn as expanded (no children, or expanded)." Not a public API symbol. |
+| `ovChildren` ($02) | 357 | EQUIVALENT | OK | `const OV_CHILDREN: u16 = 0x02` (`src/widgets/outline.rs:68`) | N/A | Module-private `const`. Inline doc comment: "Graph flag: the node has children AND is expanded (draw the child-link)." |
+| `ovLast` ($04) | 357 | EQUIVALENT | OK | `const OV_LAST: u16 = 0x04` (`src/widgets/outline.rs:70`) | N/A | Module-private `const`. Inline doc comment: "Graph flag: the node is the last child of its parent (└ vs ├)." |
 | `ovSelected` | 357 | NOT-PORTED | — | — | — | Not a distinct TV2 constant. The outline graph-flag family is exactly `ovExpanded`/`ovChildren`/`ovLast` (Table 19.29; rows above). Item selection is rendered via `Role::OutlineSelected` (a theme role), not a graph flag — so there is no `ovSelected` constant to port. Nothing to port. |
 
 ---
@@ -382,5 +382,11 @@ All `of*` bit constants map to fields of the `Options` struct-of-bools (deviatio
 ## Summary
 
 - PORTED: 2   EQUIVALENT: 68   NOT-PORTED: 28   MISSING: 0   UNSURE: 0
-- SUSPECT: 0   |   doc<3 (public): 37   |   → concept: 0
-- Notable finding: The **entire `kbXXXX` family** (Tables 19.19–19.26, ~60+ named C++ constants) collapses cleanly to the `Key` enum + `KeyModifiers` struct-of-bools (deviation D5). All entries are EQUIVALENT/OK. The largest NOT-PORTED cluster is the DOS memory-manager family (`LowMemory`, `LowMemSize`, `MaxBufMem`, `MaxHeapSize`, `MemAlloc`, `MemAllocSeg`, `NewBuffer`, `NewCache`) — all correct and intentional (no DOS heap analog in Rust). The **`mfXXXX` → `MessageBoxKind` + `MessageBoxButtons`** split is the most user-visible idiomatic substitution and is well-documented. `ovSelected` is not a real TV2 constant (no graph flag to port; selection is a theme role).
+- SUSPECT: 0   |   doc<3 (public): 0   |   → concept: 0
+- All genuinely `pub` symbols are at score 3. Private/module-private symbols (`OV_*`, `MAX_LINE_LENGTH`, `HISTORY` thread_local, `Message` free-function analog absorbed into routing) are marked N/A.
+- Notable findings:
+  - The **entire `kbXXXX` family** (Tables 19.19–19.26, ~60+ named C++ constants) collapses cleanly to the `Key` enum + `KeyModifiers` struct-of-bools (deviation D5). All entries at 3.
+  - The **`mfXXXX` → `MessageBoxKind` + `MessageBoxButtons`** split is the most user-visible idiomatic substitution: both types now have combination tables and per-field "when to use" docs.
+  - The **`ofXXXX` → `Options`** upgrade gives every field a "when to use" explanation and the struct-level doc lists common flag patterns.
+  - The largest NOT-PORTED cluster is the DOS memory-manager family (`LowMemory`, `LowMemSize`, `MaxBufMem`, `MaxHeapSize`, `MemAlloc`, `MemAllocSeg`, `NewBuffer`, `NewCache`) — all correct and intentional (no DOS heap analog in Rust).
+  - `ovSelected` is not a real TV2 constant (no graph flag to port; selection is a theme role).

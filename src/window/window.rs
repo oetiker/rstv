@@ -75,12 +75,14 @@ pub struct WindowFlags {
 ///
 /// # Turbo Vision heritage
 ///
-/// Replaces the `wpBlueWindow / wpCyanWindow / wpGrayWindow` integer palette
-/// selector (`views.h`) with this enum, which the frame maps to typed
-/// `Role` entries in the theme (deviation D7). The eight per-palette entries
-/// described in the guide (frame passive, frame active, frame icon, scrollbar
-/// page, scrollbar controls, scroller normal, scroller selected, reserved)
-/// are expressed as named `Role` variants rather than integer indices.
+/// Replaces the `wpBlueWindow = 1 / wpCyanWindow = 2 / wpGrayWindow = 3`
+/// integer palette selector (`views.h`; the guide calls these
+/// `dpBlueDialog / dpCyanDialog / dpGrayDialog`) with a typed enum, which the
+/// frame maps to named `Role` entries in the theme. The eight
+/// per-palette entries described in the guide (frame passive, frame active,
+/// frame icon, scrollbar page, scrollbar controls, scroller normal, scroller
+/// selected, reserved) are expressed as named `Role` variants rather than
+/// integer indices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum WindowPalette {
     /// The default window scheme (`Role::Frame*` family).

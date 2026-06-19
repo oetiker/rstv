@@ -86,11 +86,22 @@ fn used_bytes(history: &[HistRec]) -> usize {
 
 /// Add `str` to the history channel identified by `id`.
 ///
+/// Call this after the user confirms an input line (typically in the owning
+/// dialog's close handler) so subsequent pops of the history viewer offer the
+/// entry. Each history-capable input line should use a unique, stable `id`
+/// (typically a small application-defined constant) so channels don't share
+/// entries.
+///
 /// Operation order:
 /// 1. Ignore empty strings.
 /// 2. Remove any existing duplicate for this `(id, str)` pair.
 /// 3. Evict globally-oldest entries until the new entry fits within the budget.
 /// 4. Append the new entry (newest position).
+///
+/// # Turbo Vision heritage
+///
+/// Ports `historyAdd` (`histlist.cpp`); the raw block pointer + byte-offset
+/// encoding becomes a `thread_local! Vec<HistRec>`.
 pub fn history_add(id: u8, str: &str) {
     if str.is_empty() {
         return;
@@ -123,7 +134,13 @@ pub fn history_add(id: u8, str: &str) {
 /// Return the number of history entries for `id`.
 ///
 /// `history_str(id, 0)` is the oldest; `history_str(id, count-1)` is the
-/// newest.
+/// newest. Use this to range-check an index before calling [`history_str`], or
+/// to drive a list viewer over the stored entries.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `historyCount` (`histlist.cpp`); return type changed from `Word` to
+/// `usize` (idiomatic).
 #[must_use]
 pub fn history_count(id: u8) -> usize {
     HISTORY.with(|h| h.borrow().iter().filter(|e| e.id == id).count())
@@ -131,6 +148,16 @@ pub fn history_count(id: u8) -> usize {
 
 /// Return the entry at `index` (oldest-first) for `id`, or `None` if out of
 /// range.
+///
+/// Index `0` is the oldest stored entry; index [`history_count(id)`](history_count) − 1
+/// is the most recent. Returns `None` when `index >= history_count(id)`. The
+/// [`HistoryViewer`] walks the channel this way to populate its list.
+///
+/// # Turbo Vision heritage
+///
+/// Ports `historyStr` (`histlist.cpp`); return type changed from the C-style
+/// output-parameter `String` to `Option<String>` (idiomatic out-of-range
+/// signaling).
 #[must_use]
 pub fn history_str(id: u8, index: usize) -> Option<String> {
     HISTORY.with(|h| {

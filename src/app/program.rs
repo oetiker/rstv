@@ -1220,14 +1220,27 @@ impl Program {
         (cmd, text)
     }
 
-    /// Build and exec a single-line input dialog auto-centered on the desktop
-    /// (base rect `(0, 0, 60, 8)`, centered within the desktop).
+    /// Build and exec a single-line input dialog auto-centered on the desktop.
     ///
-    /// **Coordinate note:** like [`message_box`](Self::message_box), centering uses
-    /// the desktop's SIZE; when the desktop is inset by a menu/status bar, the box
-    /// can sit off by the menu-bar offset.
+    /// Convenience wrapper around [`input_box_rect`](Self::input_box_rect) that
+    /// computes the position automatically (base rect `60 × 8`, centered within
+    /// the desktop). Use this when you don't need precise placement; use
+    /// `input_box_rect` when you need an explicit position.
+    ///
+    /// `title` is the dialog frame label. `label` is the prompt drawn left of the
+    /// field. `initial` seeds the input line (the entire text is pre-selected so
+    /// the user can immediately type a replacement). `limit` caps the field byte
+    /// length (max length = `limit - 1`).
+    ///
+    /// Returns `(cmd, text)`. If the user presses OK, `cmd = Command::OK` and
+    /// `text` holds what they typed. If the user presses Cancel or Esc,
+    /// `cmd = Command::CANCEL` and `text` is the unchanged `initial`.
+    ///
+    /// **Coordinate note:** centering uses the desktop's SIZE; when the desktop is
+    /// inset by a menu/status bar, the box can sit off by the menu-bar offset.
     ///
     /// # Turbo Vision heritage
+    ///
     /// Ports `inputBox` (`msgbox.cpp`); the size offset is `deskTop->size.x/y`.
     pub fn input_box(
         &mut self,

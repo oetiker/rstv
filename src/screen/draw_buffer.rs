@@ -204,8 +204,20 @@ impl DrawBuffer {
     /// Copy a run of pre-built cells into the buffer at `indent`, clipped to
     /// capacity.
     ///
+    /// Use `move_buf` when you have already assembled the styled cells — for
+    /// example, copying another view's row out of a [`DrawBuffer`] or blitting a
+    /// pre-rendered sprite. For the common cases of filling with a single
+    /// character+style use [`move_char`](Self::move_char); for rendering a string
+    /// use [`move_str`](Self::move_str) or [`move_cstr`](Self::move_cstr).
+    ///
     /// In the typed cell model the meaningful operation is copying cells, so this
     /// takes a `&[Cell]` rather than a raw byte buffer.
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// Ports `MoveBuf` (`drivers.cpp`); the C++ `Word`/attribute pair buffer
+    /// becomes a typed `&[Cell]` slice. `MoveBuf`'s raw-byte
+    /// coupling to the `TDrawBuffer` layout has no equivalent here.
     pub fn move_buf(&mut self, indent: usize, src: &[Cell]) {
         let cap = self.data.len();
         if indent >= cap {

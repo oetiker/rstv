@@ -157,9 +157,20 @@ impl Event {
 /// (deviation D5); and `controlKeyState` reuses [`KeyModifiers`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MouseEvent {
-    /// Cursor position in screen coordinates at the time of the event.
+    /// Cursor position in **absolute** screen coordinates at the time of the event.
+    ///
+    /// Coordinates are in the root (screen) space; subtract the view's global
+    /// origin to convert to view-local coordinates before hit-testing. The
+    /// position is always set, even for events that don't logically have one
+    /// (e.g. `MouseAuto` repeats carry the last known position).
     ///
     /// The C++ field was named `where` (a Rust keyword), renamed to `position`.
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// Ports the C++ global `MouseWhere: TPoint` (`drivers.cpp`), which held the
+    /// last known mouse position globally. In tvision-rs the position is carried
+    /// per-event in `MouseEvent::position`; there is no mutable global.
     pub position: Point,
     /// Which buttons are currently down at the time of the event.
     pub buttons: MouseButtons,
@@ -216,10 +227,18 @@ pub struct MouseButtons {
 /// The magiblot `eventFlags: ushort` bitmask (`meMouseMoved = 0x01`,
 /// `meDoubleClick = 0x02`, `meTripleClick = 0x04`) becomes a struct-of-bools
 /// (deviation D5), extending the 1992 guide's single `Double: Boolean` field.
+/// The 1992 guide's `DoubleDelay: Word` global (double-click interval in
+/// 1/18.2 s DOS timer ticks) has no equivalent: the double-click interval is
+/// determined by the OS/terminal and delivered by crossterm; it cannot be
+/// overridden at application level.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MouseEventFlags {
     /// This press completed a double click (two clicks within the platform
     /// double-click interval).
+    ///
+    /// Check this flag in a [`Event::MouseDown`] handler to distinguish a
+    /// double-click from a single click. The timing interval is OS-defined and
+    /// delivered pre-computed by the crossterm backend.
     pub double_click: bool,
     /// This press completed a triple click.
     pub triple_click: bool,

@@ -115,39 +115,90 @@ pub struct State {
 /// behaves (selectable, framed, centered, pre/post-process, …), as opposed to
 /// the live [`State`] bits.
 ///
+/// Set these flags on [`ViewState::options`] before inserting the view into its
+/// owner. The most commonly needed flags are:
+///
+/// - `selectable = true` — the view can receive focus (required for input widgets).
+/// - `top_select = true` — combined with `selectable`, brings windows to the front
+///   on mouse-click (set automatically by [`Window`](crate::window::Window)).
+/// - `first_click = true` — the click that selects the view is also delivered as a
+///   `MouseDown`; without it, the first click only selects.
+/// - `pre_process = true` — the view receives focused-chain events *before* the
+///   focused view (e.g. a menu bar that intercepts Alt-letter hotkeys).
+/// - `post_process = true` — the view receives focused-chain events *after* the
+///   focused view (plain-letter hotkeys for buttons, labels, and clusters).
+/// - `center_x / center_y = true` — the owner auto-centers the view's bounds on
+///   that axis. Useful for dialogs placed without an exact position.
+///
 /// **Dropped:** the per-view back-buffer option (tvision-rs redraws the whole tree and
 /// diffs). The streaming-only version bits are dropped too.
 ///
 /// # Turbo Vision heritage
+///
 /// Ports the `of*` flag family (`views.h`) as a struct-of-bools (deviation D5);
 /// each field names its `of*` source. The dropped options are `ofBuffered`
 /// (`0x040`) and the streaming-only `ofVersion*` bits.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Options {
     /// `ofSelectable` — the view can become the current/focused view.
+    ///
+    /// All interactive widgets (buttons, input lines, list viewers, …) set this.
+    /// A view without `selectable` is purely decorative: it never receives focus.
     pub selectable: bool,
     /// `ofTopSelect` — selecting the view moves it to the front of its owner.
+    ///
+    /// Used by [`Window`](crate::window::Window): clicking a window selects it and
+    /// brings it to the top of the z-order simultaneously.
     pub top_select: bool,
     /// `ofFirstClick` — a selecting mouse-down is also passed through to the view.
+    ///
+    /// Without this flag, the first click on an unfocused view only focuses it;
+    /// with it, the click is also delivered as a `MouseDown` event so the view
+    /// can react immediately (e.g. a button that fires on the first click).
     pub first_click: bool,
     /// `ofFramed` — the view has a frame drawn around it.
+    ///
+    /// Informs the owner that the view manages its own border; used by
+    /// [`Frame`](crate::frame::Frame) so the owner can adjust layouts.
     pub framed: bool,
     /// `ofPreProcess` — the view sees focused-chain events before the focused view.
+    ///
+    /// Set on views that must intercept events at the group level before the
+    /// current child sees them (e.g. a menu bar intercepting Alt+letter hotkeys).
     pub pre_process: bool,
     /// `ofPostProcess` — the view sees focused-chain events after the focused view.
+    ///
+    /// Set on views that handle plain-letter accelerators (e.g. buttons and
+    /// clusters), which fire only when no other view consumed the key first.
     pub post_process: bool,
     /// `ofTileable` — the view participates in tile/cascade layout.
+    ///
+    /// Set on windows that should be included when the desktop tiles or cascades.
+    /// Decorative or fixed-position windows leave this `false`.
     pub tileable: bool,
     /// `ofCenterX` — the view is centered horizontally in its owner.
+    ///
+    /// The owner adjusts the view's `x` position to center it. Combine with
+    /// `center_y` (or use [`Options::centered`]) to center on both axes.
     pub center_x: bool,
     /// `ofCenterY` — the view is centered vertically in its owner.
+    ///
+    /// The owner adjusts the view's `y` position to center it.
     pub center_y: bool,
     /// `ofValidate` — the view is asked to validate (`valid(Command::RELEASED_FOCUS)`) before losing focus.
+    ///
+    /// When set, the group calls `view.valid(Command::RELEASED_FOCUS)` before
+    /// allowing focus to move away. Return `false` from `valid` to keep focus
+    /// locked (e.g. an input line with a required field).
     pub validate: bool,
 }
 
 impl Options {
     /// `ofCentered` (`ofCenterX | ofCenterY`) — centered on both axes.
+    ///
+    /// Returns `true` only when both [`center_x`](Self::center_x) and
+    /// [`center_y`](Self::center_y) are set. Note that this is a read-only
+    /// predicate, not a setter — assign both fields explicitly to enable centering.
     pub fn centered(self) -> bool {
         self.center_x && self.center_y
     }
@@ -187,28 +238,66 @@ pub enum Phase {
 /// Grow-mode flags — control how each edge of the view tracks its owner when the
 /// owner is resized.
 ///
+/// Set the flags on [`ViewState::grow_mode`] before inserting a view into its owner.
+/// The most common combinations are:
+///
+/// - **Stay anchored to the bottom-right corner** (e.g. a scrollbar thumb):
+///   `hi_x = true; hi_y = true`
+/// - **Fill the full width of the owner** (e.g. a status bar):
+///   `hi_x = true` — only the right edge tracks; the left stays fixed.
+/// - **Fill the entire owner** (e.g. a text viewer inside a window):
+///   use [`GrowMode::grow_all()`].
+/// - **Fixed size, just anchor to the right edge** (e.g. a vertical scrollbar):
+///   `hi_x = true; fixed = true` (or use [`Window::standard_scroll_bar`]).
+/// - **Desktop window, scales with the desktop**:
+///   `hi_x = true; hi_y = true; rel = true` — all edges scale proportionally.
+///
 /// # Turbo Vision heritage
+///
 /// Ports the `gf*` flag family (`views.h`) as a struct-of-bools (deviation D5);
 /// each field names its `gf*` source.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct GrowMode {
     /// `gfGrowLoX` — the left edge tracks the owner's right edge.
+    ///
+    /// Uncommon alone; usually paired with `hi_x` when the view should slide
+    /// right with its owner rather than grow.
     pub lo_x: bool,
     /// `gfGrowLoY` — the top edge tracks the owner's bottom edge.
+    ///
+    /// Uncommon alone; usually paired with `hi_y` when the view should slide
+    /// down with its owner rather than grow.
     pub lo_y: bool,
     /// `gfGrowHiX` — the right edge tracks the owner's right edge.
+    ///
+    /// The most common flag: lets the view widen when its owner widens. Set alone
+    /// for a view that stays left-anchored and grows to the right.
     pub hi_x: bool,
     /// `gfGrowHiY` — the bottom edge tracks the owner's bottom edge.
+    ///
+    /// Lets the view grow taller when its owner grows. Pair with `hi_x` for a
+    /// view that fills its owner's interior (use [`GrowMode::grow_all()`]).
     pub hi_y: bool,
     /// `gfGrowRel` — grow proportionally to the owner (windows on the desktop).
+    ///
+    /// When set, all active `lo_*`/`hi_*` edges scale as a fraction of the owner
+    /// size rather than by a fixed delta. Use for windows that should keep their
+    /// relative position when the terminal is resized.
     pub rel: bool,
-    /// `gfFixed` — the view keeps its size regardless of the owner's.
+    /// `gfFixed` — the view keeps its size regardless of the owner's resize.
+    ///
+    /// The view moves to stay in the same relative position but does not change
+    /// its width or height. Combine with `hi_x`/`hi_y` to anchor to the
+    /// right/bottom edge while staying fixed-size (e.g. a scrollbar).
     pub fixed: bool,
 }
 
 impl GrowMode {
     /// `gfGrowAll` (`gfGrowLoX | gfGrowLoY | gfGrowHiX | gfGrowHiY`) — every edge
     /// tracks the owner (the view grows with its owner on all sides).
+    ///
+    /// Use for a view that should fill its owner's interior and resize with it,
+    /// such as a text editor pane or a list viewer inside a window.
     pub fn grow_all() -> Self {
         GrowMode {
             lo_x: true,
