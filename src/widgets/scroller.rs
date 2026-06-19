@@ -259,10 +259,11 @@ impl View for Scroller {
         self.set_limit(x, y, ctx);
     }
 
-    /// Concrete-reach hatch (the sanctioned downcast): retained so `Terminal`
-    /// can delegate `as_any_mut` to its inner `Scroller`, which lets the
-    /// `Deferred::ScrollSync` arm dispatch `apply_scroll_sync` to the
-    /// `Scroller` override via the `View` trait (no per-arm downcast needed).
+    /// Concrete-reach hatch (the sanctioned downcast): retained as a generic
+    /// escape so `Terminal` can delegate `as_any_mut` to its inner `Scroller`.
+    /// The `Deferred::ScrollSync` arm does NOT use this hatch — it dispatches
+    /// `apply_scroll_sync` to the `Scroller` override through the `View` trait
+    /// (delegate forwarder), not via `as_any_mut`.
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         Some(self)
     }

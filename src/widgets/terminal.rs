@@ -434,8 +434,9 @@ impl View for Terminal {
     }
 
     /// Returns `Some(&mut self.scroller)` via the inner `Scroller::as_any_mut`.
-    /// This lets the `Deferred::ScrollSync` apply arm dispatch `apply_scroll_sync`
-    /// to the inner `Scroller` without a separate concrete downcast.
+    /// Retained as a generic concrete-reach hatch. The `Deferred::ScrollSync`
+    /// apply arm does NOT use it — it routes `apply_scroll_sync` to the inner
+    /// `Scroller` through the `#[delegate(to = scroller)]` trait forwarder.
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         self.scroller.as_any_mut()
     }
