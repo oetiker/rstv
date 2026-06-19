@@ -10,16 +10,18 @@ Rust module(s): `src/widgets/cluster.rs`   |   magiblot: `include/tvision/dialog
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `Draw` (method) | 515 | PORTED | OK | `Cluster::draw` (`ClusterKind::RadioButtons` arm: icon `" ( ) "`, marker `'•'`) | 2 | Guide: draws ` ( ) ` box. Rust: `kind.icon()` returns `" ( ) "`, `marker_char` returns `'\u{2022}'` (Unicode bullet, CP437 0x07 analog). Faithful. Doc at `Cluster::draw` level describes the behavior; `RadioButtons` struct doc is brief. |
-| `Mark` (method) | 515 | PORTED | OK | `Cluster::mark` (`ClusterKind::RadioButtons` arm: `item == value as i32`) | 2 | Guide: returns `True` if `Item = Value`. Rust: identical (`item == self.value as i32`). |
-| `MovedTo` (method) | 515 | PORTED | OK | `Cluster::moved_to` (`ClusterKind::RadioButtons` arm: `value = item as u32`) | 2 | Guide: assigns `Item` to `Value`. Rust: `self.value = item as u32` — identical. Called on arrow-key navigation so moving the selection also changes `value` (radio-button semantics). |
-| `Press` (method) | 515 | PORTED | OK | `Cluster::press` (`ClusterKind::RadioButtons` arm: `value = item as u32`) | 2 | Guide: assigns `Item` to `Value`. Rust: identical. |
-| `SetData` (method) | 515 | EQUIVALENT | OK | cluster opt-out of D10 value protocol (module doc) | 2 | Guide: calls `TCluster.SetData` to set `Value`, then sets `Sel = Value` (so the selection bar starts at the pressed button). Rust: clusters opt out of the `value()`/`set_value()` value protocol (deviation D10, documented in module doc). The `sel = value` initialization for RadioButtons on load is not explicitly present — callers who set `cluster.value` directly must also set `cluster.sel` manually. This is a minor undocumented usage constraint (not `SUSPECT` because clusters are expected to be used via constructors, not stream-loaded). |
-| `CCluster` palette | 515 | EQUIVALENT | OK | `Role::ClusterNormal/ClusterSelected/ClusterNormalShortcut/ClusterSelectedShortcut/ClusterDisabled` | 2 | Guide: uses `CCluster`, same as TCluster/TCheckBoxes. Rust: same `Role`-keyed theme lookup. Known idiomatic mapping: class Palette → `tv::Theme`. |
-| `Init` / `Load` / `Done` (constructors) | 514 | EQUIVALENT / NOT-PORTED | — | `RadioButtons::new(bounds, strings)` / NOT-PORTED | 2 / — | `Init` maps to `RadioButtons::new` (calls `Cluster::new(..., ClusterKind::RadioButtons)`). `Load`/`Done` not ported (`TStreamable` dropped). |
+| `Draw` (method) | 515 | PORTED | OK | `Cluster::draw` (`ClusterKind::RadioButtons` arm: icon `" ( ) "`, marker `'•'`) | N/A | No own `draw` on `RadioButtons` — fully delegated to `Cluster::draw`. No separate public symbol to score. |
+| `Mark` (method) | 515 | PORTED | OK | `Cluster::mark` (`ClusterKind::RadioButtons` arm: `item == value as i32`) | N/A | Private engine method — not held to the public bar. |
+| `MovedTo` (method) | 515 | PORTED | OK | `Cluster::moved_to` (`ClusterKind::RadioButtons` arm: `value = item as u32`) | N/A | Private engine method — not held to the public bar. Semantics (arrow-key navigation also updates value) documented in `Cluster::sel` field doc. |
+| `Press` (method) | 515 | PORTED | OK | `Cluster::press` (`ClusterKind::RadioButtons` arm: `value = item as u32`) | N/A | Private engine method — not held to the public bar. |
+| `SetData` (method) | 515 | EQUIVALENT | OK | cluster opt-out of D10 value protocol (module doc) | N/A | No public Rust symbol — opt-out documented in module `//!` block. The `sel = value` initialization note is covered by `Cluster::sel` field doc (set both when restoring state). |
+| `CCluster` palette | 515 | EQUIVALENT | OK | `Role::ClusterNormal/ClusterSelected/ClusterNormalShortcut/ClusterSelectedShortcut/ClusterDisabled` | N/A | Role items live in `src/theme.rs` — deferred to theme pass. |
+| `Init` / `Load` / `Done` (constructors) | 514 | EQUIVALENT / NOT-PORTED | — | `RadioButtons::new(bounds, strings)` / NOT-PORTED | 3 | Raised: `RadioButtons::new` doc now states starting state (item 0 selected, value=0), hotkey marker format, and the radiobutton-specific gotcha (set both `cluster.value` and `cluster.sel` to pre-select). |
+| `RadioButtons` (struct) | — | EQUIVALENT | OK | `pub struct RadioButtons` | 3 | Raised: struct-level doc now explains the mutual-exclusion semantics, when to use RadioButtons vs. CheckBoxes, how to pre-select, and includes a `rust,ignore` usage example. |
 
 ## Summary
 
 - PORTED: 4   EQUIVALENT: 2   NOT-PORTED: 0   MISSING: 0   UNSURE: 0
-- SUSPECT: 0   |   doc<3 (public): 5   |   → concept: 0
-- Notable finding: The `SetData` semantics include `Sel = Value` initialization, which ensures the selection bar starts on the pressed button after a data load. The Rust port opts out of the value protocol entirely, meaning direct `cluster.value` mutation without matching `cluster.sel` mutation would leave the visual cursor misplaced. This usage constraint is not documented anywhere in the public API.
+- SUSPECT: 0   |   doc<3 (public): 0   |   → concept: 0
+- Raised to 3: `RadioButtons` struct, `RadioButtons::new`. Private/no-own-symbol rows reclassified N/A.
+- Deferred: `CCluster` palette `Role` items → theme pass (`src/theme.rs`).
