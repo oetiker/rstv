@@ -37,7 +37,7 @@ use crate::widgets::{Orientation, ScrollBar};
 /// # Turbo Vision heritage
 ///
 /// Ports the `wfMove / wfGrow / wfClose / wfZoom` flag word (`views.h`) as a
-/// struct-of-bools (deviation D5).
+/// struct-of-bools.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WindowFlags {
     /// The window can be moved by dragging its frame.
@@ -225,7 +225,7 @@ impl Window {
     /// call a frame-specific method (e.g. to read [`Frame::zoomed`]). The window
     /// itself never holds a direct `&mut Frame` reference across calls; instead it
     /// always resolves the id on demand — the push-down pattern that avoids upward
-    /// parent pointers (deviation D3).
+    /// parent pointers.
     pub fn frame_id(&self) -> ViewId {
         self.frame_id
     }

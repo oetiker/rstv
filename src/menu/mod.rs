@@ -232,7 +232,7 @@ impl MenuItem {
 ///
 /// # Turbo Vision heritage
 /// Ports `TMenu` (`menus.h`): the singly-linked list of items becomes a [`Vec`]
-/// and the `deflt` pointer becomes an index into it (deviation D1).
+/// and the `deflt` pointer becomes an index into it.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Menu {
     /// The menu entries, in display order.

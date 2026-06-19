@@ -154,7 +154,7 @@ impl Event {
 ///
 /// Ports `MouseEventType` (`system.h`). The `where` field (a Rust keyword)
 /// becomes `position`; the `mb*`/`me*` bit-words become struct-of-bools / enums
-/// (deviation D5); and `controlKeyState` reuses [`KeyModifiers`].
+/// and `controlKeyState` reuses [`KeyModifiers`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MouseEvent {
     /// Cursor position in **absolute** screen coordinates at the time of the event.
@@ -202,7 +202,7 @@ pub struct MouseEvent {
 /// # Turbo Vision heritage
 ///
 /// The `mb*` button bitmask (`mbLeftButton = 0x01`, `mbRightButton = 0x02`)
-/// becomes a struct-of-bools (deviation D5).
+/// becomes a struct-of-bools.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MouseButtons {
     /// Left mouse button.
@@ -226,7 +226,7 @@ pub struct MouseButtons {
 ///
 /// The magiblot `eventFlags: ushort` bitmask (`meMouseMoved = 0x01`,
 /// `meDoubleClick = 0x02`, `meTripleClick = 0x04`) becomes a struct-of-bools
-/// (deviation D5), extending the 1992 guide's single `Double: Boolean` field.
+/// extending the 1992 guide's single `Double: Boolean` field.
 /// The 1992 guide's `DoubleDelay: Word` global (double-click interval in
 /// 1/18.2 s DOS timer ticks) has no equivalent: the double-click interval is
 /// determined by the OS/terminal and delivered by crossterm; it cannot be
@@ -303,7 +303,7 @@ pub enum MouseWheel {
 /// # Turbo Vision heritage
 ///
 /// The surviving slice of the `TView::eventMask` bit-word, trimmed to the two
-/// opt-ins that are non-trivial to route selectively (deviation D4). The
+/// opt-ins that are non-trivial to route selectively. The
 /// always-on classes needed no flag in C++ either; explicitly tracking them here
 /// would be noise.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
