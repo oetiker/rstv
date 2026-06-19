@@ -2889,7 +2889,6 @@ fn field_text(v: crate::data::FieldValue) -> Option<String> {
 /// or `None` for any other variant. The `Bits` sibling of [`field_int`]/[`field_text`],
 /// used by the Find/Replace modal-result reads to pull a `CheckBoxes` options word
 /// through [`View::value`].
-#[allow(dead_code)] // used by FindPick/ReplacePick in the next tasks
 fn field_bits(v: crate::data::FieldValue) -> Option<u32> {
     match v {
         crate::data::FieldValue::Bits(b) => Some(b),
@@ -3023,22 +3022,22 @@ fn apply_modal_completion(
                 .and_then(|v| v.value())
                 .and_then(field_text)
                 .unwrap_or_default();
-            // Read options from CheckBoxes via downcast (cluster.value).
+            // Read the options bit word from the CheckBoxes via value() (Bits) —
+            // no downcast. Mask to bits 0-1 (case sensitive, whole words).
             let opts = group
                 .find_mut(opts_id)
-                .and_then(|v| v.as_any_mut())
-                .and_then(|a| a.downcast_mut::<crate::widgets::CheckBoxes>())
-                .map(|cb| cb.cluster.value as u16)
+                .and_then(|v| v.value())
+                .and_then(field_bits)
                 .unwrap_or(0)
-                & 0x0003; // bits 0-1: case sensitive, whole words
-            // Update editor: set find_str + flags (without EF_DO_REPLACE).
-            if let Some(ed) = group
-                .find_mut(editor_id)
-                .and_then(|v| v.as_any_mut())
-                .and_then(|a| a.downcast_mut::<crate::widgets::Editor>())
-            {
-                ed.set_find_str(find_str);
-                ed.set_editor_flags(opts);
+                & 0x0003;
+            // Deliver the search record to the editor via set_modal_data (the
+            // 2-element Find shape: find + flags, no EF_DO_REPLACE) — virtual
+            // dispatch, never a downcast. The editor leaves replace_str untouched.
+            if let Some(ed) = group.find_mut(editor_id) {
+                ed.set_modal_data(crate::data::FieldValue::List(vec![
+                    crate::data::FieldValue::Text(find_str),
+                    crate::data::FieldValue::Bits(opts),
+                ]));
             }
             // Re-inject cmSearchAgain to run do_search_replace on the editor.
             Some(Event::Command(Command::SEARCH_AGAIN))
