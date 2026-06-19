@@ -1259,10 +1259,28 @@ impl Program {
     /// Open the truecolor color-picker modal seeded with `initial`; return the
     /// chosen [`Color`](crate::color::Color) on OK, or `None` on Cancel/Esc.
     ///
-    /// An tvision-rs-original extension. The result is read by downcasting the in-tree
-    /// modal [`ColorPicker`](crate::dialog::ColorPicker) to `color()` via a
-    /// [`ModalCompletion::ColorPick`] sink — the `HistoryPick`/`get_selection`
-    /// shape. No `FieldValue::Color` (spec non-goal).
+    /// The picker presents four surface tabs (Presets, RGB, Plane, Xterm-256),
+    /// an Info column showing old and new swatches, and OK/Cancel buttons. Call
+    /// this from your application's event handler when the user selects a
+    /// "Pick Color" menu item or similar:
+    ///
+    /// ```rust,ignore
+    /// let new_color = program.color_dialog(current_color);
+    /// if let Some(c) = new_color {
+    ///     // apply c
+    /// }
+    /// ```
+    ///
+    /// An tvision-rs-original extension (no direct Borland/magiblot counterpart).
+    /// The result is extracted by downcasting the in-tree modal
+    /// [`ColorPicker`](crate::dialog::ColorPicker) via a
+    /// `ModalCompletion::ColorPick` sink after the modal loop exits.
+    ///
+    /// # Turbo Vision heritage
+    /// Supersedes `TColorDialog` (guide pp. 406–409), which was an interactive
+    /// editor for the 16-entry BIOS palette. tvision-rs replaces it with a
+    /// truecolor picker that returns an `Option<Color>` directly instead of
+    /// mutating an in-memory `TPalette` blob.
     pub fn color_dialog(&mut self, initial: crate::color::Color) -> Option<crate::color::Color> {
         use crate::dialog::{ColorPicker, Dialog};
         use crate::widgets::{Button, ButtonFlags};

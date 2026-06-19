@@ -26,10 +26,10 @@ Rust module(s): none   |   magiblot: `include/tvision/colorsel.h`
 | `newColor` (method) | 485 | NOT-PORTED | — | — | — | Broadcasts `cmColorSet` with the new attribute; no equivalent. |
 | `press` (method) | 485 | NOT-PORTED | — | — | — | Sets the selected attribute; no equivalent. |
 | `movedTo` (method) | 485 | NOT-PORTED | — | — | — | Updates focus and calls `newColor`; no equivalent. |
-| Normal/Highlight/Underline/Inverse attribute choices | 485 | EQUIVALENT | OK | `crate::color::Modifiers` struct-of-bools (`bold`, `italic`, `underline`, `blink`, `reverse`, `strike`, `no_shadow`) in `src/color.rs` | 2 | The four Borland attributes (Normal, Highlight=bold, Underline, Inverse) all have counterparts in `Modifiers`.  The *attribute values* exist; the *interactive picker widget* does not. |
+| Normal/Highlight/Underline/Inverse attribute choices | 485 | EQUIVALENT | OK | `crate::color::Modifiers` struct-of-bools (`bold`, `italic`, `underline`, `blink`, `reverse`, `strike`, `no_shadow`) in `src/color.rs` | 3 | The four Borland attributes (Normal, Highlight=bold, Underline, Inverse=reverse) all have counterparts in `Modifiers`. Struct doc now adds: how to use in a `Style::with_modifiers` call (with a doctest example), per-terminal support note, `no_shadow` marker explanation, and a heritage note explicitly mapping the four `TMonoSelector` attribute choices. |
 
 ## Summary
 
 - PORTED: 0   EQUIVALENT: 1   NOT-PORTED: 7   MISSING: 0   UNSURE: 0
-- SUSPECT: 0   |   doc<3 (public): 1   |   → concept: 0
-- Notable: The monochrome attribute *values* (normal/bold/underline/reverse) are EQUIVALENT via `Modifiers`, but the interactive `TMonoSelector` widget itself is NOT-PORTED and has no replacement. This is a genuine gap for applications that want a user-facing attribute picker; however, the `TMonoSelector` was only ever shown inside `TColorDialog` (which is itself superseded by the rebuilt `ColorPicker`). The hidden mono selector in the Borland color dialog was rarely used.
+- SUSPECT: 0   |   doc<3 (public): 0   |   → concept: 0
+- Notable: The monochrome attribute *values* (normal/bold/underline/reverse) are EQUIVALENT via `Modifiers`, but the interactive `TMonoSelector` widget itself is NOT-PORTED and has no replacement. This is a genuine gap for applications that want a user-facing attribute picker; however, the `TMonoSelector` was only ever shown inside `TColorDialog` (which is itself superseded by the rebuilt `ColorPicker`). The `Modifiers` row raised to 3: struct doc now adds a usage example, per-terminal support note, and explicit heritage mapping of the four `TMonoSelector` attribute choices.

@@ -427,51 +427,101 @@ pub struct CommandSet {
 }
 
 impl CommandSet {
-    /// An empty command set.
+    /// Build an empty command set.
+    ///
+    /// The returned set contains no commands. Populate it incrementally with
+    /// [`enable_cmd`](Self::enable_cmd) / [`insert`](Self::insert) or the `+=`
+    /// operator, or use it as the start of a denylist by calling
+    /// [`disable_cmd`](Self::disable_cmd) / [`insert`](Self::insert) for each
+    /// command that should be blocked.
     pub fn new() -> Self {
         CommandSet::default()
     }
 
-    /// Whether `cmd` is enabled.
+    /// Test whether `cmd` is a member of this set.
+    ///
+    /// Returns `true` when the command was previously added and not yet
+    /// removed. On a **disabled set** (denylist) the result means the command
+    /// is blocked; on an **enabled set** it means the command is active — the
+    /// interpretation depends on the set's role, not this method.
+    ///
+    /// Use [`contains`](Self::contains) at new call sites as the idiomatic
+    /// Rust name; use `has` when mirroring the C++ `TCommandSet::has` call.
     pub fn has(&self, cmd: Command) -> bool {
         self.cmds.contains(&cmd)
     }
 
-    /// Alias for [`has`](Self::has), matching Rust collection convention.
+    /// Idiomatic alias for [`has`](Self::has) — follows Rust collection
+    /// convention (`HashSet::contains`). Prefer this name at new call sites.
     pub fn contains(&self, cmd: Command) -> bool {
         self.has(cmd)
     }
 
-    /// Enable a single command.
+    /// Add `cmd` to this set (semantic name: enable the command).
+    ///
+    /// When `self` is an **enabled set**, this marks the command as enabled
+    /// and it will pass the framework's enabled-command check. When `self` is
+    /// a **disabled set** (denylist — the pattern [`Program`](crate::Program)
+    /// uses internally), prefer the polarity-neutral
+    /// [`insert`](Self::insert) alias to avoid misleading code.
+    ///
+    /// The `+=` operator (`AddAssign<Command>`) is equivalent.
     pub fn enable_cmd(&mut self, cmd: Command) {
         self.cmds.insert(cmd);
     }
 
-    /// Disable a single command.
+    /// Remove `cmd` from this set (semantic name: disable the command).
+    ///
+    /// When `self` is an **enabled set**, this marks the command as disabled
+    /// so it will be greyed out in menus and rejected by status-line items.
+    /// When `self` is a **disabled set** (denylist), prefer the
+    /// polarity-neutral [`remove`](Self::remove) alias instead.
+    ///
+    /// The `-=` operator (`SubAssign<Command>`) is equivalent.
     pub fn disable_cmd(&mut self, cmd: Command) {
         self.cmds.remove(&cmd);
     }
 
-    /// Rust-collection-convention alias for [`enable_cmd`](Self::enable_cmd) —
-    /// set membership, polarity-neutral; prefer it when the set's MEANING is
-    /// not "enabled commands" (e.g. a disabled set).
+    /// Polarity-neutral alias for [`enable_cmd`](Self::enable_cmd): add `cmd`
+    /// to the set.
+    ///
+    /// Prefer `insert` over `enable_cmd` when the set's meaning is not "which
+    /// commands are currently enabled" — for example, when building a denylist
+    /// of blocked commands, `disabled.insert(cmd)` is clearer than
+    /// `disabled.enable_cmd(cmd)`.
     pub fn insert(&mut self, cmd: Command) {
         self.enable_cmd(cmd);
     }
 
-    /// Rust-collection-convention alias for [`disable_cmd`](Self::disable_cmd) —
-    /// set membership, polarity-neutral; prefer it when the set's MEANING is
-    /// not "enabled commands" (e.g. a disabled set).
+    /// Polarity-neutral alias for [`disable_cmd`](Self::disable_cmd): remove
+    /// `cmd` from the set.
+    ///
+    /// Prefer `remove` over `disable_cmd` at denylist sites — see
+    /// [`insert`](Self::insert) for the naming rationale.
     pub fn remove(&mut self, cmd: Command) {
         self.disable_cmd(cmd);
     }
 
-    /// Enable every command in `other` (set union).
+    /// Add every command in `other` to this set (set union).
+    ///
+    /// After this call, `self` contains every command it previously held plus
+    /// every command in `other`. Use to merge two enabled sets, or to
+    /// re-enable a batch of commands at a denylist site (remove them from the
+    /// blocked list by calling `disabled.disable_set(&to_restore)`).
+    ///
+    /// The `+=` / `|=` operators (`AddAssign<&CommandSet>` /
+    /// `BitOrAssign<&CommandSet>`) are equivalent.
     pub fn enable_set(&mut self, other: &CommandSet) {
         self.cmds.extend(other.cmds.iter().copied());
     }
 
-    /// Disable every command in `other` (set difference).
+    /// Remove every command in `other` from this set (set difference).
+    ///
+    /// After this call, `self` no longer contains any command that appears in
+    /// `other`. Use to suppress a batch of commands in an enabled set, or to
+    /// block a batch of commands by adding them to a denylist.
+    ///
+    /// The `-=` operator (`SubAssign<&CommandSet>`) is equivalent.
     pub fn disable_set(&mut self, other: &CommandSet) {
         for cmd in &other.cmds {
             self.cmds.remove(cmd);
@@ -486,42 +536,53 @@ impl CommandSet {
 
 // --- Operator overloads ---
 
-/// `set += cmd` enables a single command.
+/// `set += cmd` — add a single command (equivalent to [`enable_cmd`](CommandSet::enable_cmd) /
+/// [`insert`](CommandSet::insert)). Use this operator when building a set incrementally:
+/// `let mut s = CommandSet::new(); s += Command::CUT; s += Command::COPY;`
 impl AddAssign<Command> for CommandSet {
     fn add_assign(&mut self, cmd: Command) {
         self.enable_cmd(cmd);
     }
 }
 
-/// `set -= cmd` disables a single command.
+/// `set -= cmd` — remove a single command (equivalent to [`disable_cmd`](CommandSet::disable_cmd) /
+/// [`remove`](CommandSet::remove)). Use to revoke a single command from an enabled set or to
+/// unblock a single command from a denylist.
 impl SubAssign<Command> for CommandSet {
     fn sub_assign(&mut self, cmd: Command) {
         self.disable_cmd(cmd);
     }
 }
 
-/// `set += other` enables every command in `other` (union).
+/// `set += other` — add every command in `other` (set union, equivalent to
+/// [`enable_set`](CommandSet::enable_set)). Idiomatic C++ Pascal set `+` operator.
 impl AddAssign<&CommandSet> for CommandSet {
     fn add_assign(&mut self, other: &CommandSet) {
         self.enable_set(other);
     }
 }
 
-/// `set -= other` disables every command in `other` (difference).
+/// `set -= other` — remove every command in `other` (set difference, equivalent to
+/// [`disable_set`](CommandSet::disable_set)). Idiomatic C++ Pascal set `-` operator.
 impl SubAssign<&CommandSet> for CommandSet {
     fn sub_assign(&mut self, other: &CommandSet) {
         self.disable_set(other);
     }
 }
 
-/// `set |= other` is the set union.
+/// `set |= other` — set union (alias for `+= other`); same as
+/// [`enable_set`](CommandSet::enable_set). The `|=` spelling emphasizes
+/// the Boolean-OR semantics over the Pascal-add semantics.
 impl BitOrAssign<&CommandSet> for CommandSet {
     fn bitor_assign(&mut self, other: &CommandSet) {
         self.enable_set(other);
     }
 }
 
-/// `set &= other` is the set intersection.
+/// `set &= other` — set intersection: retains only commands present in **both**
+/// `self` and `other`. Equivalent to the Pascal `*` operator on sets. Use when
+/// you need the overlap of two command sets — for example, to find which commands
+/// are enabled in all active views simultaneously.
 impl BitAndAssign<&CommandSet> for CommandSet {
     fn bitand_assign(&mut self, other: &CommandSet) {
         self.cmds.retain(|cmd| other.cmds.contains(cmd));

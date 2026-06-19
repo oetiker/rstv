@@ -118,7 +118,7 @@ The C++ `sb*` family has two groups: (1) mouse-hit part identifiers used by `Scr
 | `sbIndicator` (8) | 367 | EQUIVALENT | OK | `Part::Indicator` (`src/widgets/scrollbar.rs:76`, private enum) | N/A | Private enum variant — triggers thumb-drag rather than scroll-step. Not public API. |
 | `sbHorizontal` ($0000) | 368 | EQUIVALENT | OK | `ScrollBar` orientation inferred from bounds (`size.y == 1` → horizontal) | N/A | Not a distinct Rust constant — orientation is implicit in the rect at construction. No public symbol to score. |
 | `sbVertical` ($0001) | 368 | EQUIVALENT | OK | `ScrollBar` orientation inferred from bounds (`size.x == 1` → vertical) | N/A | Same as `sbHorizontal` above — no public constant exists. |
-| `sbHandleKeyboard` ($0002) | 368 | EQUIVALENT | OK | `tv::scrollbar::ScrollBar::with_keyboard()` / `Window::standard_scroll_bar(handle_keyboard: true)` | 2 | C++: flag enabling keyboard commands. Rust: opt-in builder method sets `ofPostProcess`. `with_keyboard()` is in `src/widgets/scrollbar.rs` (not in this pass's permitted files). |
+| `sbHandleKeyboard` ($0002) | 368 | EQUIVALENT | OK | `tv::scrollbar::ScrollBar::with_keyboard()` / `Window::standard_scroll_bar(handle_keyboard: true)` | 3 | Verified in `src/widgets/scrollbar.rs`: `with_keyboard()` doc explains "sets post-process option (`ofPostProcess`) so the bar receives arrow/page/Home/End keys from the focused chain even when not the current view", gives a builder call example, and notes `Window::standard_scroll_bar` as the automatic path. Score 3. |
 
 ## ScreenBuffer variable (p. 368)
 
@@ -251,7 +251,7 @@ C++ `sfXXXX` are bits in `TView.State`. Rust replaces the flag word with `tv::vi
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `StatusLine` | 374 | EQUIVALENT | OK | `tv::status::StatusLine` struct + `Program::status_line() -> Option<ViewId>` | 2 | C++: global `PStatusLine = nil` pointer set by `TProgram.InitStatusLine`. Rust: `Program` holds the status line as a child view looked up by `ViewId`; no global mutable pointer. `Program::status_line()` returns the optional id. |
+| `StatusLine` | 374 | EQUIVALENT | OK | `tv::status::StatusLine` struct + `Program::status_line() -> Option<ViewId>` | 3 | Verified in `src/app/program.rs`: `Program::status_line()` doc explains the pump pre-routes KeyDown + over-the-line MouseDown to it, when to use the id (reach the status-line view directly via `as_any_mut`), and the heritage note naming `TProgram::statusLine`. Score 3. C++: global `PStatusLine = nil`; Rust: child `ViewId` handle. |
 
 ## StdEditMenuItems function (p. 374)
 
@@ -336,6 +336,6 @@ C++ `sfXXXX` are bits in `TView.State`. Rust replaces the flag word with `tv::vi
 ## Summary
 
 - PORTED: 3   EQUIVALENT: 35   NOT-PORTED: 43   MISSING: 0   UNSURE: 0
-- SUSPECT: 0   |   doc<3 (public): 5   |   → concept: 0
-- Pass 1 raised to score 3 (in permitted files `src/view/view.rs`, `src/view/group.rs`, `src/view/context.rs`): all `sfXXXX` state flag fields in `State`, `SelectMode`, `SHADOW_SIZE`. Reclassified as N/A-private: `ovXXXX` constants (private in `outline.rs`), `sbXXXX` scrollbar parts (private enum variants + no-symbol orientation), `ReplaceStr`→`replace_str` (pub(crate) accessor). Remaining doc<3 (public, out-of-scope files): `ScreenHeight`/`ScreenWidth` (score 1, `Backend::size()` in `src/backend/traits.rs`), `StatusLine` (score 2, `src/status/mod.rs`), `StdEditorDialog` (score 2, `src/app/program.rs`), `StdStatusKeys` (score 2), `sbHandleKeyboard` (score 2, `src/widgets/scrollbar.rs`).
+- SUSPECT: 0   |   doc<3 (public): 4   |   → concept: 0
+- Pass 1 raised to score 3: all `sfXXXX` state flags, `SelectMode`, `SHADOW_SIZE`. Reclassified N/A-private: `ovXXXX`, `sbXXXX` parts, `ReplaceStr`. Reconciliation pass: `sbHandleKeyboard` → `ScrollBar::with_keyboard()` verified score 3, re-scored; `StatusLine` → `Program::status_line()` verified score 3, re-scored. Remaining doc<3 (public): `ScreenHeight`/`ScreenWidth` (score 1 — `Backend::size()` doc is one line, no usage guidance; blocked by `src/backend/traits.rs` not in this pass's touch list); `StdEditorDialog` (score 2 — maps to multiple internal paths in `program.rs`, no single annotatable symbol); `StdStatusKeys` (score 2 — `StatusDef::list()` doc says "Start building a list fluently", no how/when; blocked by `src/status/mod.rs` not in touch list).
 - Notable finding: The entire DOS-driver/stream/video-mode layer (Register*, SaveCtrlBreak, ScreenBuffer, ScreenMode, SetVideoMode, SetMemTop, SetBufferSize, smXXXX, ShowMouse, ShowMarkers, SpecialChars, StartupMode, stXXXX, StreamError, StoreHistory, StoreIndexes, SysColorAttr, SysErrActive, SysErrorFunc, SysMonoAttr, SystemError, RepeatDelay, PtrRec, PrintStr) is intentionally NOT-PORTED — 37 entries — representing the bulk of the DOS-era substrate that has no Rust analog. `ShowMarkers`/`SpecialChars` (monochrome focus indicators) are the only functional gaps that could be added without touching DOS infrastructure.

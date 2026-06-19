@@ -9,13 +9,13 @@ Rust module(s): none (class superseded)   |   magiblot: `include/tvision/colorse
 
 | Guide entry | Pg | Bucket | Corr | Rust symbol / mapping | Doc | Notes |
 |---|---|---|---|---|---|---|
-| `focusItem` (method) | 411 | EQUIVALENT | OK | `PresetsSurface::handle_event` arrow keys / mouse click (`src/dialog/colorpick/presets.rs:92`) | 1 | C++ `focusItem` broadcast `cmNewColorIndex` to update selectors.  Rust `PresetsSurface::handle_event` updates the `ColorModel` on each selection change; the shared model propagates to `InfoColumn` automatically.  Equivalent behavior; different mechanism. |
-| `getText` (method) | 411 | EQUIVALENT | OK | `PresetsSurface::draw` renders each row's name from `PRESETS[i].0` (`src/dialog/colorpick/presets.rs:66`) | 1 | C++ fetched the item name from the linked list; Rust reads from the static `PRESETS` slice.  Equivalent display of named entries. |
-| `handleEvent` (method) | 411 | EQUIVALENT | OK | `PresetsSurface::handle_event` (`src/dialog/colorpick/presets.rs:92`) | 1 | C++ handled keyboard/mouse events for the item list.  Rust handles Up/Down keys and mouse clicks in `PresetsSurface`.  Equivalent interaction model. |
+| `focusItem` (method) | 411 | EQUIVALENT | OK | `PresetsSurface::handle_event` arrow keys / mouse click (`src/dialog/colorpick/presets.rs`) | N/A | `PresetsSurface` is `pub(crate)` — an internal implementation detail of `ColorPicker`; not a public API target. C++ `focusItem` broadcast `cmNewColorIndex`; Rust `PresetsSurface::handle_event` updates the `ColorModel` directly (shared model propagates automatically). Equivalent behavior; N/A for public doc scoring. |
+| `getText` (method) | 411 | EQUIVALENT | OK | `PresetsSurface::draw` renders each row's name from `PRESETS[i].0` (`src/dialog/colorpick/presets.rs`) | N/A | `PresetsSurface` is `pub(crate)`. C++ fetched item name from linked list; Rust reads the `pub(crate) PRESETS` static slice. Equivalent display; N/A for public doc scoring. |
+| `handleEvent` (method) | 411 | EQUIVALENT | OK | `PresetsSurface::handle_event` (`src/dialog/colorpick/presets.rs`) | N/A | `PresetsSurface` is `pub(crate)`. Handles Up/Down keys and mouse clicks equivalently to C++. N/A for public doc scoring. |
 | `items` (field, `TColorItem *`) | — | NOT-PORTED | — | — | — | Linked-list head of `TColorItem`; replaced by the static `PRESETS` slice. |
 
 ## Summary
 
 - PORTED: 0   EQUIVALENT: 3   NOT-PORTED: 1   MISSING: 0   UNSURE: 0
-- SUSPECT: 0   |   doc<3 (public): 3   |   → concept: 0
-- Notable: The three behavioral methods are EQUIVALENT via `PresetsSurface`. The `items` linked-list field is replaced by the static `PRESETS` slice, which is a deliberate idiomatic improvement.
+- SUSPECT: 0   |   doc<3 (public): 0   |   → concept: 0
+- Notable: The three behavioral methods are EQUIVALENT via `PresetsSurface`. The `items` linked-list field is replaced by the static `PRESETS` slice. All three EQUIVALENT rows reconciled to N/A: `PresetsSurface` and `PRESETS` are `pub(crate)` — internal implementation details of the rebuilt `ColorPicker`; they are not public API targets.
