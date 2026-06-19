@@ -108,12 +108,15 @@ impl FieldValue {
     /// `None`. This is the recommended accessor for third-party components.
     pub fn value_as<T: Any>(&self) -> Result<Rc<T>, FieldTypeError> {
         match self {
-            FieldValue::Custom(rc) => rc.clone().as_any_rc().downcast::<T>().map_err(|_| {
-                FieldTypeError {
-                    expected: std::any::type_name::<T>(),
-                    found: "a different Custom payload type",
-                }
-            }),
+            FieldValue::Custom(rc) => {
+                rc.clone()
+                    .as_any_rc()
+                    .downcast::<T>()
+                    .map_err(|_| FieldTypeError {
+                        expected: std::any::type_name::<T>(),
+                        found: "a different Custom payload type",
+                    })
+            }
             other => Err(FieldTypeError {
                 expected: std::any::type_name::<T>(),
                 found: other.variant_name(),
@@ -217,12 +220,17 @@ mod tests {
     }
 
     #[derive(Debug, PartialEq)]
-    struct DateRange { start: i32, end: i32 }
+    struct DateRange {
+        start: i32,
+        end: i32,
+    }
 
     #[test]
     fn custom_round_trips_via_as_custom() {
         let fv = FieldValue::custom(DateRange { start: 1, end: 9 });
-        let got = fv.as_custom::<DateRange>().expect("downcast to the stored type");
+        let got = fv
+            .as_custom::<DateRange>()
+            .expect("downcast to the stored type");
         assert_eq!(*got, DateRange { start: 1, end: 9 });
         // Wrong type → None (fail closed).
         assert!(fv.as_custom::<String>().is_none());
@@ -235,7 +243,10 @@ mod tests {
 
         // Wrong Custom type → descriptive error, not None.
         let err = fv.value_as::<String>().unwrap_err();
-        assert!(err.expected.contains("String"), "names the expected type: {err}");
+        assert!(
+            err.expected.contains("String"),
+            "names the expected type: {err}"
+        );
 
         // A scalar read as a Custom → error naming the found variant.
         let scalar = FieldValue::Int(3);
@@ -249,6 +260,9 @@ mod tests {
         let b = a.clone(); // Rc clone — same allocation
         let c = FieldValue::custom(DateRange { start: 1, end: 2 }); // distinct allocation
         assert_eq!(a, b, "clones share the Rc, so they are equal by identity");
-        assert_ne!(a, c, "distinct allocations are not equal even with equal contents");
+        assert_ne!(
+            a, c,
+            "distinct allocations are not equal even with equal contents"
+        );
     }
 }

@@ -1496,7 +1496,10 @@ mod tests {
         c.cluster.value = 0b101;
         assert_eq!(c.value(), Some(FieldValue::Bits(0b101)));
         c.set_value(FieldValue::Bits(0b010));
-        assert_eq!(c.cluster.value, 0b010, "set_value(Bits) writes the bit word");
+        assert_eq!(
+            c.cluster.value, 0b010,
+            "set_value(Bits) writes the bit word"
+        );
         // A variant the control does not understand is ignored.
         c.set_value(FieldValue::Text("x".into()));
         assert_eq!(c.cluster.value, 0b010, "non-Bits value is ignored");
@@ -1510,7 +1513,10 @@ mod tests {
         r.cluster.value = 2; // selected index
         assert_eq!(r.value(), Some(FieldValue::Bits(2)));
         r.set_value(FieldValue::Bits(1));
-        assert_eq!(r.cluster.value, 1, "set_value(Bits) sets the selected index");
+        assert_eq!(
+            r.cluster.value, 1,
+            "set_value(Bits) sets the selected index"
+        );
     }
 
     // -- Snapshots: one per kind --------------------------------------------

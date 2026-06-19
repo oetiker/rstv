@@ -3069,12 +3069,18 @@ mod tests {
 
         let mut group = Group::new(Rect::new(0, 0, 40, 10));
         group.insert(Box::new(InputLine::new(
-            Rect::new(0, 0, 10, 1), 20, None, crate::widgets::LimitMode::MaxBytes,
+            Rect::new(0, 0, 10, 1),
+            20,
+            None,
+            crate::widgets::LimitMode::MaxBytes,
         )));
         // A non-data child (a bare Group) contributes nothing to the record.
         group.insert(Box::new(Group::new(Rect::new(0, 5, 5, 6))));
         group.insert(Box::new(InputLine::new(
-            Rect::new(0, 2, 10, 3), 20, None, crate::widgets::LimitMode::MaxBytes,
+            Rect::new(0, 2, 10, 3),
+            20,
+            None,
+            crate::widgets::LimitMode::MaxBytes,
         )));
 
         let mut out = VecDeque::new();
@@ -3106,7 +3112,10 @@ mod tests {
 
         let mut group = Group::new(Rect::new(0, 0, 40, 10));
         group.insert(Box::new(InputLine::new(
-            Rect::new(0, 0, 10, 1), 20, None, crate::widgets::LimitMode::MaxBytes,
+            Rect::new(0, 0, 10, 1),
+            20,
+            None,
+            crate::widgets::LimitMode::MaxBytes,
         )));
         let before = group.gather_list();
 
@@ -3115,7 +3124,11 @@ mod tests {
         with_ctx(&mut out, &mut timers, |ctx| {
             group.scatter_list(&FieldValue::Int(7), ctx); // not a List → no-op
         });
-        assert_eq!(group.gather_list(), before, "a non-List record changes nothing");
+        assert_eq!(
+            group.gather_list(),
+            before,
+            "a non-List record changes nothing"
+        );
     }
 
     #[test]
