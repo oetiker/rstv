@@ -1202,14 +1202,29 @@ impl<'a> Context<'a> {
             .push(Deferred::MakeButtonDefault { button, enable });
     }
 
-    /// Request the (modal) loop end with `cmd` — **deferred** ([`Deferred::EndModal`]).
-    /// Ends the modal loop from a view with no up-pointer to the program: the
-    /// pump sets `Program::end_state` and the nested `exec_view` loop observes it.
+    /// Signal that the current modal loop should end, returning `cmd` as its
+    /// result — **deferred** ([`Deferred::EndModal`]).
     ///
-    /// **View-side, deferred.** This is the path a [`View`](crate::view::View)
-    /// takes (it holds only `&mut Context`, never `&mut Program`). The owner /
-    /// top-level path is the immediate `Program::end_modal`. Rule of thumb:
-    /// view → `ctx.end_modal`; owner / top-level → `Program::end_modal`.
+    /// Call this from inside a [`View::handle_event`](crate::view::View::handle_event)
+    /// override (or any code that holds `&mut Context`) to close the modal
+    /// dialog started by [`Program::exec_view`](crate::app::Program::exec_view)
+    /// and return `cmd` to its caller. Common commands are
+    /// [`Command::OK`](crate::command::Command::OK) (user confirmed) and
+    /// [`Command::CANCEL`](crate::command::Command::CANCEL) (user dismissed).
+    ///
+    /// The call is **deferred**: it pushes a [`Deferred::EndModal`] onto the
+    /// queue; the pump applies it by setting `Program::end_state` after the
+    /// current dispatch unwinds. This is safe from deep inside the view tree
+    /// where no up-pointer to `Program` exists.
+    ///
+    /// **View-side, deferred.** A [`View`](crate::view::View) holds only
+    /// `&mut Context`, never `&mut Program`. The top-level path (when you
+    /// already hold `&mut Program`) is the immediate `Program::end_modal`.
+    /// Rule of thumb: view → `ctx.end_modal`; owner / top-level →
+    /// `Program::end_modal`.
+    ///
+    /// See also: [ending a modal](../../../port/modal.html#endmodal) in the
+    /// tvision-rs guide.
     pub fn end_modal(&mut self, cmd: Command) {
         self.deferred.push(Deferred::EndModal(cmd));
     }

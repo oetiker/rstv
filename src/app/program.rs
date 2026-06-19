@@ -717,15 +717,20 @@ impl Program {
         resolve_shell_msg(&self.shell_msg_hook)
     }
 
-    /// Request the (modal) loop end with `cmd`: store it as the end state;
-    /// [`run`](Self::run) returns it once the tree validates it.
+    /// Signal that the event loop should stop, returning `cmd` as the result
+    /// of [`run`](Self::run) once the tree validates it.
     ///
-    /// **Owner-side, immediate.** This is the top-level path — call it when you
-    /// hold `&mut Program` (an app `main`, startup, or a test). A *view* has no
-    /// up-pointer to the program and must instead defer via
-    /// [`Context::end_modal`](crate::view::Context::end_modal) (→
-    /// [`Deferred::EndModal`], applied by the pump). Rule of thumb: view →
-    /// `ctx.end_modal`; owner / top-level → `Program::end_modal`.
+    /// **Owner-side, immediate.** Call this when you already hold
+    /// `&mut Program` — for example from an application `main`, a test
+    /// harness, or a startup sequence. For the far more common case where a
+    /// *view* closes a dialog from inside `handle_event`, use
+    /// [`Context::end_modal`](crate::view::Context::end_modal) instead (which
+    /// pushes a deferred effect that the pump applies after dispatch unwinds).
+    /// Rule of thumb: view → `ctx.end_modal`; owner / top-level →
+    /// `Program::end_modal`.
+    ///
+    /// See also: [ending a modal](../../../port/modal.html#endmodal) in the
+    /// tvision-rs guide.
     ///
     /// # Turbo Vision heritage
     /// Ports `TGroup::endModal` (`tgroup.cpp`).
@@ -796,8 +801,11 @@ impl Program {
 
     // -- the run loop --------------------------------------------------------
 
-    /// The production entry point: run the event loop until an end state both is
-    /// set and validates, then return it.
+    /// Drive the event loop until the application posts a quit command that
+    /// passes validation, then return it.
+    ///
+    /// This is the outer loop of a tvision-rs application. Call it once from
+    /// `main` after building the [`Program`] and inserting startup views:
     ///
     /// ```text
     /// loop {
@@ -808,13 +816,28 @@ impl Program {
     /// }
     /// ```
     ///
+    /// Each iteration of [`pump_once`](Self::pump_once) picks one event,
+    /// routes it through the view tree, applies deferred effects, then
+    /// redraws and diffs. The outer loop re-runs the entire validate/pump
+    /// cycle if a view refuses the end state (e.g. an unsaved-file guard
+    /// that cancels the quit).
+    ///
+    /// For app-level command handling use
+    /// [`run_app`](Self::run_app) instead; for a single pump step (tests,
+    /// headless drivers) use [`pump_once`](Self::pump_once).
+    ///
     /// With a production `SystemClock` + a real backend, polling for an event
-    /// blocks, so this does not spin. **Do not call on a headless backend without
-    /// a QUIT path** — headless never blocks, so it would busy-loop; tests step
-    /// [`pump_once`](Self::pump_once) instead.
+    /// blocks, so this does not spin. **Do not call on a headless backend
+    /// without a QUIT path** — headless never blocks, so it would busy-loop;
+    /// tests step [`pump_once`](Self::pump_once) instead.
+    ///
+    /// See also: [the single modal loop](../../../port/modal.html#the-modal-loop-execute)
+    /// in the tvision-rs guide.
     ///
     /// # Turbo Vision heritage
     /// Ports `TProgram::run` → `TGroup::execute` (`tprogram.cpp` / `tgroup.cpp`).
+    /// The per-group nested loop of the original is replaced by a single top-level
+    /// loop plus a [`ModalFrame`] capture handler for modality.
     pub fn run(&mut self) -> Command {
         loop {
             self.end_state = None;
@@ -1049,6 +1072,9 @@ impl Program {
     ///    view's own `valid`, NOT the root group's.
     /// 8. Pop the frame, remove the view, restore the saved focus.
     /// 9. Restore the command set.
+    ///
+    /// See also: [the modal chapter](../../../port/modal.html#ending-a-modal-execview)
+    /// in the tvision-rs guide.
     ///
     /// # Turbo Vision heritage
     /// Ports `TGroup::execView` + `TGroup::execute` (`tgroup.cpp`), run on the
