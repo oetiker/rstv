@@ -32,7 +32,7 @@ Rust module(s): `src/widgets/cluster.rs`   |   magiblot: `include/tvision/dialog
 | `SetData` (method) | 399 | EQUIVALENT | OK | cluster opt-out of D10 value protocol | N/A | No public Rust symbol — opt-out documented in module `//!` block. |
 | `SetState` (method) | 399 | PORTED | OK | `Cluster` does not override `View::set_state`; whole-tree redraw covers it | N/A | No public Rust symbol (no override exists); the module `//!` block explains the whole-tree redraw replaces per-state DrawView calls. |
 | `Store` (method) | 399 | NOT-PORTED | — | — | — | `TStreamable` dropped crate-wide. |
-| `CCluster` palette (4 entries) | 399 | EQUIVALENT | OK | `Role::ClusterNormal`, `ClusterNormalShortcut`, `ClusterSelected`, `ClusterSelectedShortcut`, `ClusterDisabled` | N/A | Role items live in `src/theme.rs` — deferred to theme pass. |
+| `CCluster` palette (4 entries) | 399 | EQUIVALENT | OK | `Role::ClusterNormal`, `ClusterNormalShortcut`, `ClusterSelected`, `ClusterSelectedShortcut`, `ClusterDisabled` | 3 | Role items documented in `src/theme.rs` (theme pass): each variant names the widget, color, and chain. |
 | `ClusterKind` (enum) | — | EQUIVALENT | OK | `pub enum ClusterKind` | 3 | Raised: enum-level doc now explains when to use each variant and points to the named constructors as the preferred entry point. |
 
 ## Summary
@@ -40,4 +40,4 @@ Rust module(s): `src/widgets/cluster.rs`   |   magiblot: `include/tvision/dialog
 - PORTED: 11   EQUIVALENT: 10   NOT-PORTED: 3   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 0   |   → concept: 0
 - Raised to 3: `enable_mask`, `sel`, `strings`, `value`, `Cluster::new`, `set_button_state`, `ClusterKind`. Private/no-symbol rows reclassified N/A.
-- Deferred: `CCluster` palette `Role` items → theme pass (`src/theme.rs`).
+- `CCluster` palette `Role` items raised to 3 in the theme.rs Role pass (documented in `src/theme.rs`).

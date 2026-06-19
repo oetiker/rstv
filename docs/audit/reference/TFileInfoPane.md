@@ -11,7 +11,7 @@ Rust module(s): `src/dialog/filedlg.rs`   |   magiblot: `include/tvision/stddlg.
 |---|---|---|---|---|---|---|
 | `draw` (method) | 441 | PORTED | OK | `FileInfoPane::draw` (impl `View::draw`) | 3 | Already at score 3. |
 | `handleEvent` (method) | 441 | PORTED | OK | `FileInfoPane::handle_event` (impl `View::handle_event`) | 3 | Already at score 3. |
-| `getPalette` (method) | 441 | EQUIVALENT | OK | `Role::InfoPane` in `Theme` | 2 | Deferred to theme pass — this row maps to `src/theme.rs` which is out of scope for this file-dialog sweep. |
+| `getPalette` (method) | 441 | EQUIVALENT | OK | `Role::InfoPane` in `Theme` | 3 | Documented in `src/theme.rs` (theme pass): `Role::InfoPane` now describes the widget (`FileInfoPane::draw`), the color (cyan on blue, `0x13`), and the chain (`cpInfoPane[1]=0x1E → cpGrayDialog[30]=0x3D → cpAppColor[61]=0x13`). |
 | `file_block` (private field, `TSearchRec`) | impl | PORTED | OK | `FileInfoPane.file_block: Option<SearchRec>` | 3 | Private field. Internal comment raised: explains `None` = blank draw, update path through `ResolveFocusedFile` broker, and C++ comparison. |
 | `directory` (Rust-only cached field) | impl | EQUIVALENT | OK | `FileInfoPane.directory: String` | 3 | Private field. Internal comment raised: explains the D3 caching rationale and the `set_dir_info` refresh path. |
 | `wild_card` (Rust-only cached field) | impl | EQUIVALENT | OK | `FileInfoPane.wild_card: String` | 3 | Private field. Internal comment raised: same caching rationale as `directory`. |
@@ -26,5 +26,5 @@ Rust module(s): `src/dialog/filedlg.rs`   |   magiblot: `include/tvision/stddlg.
 ## Summary
 
 - PORTED: 4   EQUIVALENT: 7   NOT-PORTED: 1   MISSING: 0   UNSURE: 0
-- SUSPECT: 0   |   doc<3 (public): 1   |   → concept: 0
-- `getPalette` → `Role::InfoPane` deferred to theme pass (maps to `src/theme.rs`, out of scope). `new` raised to score 3. Private fields `file_block`, `directory`, `wild_card` received improved internal comments.
+- SUSPECT: 0   |   doc<3 (public): 0   |   → concept: 0
+- `getPalette` → `Role::InfoPane` raised to 3 in the theme.rs Role pass. `new` raised to score 3. Private fields `file_block`, `directory`, `wild_card` received improved internal comments.

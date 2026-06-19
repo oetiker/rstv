@@ -29,45 +29,127 @@ use crate::color::{Color, Style};
 ///
 /// This enum is **closed and first-party** (not app-extensible).
 ///
+/// # Window palette families and the Role enum
+///
+/// The original framework used per-widget 32-slot palette strings
+/// (`CGrayDialog`, `CBlueDialog`, `CCyanDialog`, `cpBlueWindow`,
+/// `cpCyanWindow`) indexed by a chained lookup through the owner hierarchy.
+/// tvision-rs collapses that entire chain into **named roles**:
+///
+/// | C++ palette scheme | Window / dialog type | Rust `Role` family |
+/// |---|---|---|
+/// | `cpBlueWindow` / `CBlueDialog` | [`WindowPalette::Blue`] windows and dialogs | `Role::Frame*` (Active/Passive/Dragging/Icon) |
+/// | `cpGrayWindow` / `CGrayDialog` | [`WindowPalette::Gray`] dialogs | `Role::FrameGray*` |
+/// | `cpCyanWindow` / `CCyanDialog` | [`WindowPalette::Cyan`] windows | `Role::FrameCyan*` |
+///
+/// The frame widget selects the correct `Frame*` family at draw time based on
+/// the owner window's [`WindowPalette`]. Descendant widgets (buttons, inputs,
+/// clusters, lists, …) pick **their own named `Role::*`** regardless of the
+/// window palette — the realistic owner assumption baked into `classic_blue`'s
+/// derivation comments is always a `CGrayDialog` for dialog-hosted widgets.
+///
+/// [`WindowPalette::Blue`]: crate::window::WindowPalette::Blue
+/// [`WindowPalette::Gray`]: crate::window::WindowPalette::Gray
+/// [`WindowPalette::Cyan`]: crate::window::WindowPalette::Cyan
+/// [`WindowPalette`]: crate::window::WindowPalette
+///
 /// # Turbo Vision heritage
 ///
 /// Each colour lookup in the original framework maps to one named role here
 /// (deviation D7).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Role {
-    /// The desktop background fill.
+    /// The desktop background fill — the `░`/`·`/space pattern drawn by
+    /// [`Background::draw`](crate::desktop::Background) across the entire
+    /// desktop area behind all windows. In `classic_blue` this is lightgray
+    /// on blue (BIOS `0x71`), resolved from the C++ chain
+    /// `cpBackground[1]=0x01 → cpAppColor[1]=0x71`.
     Background,
-    /// An active (focused) window frame.
+    /// An active (focused) **blue-scheme** window frame — the border drawn by
+    /// [`Frame`](crate::Frame) when the owning window has keyboard focus and
+    /// [`WindowPalette`](crate::window::WindowPalette) is `Blue` (the default).
+    /// In `classic_blue` this is white on blue (`0x1F`), resolved from
+    /// `cpFrame[3]=0x02 → cpBlueWindow[2]=0x09 → cpAppColor[9]=0x1F`.
     FrameActive,
-    /// A passive (unfocused) window frame.
+    /// A passive (unfocused) **blue-scheme** window frame — the border drawn by
+    /// [`Frame`](crate::Frame) when the owning window does not have keyboard
+    /// focus and [`WindowPalette`](crate::window::WindowPalette) is `Blue`.
+    /// In `classic_blue` this is lightgray on blue (`0x17`), resolved from
+    /// `cpFrame[1]=0x01 → cpBlueWindow[1]=0x08 → cpAppColor[8]=0x17`.
     FramePassive,
-    /// A frame being dragged/resized.
+    /// A **blue-scheme** frame while the window is being dragged or resized —
+    /// drawn by [`Frame`](crate::Frame) when `sfDragging` is set and
+    /// [`WindowPalette`](crate::window::WindowPalette) is `Blue`. In
+    /// `classic_blue` this is lightgreen on blue (`0x1A`), resolved from
+    /// `cpFrame[5]=0x03 → cpBlueWindow[3]=0x0A → cpAppColor[10]=0x1A`.
     FrameDragging,
-    /// A frame icon (close/zoom/resize glyphs).
+    /// A **blue-scheme** frame icon — the close `[×]`, zoom `[↑]`/`[↓]`, and
+    /// resize `[⟺]` glyphs drawn by [`Frame`](crate::Frame) when
+    /// [`WindowPalette`](crate::window::WindowPalette) is `Blue`. In
+    /// `classic_blue` this is lightgreen on blue (`0x1A`), the same attribute
+    /// as [`FrameDragging`](Role::FrameDragging) (both resolve via
+    /// `cpFrame[5]=0x03 → cpBlueWindow[3]=0x0A → cpAppColor[10]=0x1A`).
     FrameIcon,
     /// An active (focused) **gray-scheme** frame (dialogs and gray windows). The
     /// frame selects the `FrameGray*` family when its owner's
-    /// [`WindowPalette`](crate::window::WindowPalette) is `Gray`.
+    /// [`WindowPalette`](crate::window::WindowPalette) is `Gray`. In
+    /// `classic_blue` this is white on lightgray (`0x7F`), resolved from
+    /// `cpFrame[3]=0x02 → cpGrayDialog[2]=0x21 → cpAppColor[33]=0x7F`.
     FrameGrayActive,
-    /// A passive (unfocused) gray-scheme frame.
+    /// A passive (unfocused) **gray-scheme** frame — drawn by
+    /// [`Frame`](crate::Frame) when the owning window lacks focus and
+    /// [`WindowPalette`](crate::window::WindowPalette) is `Gray`. In
+    /// `classic_blue` this is black on lightgray (`0x70`), resolved from
+    /// `cpFrame[1]=0x01 → cpGrayDialog[1]=0x20 → cpAppColor[32]=0x70`.
     FrameGrayPassive,
-    /// A gray-scheme frame being dragged/resized.
+    /// A **gray-scheme** frame while the window is being dragged or resized.
+    /// Drawn by [`Frame`](crate::Frame) when `sfDragging` is set and
+    /// [`WindowPalette`](crate::window::WindowPalette) is `Gray`. In
+    /// `classic_blue` this is lightgreen on lightgray (`0x7A`), resolved from
+    /// `cpFrame[5]=0x03 → cpGrayDialog[3]=0x22 → cpAppColor[34]=0x7A`.
     FrameGrayDragging,
-    /// A gray-scheme frame icon (close/zoom/resize glyphs).
+    /// A **gray-scheme** frame icon — the close, zoom, and resize glyphs drawn
+    /// by [`Frame`](crate::Frame) when
+    /// [`WindowPalette`](crate::window::WindowPalette) is `Gray`. In
+    /// `classic_blue` this is lightgreen on lightgray (`0x7A`), the same
+    /// attribute as [`FrameGrayDragging`](Role::FrameGrayDragging) (both
+    /// resolve via `cpFrame[5]=0x03 → cpGrayDialog[3]=0x22 → cpAppColor[34]=0x7A`).
     FrameGrayIcon,
     /// An active (focused) **cyan-scheme** frame (cyan windows). The frame
     /// selects the `FrameCyan*` family when its owner's
-    /// [`WindowPalette`](crate::window::WindowPalette) is `Cyan`.
+    /// [`WindowPalette`](crate::window::WindowPalette) is `Cyan`. In
+    /// `classic_blue` this is white on cyan (`0x3F`), resolved from
+    /// `cpFrame[3]=0x02 → cpCyanWindow[2]=0x11 → cpAppColor[17]=0x3F`.
     FrameCyanActive,
-    /// A passive (unfocused) cyan-scheme frame.
+    /// A passive (unfocused) **cyan-scheme** frame — drawn by
+    /// [`Frame`](crate::Frame) when the owning window lacks focus and
+    /// [`WindowPalette`](crate::window::WindowPalette) is `Cyan`. In
+    /// `classic_blue` this is lightgray on cyan (`0x37`), resolved from
+    /// `cpFrame[1]=0x01 → cpCyanWindow[1]=0x10 → cpAppColor[16]=0x37`.
     FrameCyanPassive,
-    /// A cyan-scheme frame being dragged/resized.
+    /// A **cyan-scheme** frame while the window is being dragged or resized.
+    /// Drawn by [`Frame`](crate::Frame) when `sfDragging` is set and
+    /// [`WindowPalette`](crate::window::WindowPalette) is `Cyan`. In
+    /// `classic_blue` this is lightgreen on cyan (`0x3A`), resolved from
+    /// `cpFrame[5]=0x03 → cpCyanWindow[3]=0x12 → cpAppColor[18]=0x3A`.
     FrameCyanDragging,
-    /// A cyan-scheme frame icon (close/zoom/resize glyphs).
+    /// A **cyan-scheme** frame icon — the close, zoom, and resize glyphs drawn
+    /// by [`Frame`](crate::Frame) when
+    /// [`WindowPalette`](crate::window::WindowPalette) is `Cyan`. In
+    /// `classic_blue` this is lightgreen on cyan (`0x3A`), the same attribute
+    /// as [`FrameCyanDragging`](Role::FrameCyanDragging) (both resolve via
+    /// `cpFrame[5]=0x03 → cpCyanWindow[3]=0x12 → cpAppColor[18]=0x3A`).
     FrameCyanIcon,
-    /// The history dropdown's `↓` arrow glyph.
+    /// The `↓` arrow glyph of the history-dropdown icon drawn by
+    /// [`THistory`](crate::widgets::THistory). Sits in the center cell of the
+    /// three-cell icon `▐~↓~▌`. In `classic_blue` this is black on green
+    /// (`0x20`), resolved from
+    /// `cpHistory[1]=0x16 → cpGrayDialog[22]=0x35 → cpAppColor[53]=0x20`.
     HistoryArrow,
-    /// The history dropdown's icon side blocks `▐` `▌`.
+    /// The `▐` and `▌` side-block glyphs of the history-dropdown icon drawn by
+    /// [`THistory`](crate::widgets::THistory). Frames the center arrow on both
+    /// sides. In `classic_blue` this is green on lightgray (`0x72`), resolved
+    /// from `cpHistory[2]=0x17 → cpGrayDialog[23]=0x36 → cpAppColor[54]=0x72`.
     HistorySides,
     /// A normal item in the history dropdown list. One role serves the
     /// active/inactive normals, the selected item, and the divider (they all share
@@ -76,117 +158,275 @@ pub enum Role {
     HistoryViewerNormal,
     /// The focused (cursor) item in the history dropdown list.
     HistoryViewerFocused,
-    /// A scroll-bar page (trough) area.
+    /// A scroll-bar page (trough) area — the `▒` fill between the thumb and
+    /// the arrow buttons, drawn by [`ScrollBar::draw`](crate::widgets::ScrollBar).
+    /// In `classic_blue` this is blue on cyan (`0x31`), resolved from
+    /// `cpScrollBar[1]=0x04 → cpBlueWindow[4]=0x0B → cpAppColor[11]=0x31`.
     ScrollBarPage,
-    /// Scroll-bar control glyphs (arrows / thumb).
+    /// Scroll-bar control glyphs (arrows and thumb) — the `▲`/`▼`/`◄`/`►`
+    /// arrow buttons and the `■` thumb indicator drawn by
+    /// [`ScrollBar::draw`](crate::widgets::ScrollBar). In `classic_blue` this
+    /// is blue on cyan (`0x31`), the same as [`ScrollBarPage`](Role::ScrollBarPage)
+    /// (indices 2 and 3 in `cpScrollBar` both resolve to the same color).
     ScrollBarControls,
-    /// Generic enabled control text.
+    /// Generic enabled control text — used by widgets that need a simple
+    /// active/normal color without a dedicated role family. In `classic_blue`
+    /// this is black on cyan (`0x30`). Used by the theme editor's role list
+    /// and any custom widget that reaches for a sensible default.
     Normal,
-    /// A focused control.
+    /// A focused control — the highlight color applied to whichever view
+    /// currently holds keyboard focus, used by the theme editor's focused-row
+    /// highlight. In `classic_blue` this is white on green (`0x2F`).
     Focused,
-    /// A disabled (greyed-out) control.
+    /// A disabled (greyed-out) control — used by widgets to render inactive
+    /// content that cannot receive input. In `classic_blue` this is darkgray
+    /// on blue (`0x18`).
     Disabled,
-    /// A pressed control (e.g. a button mid-click).
+    /// A pressed control (e.g. a button mid-click) — the transient style
+    /// while a mouse button is held down. In `classic_blue` this is white on
+    /// green (`0x2F`), matching [`Focused`](Role::Focused).
     Pressed,
-    /// A normal item in an **active** (focused) list. Also the empty-list fill.
+    /// A normal item in an **active** (focused) [`ListViewer`](crate::widgets::ListViewer)
+    /// — and also the empty-list fill. In `classic_blue` this is black on cyan
+    /// (`0x30`), resolved from `cpListViewer[1]=0x1A → cpGrayDialog[26]=0x39
+    /// → cpAppColor[57]=0x30`.
     ListNormalActive,
-    /// A normal item in an **inactive** (unfocused) list.
+    /// A normal item in an **inactive** (unfocused)
+    /// [`ListViewer`](crate::widgets::ListViewer). In `classic_blue` this
+    /// matches [`ListNormalActive`](Role::ListNormalActive) — both palette
+    /// indices resolve to the same dialog entry (`0x1A`).
     ListNormalInactive,
-    /// The focused (cursor) item of an active list.
+    /// The focused (cursor) item of an active
+    /// [`ListViewer`](crate::widgets::ListViewer). In `classic_blue` this is
+    /// white on green (`0x2F`), resolved from `cpListViewer[3]=0x1B →
+    /// cpGrayDialog[27]=0x3A → cpAppColor[58]=0x2F`.
     ListFocused,
-    /// A selected (marked) item.
+    /// A selected (marked) item in a
+    /// [`ListViewer`](crate::widgets::ListViewer) that supports multi-select.
+    /// In `classic_blue` this is yellow on cyan (`0x3E`), resolved from
+    /// `cpListViewer[4]=0x1C → cpGrayDialog[28]=0x3B → cpAppColor[59]=0x3E`.
     ListSelected,
-    /// The inter-column divider `│`.
+    /// The inter-column divider `│` in a multi-column
+    /// [`ListViewer`](crate::widgets::ListViewer). In `classic_blue` this is
+    /// blue on cyan (`0x31`), resolved from `cpListViewer[5]=0x1D →
+    /// cpGrayDialog[29]=0x3C → cpAppColor[60]=0x31`.
     ListDivider,
-    /// Error feedback.
+    /// Error feedback — for widgets or dialogs that need to highlight an error
+    /// state. In `classic_blue` this is white on red (`0x4F`). This is a
+    /// tvision-rs-native role with no C++ palette ancestor.
     Error,
-    /// Warning feedback.
+    /// Warning feedback — for widgets or dialogs that need to highlight a
+    /// warning. In `classic_blue` this is black on brown (`0x60`). This is a
+    /// tvision-rs-native role with no C++ palette ancestor.
     Warning,
-    /// Informational feedback.
+    /// Informational feedback — for widgets or dialogs that need an
+    /// informational highlight. In `classic_blue` this is white on blue
+    /// (`0x1F`). This is a tvision-rs-native role with no C++ palette ancestor.
     Info,
-    /// Success feedback.
+    /// Success feedback — for widgets or dialogs that need a success highlight.
+    /// In `classic_blue` this is white on green (`0x2F`). This is a
+    /// tvision-rs-native role with no C++ palette ancestor.
     Success,
-    /// Static (label/caption) text.
+    /// Static (label/caption) text — the style applied to the body of a
+    /// [`StaticText`](crate::widgets::StaticText) or
+    /// [`ParamText`](crate::widgets::ParamText) widget. In `classic_blue` this
+    /// is black on lightgray (`0x70`), matching the gray-dialog surface.
+    /// Resolved from `cpStaticText[1]=0x06 → cpGrayDialog[6]=0x25 →
+    /// cpAppColor[37]=0x70`.
     StaticText,
-    /// A cluster item's normal (unselected) text (a check box / radio button
-    /// group).
+    /// A cluster item's normal (unselected) text — drawn by
+    /// [`CheckBoxes`](crate::widgets::CheckBoxes) and
+    /// [`RadioButtons`](crate::widgets::RadioButtons) for each item that is
+    /// neither the focused cursor row nor disabled. In `classic_blue` this is
+    /// black on cyan (`0x30`), resolved from `cpCluster[1]=0x10 →
+    /// cpGrayDialog[16]=0x2F → cpAppColor[47]=0x30`.
     ClusterNormal,
-    /// A cluster item's selected text (cursor item, cluster focused) — idx 2.
+    /// A cluster item's selected (cursor) text — the row under the keyboard
+    /// cursor when the cluster has focus. In `classic_blue` this is white on
+    /// cyan (`0x3F`), resolved from `cpCluster[2]=0x11 → cpGrayDialog[17]=0x30
+    /// → cpAppColor[48]=0x3F`.
     ClusterSelected,
-    /// A cluster item's shortcut highlight in the normal state — idx 3.
+    /// A cluster item's shortcut highlight in the normal (unselected) state —
+    /// the hotkey letter shown in a distinct color. In `classic_blue` this is
+    /// yellow on cyan (`0x3E`), resolved from `cpCluster[3]=0x12 →
+    /// cpGrayDialog[18]=0x31 → cpAppColor[49]=0x3E`.
     ClusterNormalShortcut,
-    /// A cluster item's shortcut highlight in the selected state — idx 4.
+    /// A cluster item's shortcut highlight in the selected (cursor) state.
+    /// In `classic_blue` this matches [`ClusterNormalShortcut`](Role::ClusterNormalShortcut)
+    /// — both palette indices (`cpCluster[3]` and `cpCluster[4]`) resolve to
+    /// the same dialog entry (`0x12`), giving yellow on cyan (`0x3E`).
     ClusterSelectedShortcut,
-    /// A disabled cluster item's text — idx 5.
+    /// A disabled cluster item's text — drawn when the whole cluster has its
+    /// `disabled` state flag set. In `classic_blue` this is darkgray on cyan
+    /// (`0x38`), resolved from `cpCluster[5]=0x1F → cpGrayDialog[31]=0x3E →
+    /// cpAppColor[62]=0x38`.
     ClusterDisabled,
-    /// The editor's line/column indicator, normal (owner not dragging).
+    /// The line/column position indicator drawn by
+    /// [`Indicator`](crate::widgets::Indicator) when its owner window is **not**
+    /// being dragged/resized. In `classic_blue` this is white on blue (`0x1F`),
+    /// resolved from `cpIndicator[1]=0x02 → cpBlueWindow[2]=0x09 →
+    /// cpAppColor[9]=0x1F`.
     IndicatorNormal,
-    /// The editor's line/column indicator while its owner is dragging.
+    /// The line/column position indicator drawn by
+    /// [`Indicator`](crate::widgets::Indicator) while its owner window is being
+    /// **dragged or resized**. In `classic_blue` this is lightgreen on blue
+    /// (`0x1A`), resolved from `cpIndicator[2]=0x03 → cpBlueWindow[3]=0x0A →
+    /// cpAppColor[10]=0x1A`. The `═` frame glyph also changes to `─` during drag.
     IndicatorDragging,
-    /// A button's normal (inactive) face text.
+    /// A [`Button`](crate::widgets::Button)'s face text when it is neither the
+    /// default button, nor focused, nor disabled. In `classic_blue` this is
+    /// black on green (`0x20`), resolved from `cpButton[1]=0x0A →
+    /// cpGrayDialog[10]=0x29 → cpAppColor[41]=0x20`.
     ButtonNormal,
-    /// A default button's face text.
+    /// A [`Button`](crate::widgets::Button)'s face text when it is the **default**
+    /// button (the one activated by Enter when no other button is focused). In
+    /// `classic_blue` this is lightcyan on green (`0x2B`), resolved from
+    /// `cpButton[2]=0x0B → cpGrayDialog[11]=0x2A → cpAppColor[42]=0x2B`.
     ButtonDefault,
-    /// A selected (pressed) button's face text.
+    /// A [`Button`](crate::widgets::Button)'s face text while it is selected
+    /// (mouse-pressed or keyboard-activated). In `classic_blue` this is white on
+    /// green (`0x2F`), resolved from `cpButton[3]=0x0C → cpGrayDialog[12]=0x2B
+    /// → cpAppColor[43]=0x2F`.
     ButtonSelected,
-    /// A disabled button's face text.
+    /// A [`Button`](crate::widgets::Button)'s face text when the button is
+    /// disabled. In `classic_blue` this is darkgray on lightgray (`0x78`),
+    /// resolved from `cpButton[4]=0x0D → cpGrayDialog[13]=0x2C →
+    /// cpAppColor[44]=0x78`.
     ButtonDisabled,
-    /// A button's shortcut highlight in the normal state.
+    /// A [`Button`](crate::widgets::Button)'s hotkey letter highlight in the
+    /// **normal** state. In `classic_blue` this is yellow on green (`0x2E`),
+    /// resolved from `cpButton[5]=0x0E → cpGrayDialog[14]=0x2D →
+    /// cpAppColor[45]=0x2E`.
     ButtonNormalShortcut,
-    /// A button's shortcut highlight in the default state.
+    /// A [`Button`](crate::widgets::Button)'s hotkey letter highlight in the
+    /// **default** state. In `classic_blue` this matches
+    /// [`ButtonNormalShortcut`](Role::ButtonNormalShortcut) — all three shortcut
+    /// indices resolve to the same dialog entry (`cpButton[6]=0x0E`).
     ButtonDefaultShortcut,
-    /// A button's shortcut highlight in the selected state.
+    /// A [`Button`](crate::widgets::Button)'s hotkey letter highlight in the
+    /// **selected** state. In `classic_blue` this matches
+    /// [`ButtonNormalShortcut`](Role::ButtonNormalShortcut) — `cpButton[7]=0x0E`
+    /// resolves to the same dialog entry as indices 5 and 6.
     ButtonSelectedShortcut,
-    /// A button's drop-shadow cells.
+    /// The drop-shadow cells drawn one column to the right and one row below a
+    /// [`Button`](crate::widgets::Button)'s bounding box. In `classic_blue` this
+    /// is black on lightgray (`0x70`), resolved from `cpButton[8]=0x0F →
+    /// cpGrayDialog[15]=0x2E → cpAppColor[46]=0x70`.
     ButtonShadow,
-    /// A label's caption text when **not** lit (its linked control is unfocused).
+    /// A [`Label`](crate::widgets::Label)'s caption text when its linked control
+    /// is **unfocused** (the label is "dark"). In `classic_blue` this is black
+    /// on lightgray (`0x70`), resolved from `cpLabel[1]=0x07 →
+    /// cpGrayDialog[7]=0x26 → cpAppColor[38]=0x70`.
     LabelNormal,
-    /// A label's caption text when **lit** (its linked control is focused).
+    /// A [`Label`](crate::widgets::Label)'s caption text when its linked control
+    /// **has focus** (the label is "lit"). In `classic_blue` this is white on
+    /// lightgray (`0x7F`), resolved from `cpLabel[2]=0x08 → cpGrayDialog[8]=0x27
+    /// → cpAppColor[39]=0x7F`.
     LabelLight,
-    /// A label's shortcut highlight when **not** lit.
+    /// A [`Label`](crate::widgets::Label)'s hotkey letter highlight in the
+    /// **dark** (unfocused) state. In `classic_blue` this is yellow on lightgray
+    /// (`0x7E`), resolved from `cpLabel[3]=0x09 → cpGrayDialog[9]=0x28 →
+    /// cpAppColor[40]=0x7E`.
     LabelNormalShortcut,
-    /// A label's shortcut highlight when **lit**. Shares the same colour as
-    /// [`LabelNormalShortcut`](Role::LabelNormalShortcut) but is kept a distinct
-    /// role so future theming can differ.
+    /// A [`Label`](crate::widgets::Label)'s hotkey letter highlight in the **lit**
+    /// (focused) state. In `classic_blue` this matches
+    /// [`LabelNormalShortcut`](Role::LabelNormalShortcut) — `cpLabel[4]=0x09`
+    /// resolves to the same dialog entry as index 3. Kept as a distinct role so
+    /// future theming can give the lit shortcut a different colour.
     LabelLightShortcut,
-    /// An input line's field text. A single role serves both the focused and
-    /// unfocused field.
+    /// An [`InputLine`](crate::widgets::InputLine)'s field text — applied to
+    /// the entire field area regardless of focus state (the C++ palette uses
+    /// the same byte for both passive and active). In `classic_blue` this is
+    /// white on blue (`0x1F`), resolved from `cpInputLine[1]=cpInputLine[2]=0x13
+    /// → cpGrayDialog[19]=0x32 → cpAppColor[50]=0x1F`.
     InputNormal,
-    /// An input line's selection highlight.
+    /// An [`InputLine`](crate::widgets::InputLine)'s selection highlight —
+    /// the text region between the cursor and the mark anchor. In
+    /// `classic_blue` this is white on green (`0x2F`), resolved from
+    /// `cpInputLine[3]=0x14 → cpGrayDialog[20]=0x33 → cpAppColor[51]=0x2F`.
     InputSelected,
-    /// An input line's scroll arrows.
+    /// The `◄`/`►` overflow-scroll arrows shown at the left/right edge of an
+    /// [`InputLine`](crate::widgets::InputLine) when the field content is wider
+    /// than the visible area. In `classic_blue` this is lightgreen on blue
+    /// (`0x1A`), resolved from `cpInputLine[4]=0x15 → cpGrayDialog[21]=0x34 →
+    /// cpAppColor[52]=0x1A`.
     InputArrow,
-    /// A scroller's content fill, normal (the realistic case: a scroller inside a
-    /// blue window).
+    /// A [`Scroller`](crate::widgets::Scroller)'s / [`Editor`](crate::widgets::Editor)'s
+    /// content fill — applied to every cell of the scrollable area that does not
+    /// carry selected text. The realistic owner is a blue window (the most common
+    /// scroller/editor container). In `classic_blue` this is yellow on blue
+    /// (`0x1E`), resolved from `cpScroller[1]=0x06 → cpBlueWindow[6]=0x0D →
+    /// cpAppColor[13]=0x1E`.
     ScrollerNormal,
-    /// An editor's selected-text fill.
+    /// A [`Scroller`](crate::widgets::Scroller)'s / [`Editor`](crate::widgets::Editor)'s
+    /// selected-text (highlighted) fill — applied to cells within the current
+    /// selection. In `classic_blue` this is blue on lightgray (`0x71`), resolved
+    /// from `cpScroller[2]=0x07 → cpBlueWindow[7]=0x0E → cpAppColor[14]=0x71`.
     ScrollerSelected,
-    /// A menu's normal item text. Also the menu-bar background fill.
+    /// A [`MenuBar`](crate::menu::MenuBar) / [`MenuBox`](crate::menu::MenuBox)
+    /// normal item text — and also the bar's background fill between items. Used
+    /// by [`MenuColors::resolve`](crate::menu::MenuColors::resolve). In
+    /// `classic_blue` this is black on lightgray (`0x70`), resolved in one hop:
+    /// `cpMenuView[1]=0x02 → cpAppColor[2]=0x70` (menus are owned directly by
+    /// the program, no window remap).
     MenuNormal,
-    /// A menu's normal item shortcut highlight.
+    /// A menu's normal item shortcut letter highlight. In `classic_blue` this
+    /// is red on lightgray (`0x74`), resolved from `cpMenuView[3]=0x04 →
+    /// cpAppColor[4]=0x74`.
     MenuNormalShortcut,
-    /// A menu's selected (highlighted) item text.
+    /// A menu's **selected** (highlighted cursor) item text. In `classic_blue`
+    /// this is black on green (`0x20`), resolved from `cpMenuView[4]=0x05 →
+    /// cpAppColor[5]=0x20`.
     MenuSelected,
-    /// A menu's selected item shortcut highlight.
+    /// A menu's selected item shortcut letter highlight. In `classic_blue` this
+    /// is red on green (`0x24`), resolved from `cpMenuView[6]=0x07 →
+    /// cpAppColor[7]=0x24`.
     MenuSelectedShortcut,
-    /// A menu's disabled (greyed) item text (no shortcut highlight when greyed).
+    /// A menu's **disabled** item text (no separate shortcut highlight is
+    /// applied when an item is disabled). In `classic_blue` this is darkgray on
+    /// lightgray (`0x78`), resolved from `cpMenuView[2]=0x03 → cpAppColor[3]=0x78`.
     MenuDisabled,
-    /// A menu's selected-but-disabled item text.
+    /// A menu's **selected-and-disabled** item text — the cursor rests on an
+    /// item that is in the disabled command set. In `classic_blue` this is
+    /// darkgray on green (`0x28`), resolved from `cpMenuView[5]=0x06 →
+    /// cpAppColor[6]=0x28`.
     MenuSelectedDisabled,
-    /// The status line's normal item text (black on lightgray). Also the row
-    /// background fill.
+    /// The normal (non-selected, enabled) item text and row background fill
+    /// drawn by [`StatusLine`](crate::StatusLine). Applied to both the item
+    /// label text and any unfilled cells in the status row. In `classic_blue`
+    /// this is black on lightgray (`0x70`), resolved from
+    /// `cpStatusLine[1]=0x02 → cpAppColor[2]=0x70`.
     StatusNormal,
-    /// The status line's normal item shortcut highlight (red on lightgray).
+    /// The shortcut-key highlight within a normal (non-selected) status item,
+    /// drawn by [`StatusLine`](crate::StatusLine) over the key character.
+    /// In `classic_blue` this is red on lightgray (`0x74`), resolved from
+    /// `cpStatusLine[3]=0x04 → cpAppColor[4]=0x74`.
     StatusShortcut,
-    /// The status line's selected (hovered) item text (black on green).
+    /// The text of the currently hovered (selected/pressed) status item, drawn
+    /// by [`StatusLine`](crate::StatusLine) when the mouse cursor rests on an
+    /// enabled item. In `classic_blue` this is black on green (`0x20`),
+    /// resolved from `cpStatusLine[4]=0x05 → cpAppColor[5]=0x20`.
     StatusSelect,
-    /// The status line's selected item shortcut highlight (red on green).
+    /// The shortcut-key highlight within a hovered status item — the key
+    /// character rendered by [`StatusLine`](crate::StatusLine) while the item
+    /// is selected. In `classic_blue` this is red on green (`0x24`), resolved
+    /// from `cpStatusLine[6]=0x07 → cpAppColor[7]=0x24`.
     StatusShortcutSelect,
-    /// The status line's disabled (greyed) item text (darkgray on lightgray).
+    /// The text of a disabled (greyed-out) status item drawn by
+    /// [`StatusLine`](crate::StatusLine) when the item's command is absent
+    /// from the enabled command set. In `classic_blue` this is darkgray on
+    /// lightgray (`0x78`), resolved from
+    /// `cpStatusLine[2]=0x03 → cpAppColor[3]=0x78`.
     StatusDisabled,
-    /// The status line's selected-but-disabled item text (darkgray on green).
+    /// The text of a status item that is simultaneously selected (hovered) and
+    /// disabled, drawn by [`StatusLine`](crate::StatusLine). In `classic_blue`
+    /// this is darkgray on green (`0x28`), resolved from
+    /// `cpStatusLine[5]=0x06 → cpAppColor[6]=0x28`.
     StatusSelDisabled,
-    /// The file-dialog info pane text (path + size/date display), cyan on blue.
+    /// The file-dialog info pane text — the path, file-size, and date display
+    /// drawn by [`FileInfoPane::draw`](crate::dialog::FileInfoPane). In
+    /// `classic_blue` this is cyan on blue (`0x13`), resolved from
+    /// `cpInfoPane[1]=0x1E → cpGrayDialog[30]=0x3D → cpAppColor[61]=0x13`.
     InfoPane,
 
     // -- Outline viewer ------------------------------------------------------

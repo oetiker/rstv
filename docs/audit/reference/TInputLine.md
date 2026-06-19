@@ -40,4 +40,4 @@ Validator hook: `src/validate.rs`   |   Value protocol: `src/data.rs`
 
 - PORTED: 14   EQUIVALENT: 7   NOT-PORTED: 3   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 0   |   → concept: 0
-- Notable findings: All previously below-bar public symbols raised to score 3. `set_validator` is a live method (not constructor-only); its doc is score 3. `Role::Input*` variants live in `theme.rs` — their rustdoc is out of scope for this pass (deferred to theme.rs Role pass); the `draw` method doc covers the usage in context.
+- Notable findings: All previously below-bar public symbols raised to score 3. `set_validator` is a live method (not constructor-only); its doc is score 3. `Role::Input*` variants documented in `src/theme.rs` in the theme.rs Role pass: `InputNormal` (white on blue, chain), `InputSelected` (white on green, chain), `InputArrow` (lightgreen on blue, chain).

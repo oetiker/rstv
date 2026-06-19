@@ -22,5 +22,5 @@ Rust module(s): `src/widgets/history.rs` (`struct HistoryViewer`)   |   magiblot
 
 - PORTED: 5   EQUIVALENT: 2   NOT-PORTED: 0   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 0   |   → concept: 0
-- Raised: `Init/new+setup` → 3; `GetText/get_text` → 3; `GetPalette/LIST_ROLES` → 3. Deferred (theme pass): `CHistoryViewer` palette roles in `src/theme.rs` (addressed via `LIST_ROLES` doc instead). Private field (`history_id`) and private method (`history_width`) are N/A for the public bar.
+- Raised: `Init/new+setup` → 3; `GetText/get_text` → 3; `GetPalette/LIST_ROLES` → 3. `CHistoryViewer` palette roles addressed via `LIST_ROLES` doc; `HistoryViewerNormal`/`HistoryViewerFocused` in `src/theme.rs` confirmed score-3 in the theme pass. Private field (`history_id`) and private method (`history_width`) are N/A for the public bar.
 - Notable finding: The C++ constructor calls `hScrollBar->setRange(...)` unconditionally (always has a horizontal bar). Rust `setup` guards the h-bar block with `if let Some(hbar)` — this is correct and necessary (the Rust constructor accepts `Option<ViewId>` for the bars), but the deviation from the C++ unconditional assumption is now documented in the `setup` rustdoc (noting that `ScrollBar::set_params` floors a negative max to the minimum, which is safe and tested).
