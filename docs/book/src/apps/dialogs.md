@@ -172,6 +172,31 @@ control can return `FieldValue::Custom(...)`. See
 story: the three exchange paths, `value_as::<T>()` / `as_custom::<T>()`, the
 TypeId caveat, and when to skip `FieldValue` entirely.
 
+## Delivering a modal's result back to its launcher
+
+How a modal's result reaches the view that opened it depends on *who* opened it.
+
+**`Program`-launched modals** — opened from outside the view tree (for example
+the color picker or theme editor) — return their result directly: the pump runs
+`exec_view_with<R>`, the closure reads the modal's state while it is still in
+the tree, and the result comes back as a plain Rust value. This is the right path
+when the result type is rich and does not map naturally to `FieldValue` (such as
+`Color` or `Theme`).
+
+**View-launched modals** — opened from inside `handle_event` via the
+[Deferred channel](../internals/deferred.md) — cannot return inline (a view holds
+only `&mut Context`, not the `Program`). Instead, after the modal closes, the pump
+reads each dialog field by id via `View::value()` and delivers the assembled
+result to the launcher by id via `View::set_modal_data(FieldValue)` (virtual
+dispatch, no downcast). The launcher overrides `set_modal_data` to interpret the
+ordered `FieldValue::List` and update its own state. The editor's Find/Replace
+modals follow this pattern: the pump reads the text field as `FieldValue::Text`
+and the options cluster as `FieldValue::Bits`, then calls `editor.set_modal_data(List([Text, Bits]))`.
+
+Note that `set_modal_data` is distinct from `set_value`: `set_value` carries a
+view's *own* document or field data (the D10 scatter path); `set_modal_data`
+carries a *modal's result* collected by the pump on the launcher's behalf.
+
 ## See also
 
 - [Windows & the desktop](windows.md) — the non-modal sibling of a dialog.

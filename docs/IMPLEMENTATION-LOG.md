@@ -5,6 +5,53 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Phase 4 — modal-result reads via `FieldValue` (consumer-API coverage, 2026-06-19)
+
+Eliminated the multi-child downcasts from the `FindPick`/`ReplacePick`
+`ModalCompletion` arms by routing each modal-result read through the standard
+`View::value()` currency and delivering the assembled record to the editor via a
+new `View::set_modal_data(FieldValue)` hook. Implemented on branch
+`consumer-api-coverage`, 5 commits (`b1f5641`–`5a245cf`), base `a383495`.
+
+**New substrate** (`b1f5641`): defaulted `View::set_modal_data(&mut self, data:
+FieldValue)` (distinct from `set_value`, which carries a view's *own* field data;
+this carries a *modal's result* assembled by the pump). `Editor` overrides it to
+parse an ordered `FieldValue::List`: Find shape = `[Text(find), Bits(opts)]`;
+Replace shape = `[Text(find), Text(replace), Bits(opts)]`; `opts` is masked and
+cast to `u16` for `editor_flags`. Also added `field_bits(FieldValue) -> Option<u32>`
+(the `Bits` sibling of the existing `field_int`/`field_text` helpers) and the
+macro forwarder + spy entry for `set_modal_data`.
+
+**`FindPick` conversion** (`76951a8`): the `apply_modal_completion` arm now reads
+the InputLine via `v.value()` → `field_text` and the CheckBoxes via `v.value()` →
+`field_bits` (no `as_any_mut`/`downcast_mut`); delivers to the editor via
+`ed.set_modal_data(List([Text, Bits]))`.
+
+**`ReplacePick` conversion** (`ddec7b2`): same pattern — reads find/replace strings
++ a 4-bit options word; delivers `List([Text, Text, Bits])` via `set_modal_data`.
+
+**Dead code removed** (`ecbd58d`): `CheckBoxes::as_any_mut` downcast hook retired
+(no remaining call site); the editor's now-dead `set_find_str`/`set_replace_str`/
+`set_editor_flags` setters were also removed.
+
+**Recorded §2.1 deviation** (spec's literal wording said "gather_data the modal
+into an ordered List," but we read each field by id via `value()` instead):
+`gather_list` is an inherent method on `Group`/`Dialog`, NOT reachable through
+`&mut dyn View` without a `downcast::<Dialog>` (which would trade one
+framework-internal downcast for another). Making it trait-reachable would require
+`Dialog::value()` → `gather_list()`, a broader semantic change, and would couple
+the editor's positional parse to dialog child-insertion order. The per-field
+`value()` reads achieve the spec's intent (the editor consumes one ordered `List`)
+while staying within the spec's own permission ("a field via `value()`"). Reason
+recorded on the `FindPick`/`ReplacePick` variant docs and here.
+
+**Recorded exceptions** (`5a245cf`): `ThemeColorPick` stays downcasting — its
+payload is a `Color` (deliberately not a `FieldValue`; read from the embedded
+picker's own `color()` accessor). The dialog-OPEN pre-fill reads (seeding the Find/
+Replace dialogs from the editor's current state) also stay downcasting — these are
+"build UI from known widget state" structural reads, not modal-result reads; the
+same category as FileDialog readback. Both have in-code comments.
+
 ## Phase 3 — sync signals to trait methods (consumer-API coverage, 2026-06-19)
 
 Eliminated all downcast calls from the pump's deferred-drain sync arms by routing

@@ -64,6 +64,18 @@ integrated-tree gate green: 1275 lib tests, `clippy --all-targets`, `fmt`):**
   `apply_page_sync`. `ScrollBarSetParams` (write dir) + `SplitterDivider` deliberately
   left downcasting (out of the "five scroll-family brokers" scope). Behavior-preserving;
   no snapshot change. Final whole-branch review (Opus): Ready to merge = YES.
+- **Phase 4 — modal-result reads via `FieldValue`** (`b1f5641`..`5a245cf`) — retired
+  the multi-child downcasts from the `FindPick`/`ReplacePick` `ModalCompletion`
+  arms. New defaulted `View::set_modal_data(FieldValue)` hook (distinct from
+  `set_value`); `Editor` overrides it to parse the ordered `List` the pump assembled
+  from the dialog's fields via `View::value()`. `field_bits` helper added. Dead
+  `set_find_str`/`set_replace_str`/`set_editor_flags` setters + `CheckBoxes::as_any_mut`
+  removed. **Recorded §2.1 deviation:** per-field `value()` reads instead of
+  `gather_list` (inherent, not trait-reachable without a downcast) — within spec.
+  **Recorded exceptions:** `ThemeColorPick` (payload is `Color`, not `FieldValue`)
+  + dialog-OPEN pre-fill reads (structural "build UI from known widget state").
+  Docs updated (`apps/dialogs.md`, `internals/custom-view.md`, IMPLEMENTATION-LOG).
+  Gate: 1275 lib tests, clippy, fmt, examples green; no snapshot changes.
 
 **The driving design — spec v5 (read before Phase 3):**
 `docs/superpowers/specs/2026-06-18-unified-data-movement-design.md` — unify the
@@ -83,15 +95,12 @@ keep their own hooks (their payloads aren't a scrollbar `(h,v)` delta — reason
 recorded on the variant docs). Plan:
 `docs/superpowers/plans/2026-06-19-data-movement-phase3-sync-trait-methods.md`.
 
-**Next: Phase 4 — modal-result reads via `FieldValue` (spec §3.3/§5).** Convert
-`FindPick`/`ReplacePick`/`ThemeColorPick` to read the finished modal via
-`value()`/`gather_list` (ordered `List`) + deliver by id, dropping the multi-child
-downcasts — the *routing* (which editor to write) stays, only the *reads* go
-downcast-free. `ThemeColorPick` is the recorded exception (its payload is a `Color`,
-read from the editor's own embedded picker via `color()` — never crosses a
-`FieldValue` boundary). **Write a plan first** (writing-plans) → user review →
-subagent-drive. Then **Phase 5** (generic `ExecView`: `Context::request_exec_view` +
-`Deferred::OpenModal`, make `tcv`'s Info box a real custom dialog).
+**Phase 4 DONE.** See the "stacked on the branch" entry above and `docs/IMPLEMENTATION-LOG.md`.
+
+**Next: Phase 5 — generic `ExecView` (`Context::request_exec_view` +
+`Deferred::OpenModal`; make `tcv`'s Info box a real custom dialog launched from
+the list; spec §3.4/§5 Phase 5).** Write a plan first (writing-plans) → user
+review → subagent-drive.
 
 **Deferred follow-ons (recorded, not dropped):** `inventory`-collected
 `Program::self_check()` + per-component `data_self_check` (needs a dependency

@@ -101,7 +101,12 @@ data control that participates in dialog gather/scatter,
 [`size_limits`](../api/tvision-rs/view/trait.View.html#method.size_limits) to impose
 a minimum size, and
 [`set_state`](../api/tvision-rs/view/trait.View.html#method.set_state) to react when
-you gain or lose focus.
+you gain or lose focus. A view that launches a modal and needs its typed result
+overrides
+[`set_modal_data`](../api/tvision-rs/view/trait.View.html#method.set_modal_data)
+to load the ordered `FieldValue::List` the pump read out of the modal's fields via
+`View::value()` — virtual dispatch, no framework downcast (see [Dialogs & data §
+Delivering a modal's result](../apps/dialogs.md#delivering-a-modals-result-back-to-its-launcher)).
 
 ## Wrapping an existing view: `#[delegate]`
 
