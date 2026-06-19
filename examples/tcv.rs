@@ -28,8 +28,8 @@ use tvision_rs::widgets::list_viewer;
 use tvision_rs::{
     Backend, Button, ButtonFlags, Command, Context, CrosstermBackend, Desktop, Dialog, DrawCtx,
     Event, GrowMode, HelpCtx, Key, Label, ListViewer, ListViewerState, MessageBoxButtons,
-    MessageBoxKind, Point, Program, Rect, Role, ScrollBar, StateFlag, StatusDef, StatusLine,
-    SystemClock, Theme, View, ViewId, ViewState, WindowFlags, alt, delegate,
+    MessageBoxKind, Point, Program, Rect, Role, ScrollBar, StateFlag, StaticText, StatusDef,
+    StatusLine, SystemClock, Theme, View, ViewId, ViewState, WindowFlags, alt, delegate,
 };
 
 // ---------------------------------------------------------------------------
@@ -697,6 +697,41 @@ fn no_case_pos(needle: &str, haystack: &str) -> usize {
     0
 }
 
+/// Build the Info dialog for entry `e` — the original `TDirBox.HandleEvent`
+/// `InfoBox`, now a real custom `Dialog` launched via `request_exec_view`
+/// (consumer-API gap #2 closed).
+///
+/// The dialog is titled "Information", sized 52 × 10, and shows the entry's
+/// six fields as static text rows (one `StaticText` spanning all six lines).
+/// An OK `Button` whose command is `Command::CANCEL` closes the modal
+/// (read-only-info convention: `cmCancel` means "dismiss", nothing is read back).
+fn build_info_dialog(e: &Entry) -> Dialog {
+    // Inner content width: 52 - 2 (frame) - 2 (margin each side) = 46 chars.
+    // Inner content height: 10 - 2 (top/bottom frame) = 8 usable rows.
+    // Layout: rows 1-6 = static text, row 7 = spacer, row 8-9 = button (h=2).
+    let w: i32 = 52;
+    let h: i32 = 10;
+    let mut dialog = Dialog::new(Rect::new(0, 0, w, h), Some("Information".to_string()));
+
+    // Six-line static text block: all six labelled fields from `info_text`.
+    dialog.insert_child(Box::new(StaticText::new(
+        Rect::new(2, 1, w - 2, 7),
+        info_text(e),
+    )));
+
+    // OK button centered in the bottom row (row 8, height 2).
+    let btn_w: i32 = 8;
+    let btn_x = (w - btn_w) / 2;
+    dialog.insert_child(Box::new(Button::new(
+        Rect::new(btn_x, 7, btn_x + btn_w, 9),
+        "~O~K",
+        Command::CANCEL, // read-only-info convention: OK = cmCancel (just dismiss)
+        ButtonFlags::new(),
+    )));
+
+    dialog
+}
+
 // ---------------------------------------------------------------------------
 // DirBox — port of `TDirBox : TListBox`, the search-as-you-type catalog list.
 //
@@ -775,17 +810,15 @@ impl DirBox {
         self.lv.state.state.selected && self.lv.state.state.active
     }
 
-    /// Open the Info box for the focused entry (the original `InfoBox`),
-    /// rendered as an informational message box of labelled fields.
-    fn open_info(&self, ctx: &mut Context) {
+    /// Open the Info dialog for the focused entry (the original `InfoBox`),
+    /// built via `build_info_dialog` and launched as a real custom `Dialog`
+    /// through `request_exec_view` (consumer-API gap #2 closed).
+    fn open_info(&mut self, ctx: &mut Context) {
         if let Some(e) = CATALOG.get(self.lv.focused as usize) {
-            ctx.request_message_box(
-                info_text(e),
-                MessageBoxKind::Information,
-                MessageBoxButtons::ok(),
-                None,
-                None,
-            );
+            let dialog = build_info_dialog(e);
+            if let Some(id) = self.state().id() {
+                ctx.request_exec_view(Box::new(dialog), id, None);
+            }
         }
     }
 }
@@ -1304,5 +1337,112 @@ mod tests {
         assert_eq!(no_case_pos("doom", "  DOOM1_0.ZIP"), 3);
         assert_eq!(no_case_pos("zzz", "abc"), 0);
         assert_eq!(no_case_pos("", "abc"), 0);
+    }
+
+    /// Builder test (content): `build_info_dialog` produces a dialog that renders
+    /// the entry's six fields and an OK button.  Rendered standalone via
+    /// `Renderer` on a `HeadlessBackend` — no app pump needed.
+    #[test]
+    fn build_info_dialog_renders_entry_fields_and_ok_button() {
+        use tvision_rs::{Buffer, DrawCtx, Renderer};
+
+        let entry = &CATALOG[0]; // DOOM1_0.ZIP on GAMES01
+        let mut dialog = build_info_dialog(entry);
+
+        let (backend, screen) = HeadlessBackend::new(52, 10);
+        let mut r = Renderer::new(Box::new(backend));
+        let theme = Theme::classic_blue();
+        r.render(|buf: &mut Buffer| {
+            let bounds = dialog.state().get_bounds();
+            let mut dc = DrawCtx::new(buf, &theme, bounds, bounds.a);
+            dialog.draw(&mut dc);
+        });
+
+        let frame = screen.snapshot();
+        assert!(
+            frame.contains(entry.disk),
+            "frame should contain disk label '{}'; got:\n{frame}",
+            entry.disk
+        );
+        assert!(
+            frame.contains(entry.file),
+            "frame should contain file name '{}'; got:\n{frame}",
+            entry.file
+        );
+        assert!(
+            frame.contains(entry.desc),
+            "frame should contain description '{}'; got:\n{frame}",
+            entry.desc
+        );
+        assert!(
+            frame.contains("OK"),
+            "frame should contain 'OK' button; got:\n{frame}"
+        );
+        assert!(
+            frame.contains("Information"),
+            "frame should contain the dialog title 'Information'; got:\n{frame}"
+        );
+    }
+
+    /// Integration test (wiring): pressing Enter on a focused entry triggers
+    /// `CMD_INFO` → `open_info` → `request_exec_view`.  We pre-queue the event
+    /// sequence so `TcvApp::run()` drives the full pump-and-drive loop without
+    /// hanging:
+    ///   1. Enter  → DirBox queues `Deferred::OpenModal` (the Info dialog).
+    ///   2. `Command::CANCEL`  → the modal's inner loop picks it up and closes
+    ///      the Info dialog (the OK button emits `Command::CANCEL`).
+    ///   3. `Command::QUIT`  → the outer app loop exits.
+    /// The headless backend's `poll_event` queue is shared with the modal's
+    /// inner loop, so the pre-queued events are consumed in the right order.
+    #[test]
+    fn enter_on_focused_entry_opens_and_closes_info_dialog_modal() {
+        use tvision_rs::{MouseButtons, MouseEvent};
+
+        let (backend, screen) = HeadlessBackend::new(80, 25);
+        let mut app = TcvApp::new(Box::new(backend));
+
+        // Initial render so the view tree is built.
+        app.program.pump_once();
+
+        // Click the list to focus the DirBox (so keyboard events reach it).
+        // MouseDown + MouseUp to release capture before typing.
+        screen.push_event(Event::MouseDown(MouseEvent {
+            position: Point::new(10, 5),
+            buttons: MouseButtons {
+                left: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
+        app.program.pump_once();
+        screen.push_event(Event::MouseUp(MouseEvent {
+            position: Point::new(10, 5),
+            buttons: MouseButtons::default(),
+            ..Default::default()
+        }));
+        app.program.pump_once();
+
+        // Pre-queue the full sequence for TcvApp::run():
+        //   Enter      — DirBox.handle_event calls open_info → request_exec_view
+        //                → queues Deferred::OpenModal.
+        //   CANCEL     — the Info dialog's modal loop picks this up; the OK
+        //                button emits Command::CANCEL, so any Command::CANCEL
+        //                closes the modal (it is the end-modal command).
+        //   QUIT       — terminates the outer run_app loop so the test returns.
+        screen.push_key(Key::Enter, KeyModifiers::default());
+        screen.push_event(Event::Command(Command::CANCEL));
+        screen.push_event(Event::Command(Command::QUIT));
+
+        // Run the full app loop.  The pre-queued events drive it to completion
+        // without blocking (headless backend never blocks on poll_event).
+        app.run();
+
+        // After run() returns the catalog window should still be renderable
+        // (the desktop is intact after the modal closed cleanly).
+        let frame = screen.snapshot();
+        assert!(
+            frame.contains("Tobis Catalog Vision"),
+            "catalog window should still be visible after modal closes; got:\n{frame}"
+        );
     }
 }
