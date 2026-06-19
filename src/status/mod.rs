@@ -55,10 +55,19 @@ pub struct StatusItem {
     /// The displayed label. `None` is a hidden hotkey binding that draws nothing
     /// and consumes no horizontal space.
     pub text: Option<String>,
-    /// The accelerator key. `None` means no key is bound. Mirrors
-    /// [`MenuItem`](crate::menu::MenuItem)'s `key_code`.
+    /// The accelerator key that fires this item's command; `None` means the item
+    /// has no keyboard shortcut and can only be activated by clicking it.
+    ///
+    /// Use [`StatusItem::key`] to build a *hidden* item whose only purpose is
+    /// the accelerator (no label, no width). The C++ equivalent used a
+    /// `kbNoKey` sentinel; `None` here is cleaner and carries the same meaning.
     pub key_code: Option<KeyEvent>,
-    /// The command emitted when chosen / its hotkey is pressed.
+    /// The command posted when this item is clicked or its accelerator is pressed.
+    ///
+    /// Typically one of the standard [`Command`] constants (e.g. `Command::HELP`,
+    /// `Command::QUIT`), but any application-defined command works. The status
+    /// line checks whether the command is currently enabled before posting it and
+    /// before highlighting the item during a mouse drag.
     pub command: Command,
 }
 
@@ -119,9 +128,25 @@ impl HelpCtxRange {
 /// inner items list is a [`Vec<StatusItem>`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StatusDef {
-    /// Which help contexts this def applies to.
+    /// Which help contexts activate this def.
+    ///
+    /// [`HelpCtxRange::All`] is the universal fallback used by nearly every app;
+    /// [`HelpCtxRange::OneOf`] restricts the def to an explicit set of contexts.
+    /// Place more-specific defs *before* the `All` def in the list — the status
+    /// line picks the *first* match.
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// Replaces the `TStatusDef::min`/`max` integer pair (`ushort min, max`). Because
+    /// [`HelpCtx`] is now a namespaced `&'static str` rather than an integer, a
+    /// numeric range has no meaning; [`HelpCtxRange`] is the typed replacement.
     pub range: HelpCtxRange,
-    /// The items shown when this def is selected.
+    /// The items displayed by the status line when this def is active.
+    ///
+    /// Build this list with [`StatusItemsBuilder`] via [`StatusDef::list`], or
+    /// construct `StatusItem` values directly and collect them into a `Vec`. Items
+    /// appear left-to-right on screen in `Vec` order; a `text == None` item is
+    /// invisible but still contributes its accelerator binding.
     pub items: Vec<StatusItem>,
 }
 
@@ -132,8 +157,17 @@ impl StatusDef {
     }
 }
 
-/// A fluent builder for the `Vec<StatusDef>` a [`StatusLine`](status_line::StatusLine)
-/// owns.
+/// A fluent builder for the `Vec<StatusDef>` a [`StatusLine`](status_line::StatusLine) owns.
+///
+/// Start a chain with [`StatusDef::list`], append defs with
+/// [`def_all`](Self::def_all) (the universal fallback) or
+/// [`def_one_of`](Self::def_one_of) (context-restricted), and finish with
+/// [`build`](Self::build). The resulting `Vec<StatusDef>` is passed directly to
+/// [`StatusLine::new`](status_line::StatusLine::new).
+///
+/// The status line walks the defs in order and activates the first one whose
+/// [`range`](StatusDef::range) matches the current help context, so put
+/// context-specific defs before the universal `All` def.
 #[derive(Default)]
 pub struct StatusDefListBuilder {
     defs: Vec<StatusDef>,
@@ -180,6 +214,13 @@ impl StatusDefListBuilder {
 }
 
 /// A fluent builder for one def's `Vec<StatusItem>`.
+///
+/// Obtain one from the closure argument of [`StatusDefListBuilder::def_all`] or
+/// [`StatusDefListBuilder::def_one_of`], then chain calls to [`item`](Self::item),
+/// [`key_item`](Self::key_item), and [`raw`](Self::raw). The builder is consumed
+/// by each call and returned, so the chain reads left-to-right in the order items
+/// appear on screen. Call [`build`](Self::build) (or let the outer builder call it
+/// for you) to produce the finished `Vec<StatusItem>`.
 #[derive(Default)]
 pub struct StatusItemsBuilder {
     items: Vec<StatusItem>,
