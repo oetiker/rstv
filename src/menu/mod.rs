@@ -200,10 +200,35 @@ impl MenuItem {
 /// entries plus the index of the item that is pre-selected when the menu opens.
 /// Use [`Menu::builder()`] to construct one fluently; the builder sets
 /// [`default`](Menu::default) automatically. Construct a `Menu` literal only
-/// when you need precise control over the default index.
+/// when you need precise control over the default index — for example, when you
+/// want to pre-select an item other than the first:
+///
+/// ```rust
+/// use tvision_rs::menu::{Menu, MenuItem};
+/// use tvision_rs::command::Command;
+/// use tvision_rs::help::HelpCtx;
+///
+/// // Pre-built items.
+/// let items = vec![
+///     MenuItem::Command {
+///         name: "~N~ew".into(), command: Command::NEW,
+///         key_code: None, param: None,
+///         help_ctx: HelpCtx::NO_CONTEXT, disabled: false,
+///     },
+///     MenuItem::Command {
+///         name: "~O~pen".into(), command: Command::OPEN,
+///         key_code: None, param: None,
+///         help_ctx: HelpCtx::NO_CONTEXT, disabled: false,
+///     },
+/// ];
+/// // Pre-select "Open" (index 1) rather than "New" (index 0).
+/// let menu = Menu { items, default: Some(1) };
+/// assert_eq!(menu.default, Some(1));
+/// ```
 ///
 /// Both fields are public and not invariant-checked: `default` may be any valid
-/// index into `items`, or `None`.
+/// index into `items`, or `None`. [`Default::default()`] gives an empty menu
+/// with no pre-selection.
 ///
 /// # Turbo Vision heritage
 /// Ports `TMenu` (`menus.h`): the singly-linked list of items becomes a [`Vec`]
@@ -211,13 +236,24 @@ impl MenuItem {
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Menu {
     /// The menu entries, in display order.
-    pub items: Vec<MenuItem>,
-    /// The index of the pre-selected item when the menu first opens.
     ///
-    /// Any valid index into [`items`], or `None` for no pre-selection.
+    /// Iterate with `.iter()` / `.iter_mut()` or index directly. Modify in
+    /// place (e.g. to disable a specific item by index) only between menu
+    /// activations: while a [`MenuSession`] is open it holds a **clone** of the
+    /// menu, so changes to this vec are not visible until the next activation.
+    ///
+    /// [`MenuSession`]: crate::menu::MenuSession
+    pub items: Vec<MenuItem>,
+    /// The index of the item that is highlighted when the menu first opens.
+    ///
+    /// Any valid index into [`items`], or `None` for no initial highlight.
     /// [`MenuBuilder`] sets this to `Some(0)` for a non-empty menu and `None`
-    /// for an empty one. You can override it by setting the field directly after
-    /// building, or by constructing the `Menu` struct literal.
+    /// for an empty one. To pre-select a different item, either set this field
+    /// directly after building (`menu.default = Some(n)`) or construct the
+    /// struct literal. The session clones the whole `Menu` at open and reads
+    /// this field once as the initial highlight; subsequent navigation does not
+    /// write it back to the original, so re-activating the menu always restarts
+    /// on this index.
     ///
     /// [`items`]: Menu::items
     pub default: Option<usize>,
@@ -227,7 +263,11 @@ impl Menu {
     /// Start building a menu with the fluent [`MenuBuilder`].
     ///
     /// The returned builder starts empty; chain `.command()`, `.command_key()`,
-    /// `.submenu()`, and `.separator()` calls, then call `.build()`.
+    /// `.submenu()`, and `.separator()` calls, then finish with `.build()`.
+    /// The first item appended automatically becomes the default selection
+    /// (`default = Some(0)`). Use this for the common case; if you need a
+    /// non-first default or full control over every field, construct a `Menu`
+    /// struct literal directly (both fields are `pub`).
     pub fn builder() -> MenuBuilder {
         MenuBuilder::default()
     }
@@ -250,7 +290,15 @@ impl Menu {
 /// ```
 ///
 /// Each method appends exactly one [`MenuItem`] and returns `self` for
-/// chaining. The first item appended sets [`Menu::default`] to `Some(0)`.
+/// chaining. The first item appended sets [`Menu::default`] to `Some(0)`,
+/// making the first item pre-selected when the menu opens. **The builder
+/// always uses `Some(0)` as the default** — there is no builder method to
+/// choose a different pre-selected item. If you need a non-first default
+/// (e.g. to match the Turbo Vision two-argument `TMenu(itemList, theDefault)`
+/// constructor), build the item list with the builder, then override the field:
+/// `let mut menu = builder.build(); menu.default = Some(n);`, or construct a
+/// [`Menu`] struct literal directly (both fields are `pub`).
+///
 /// For items that need full field control (custom `help_ctx`, pre-set
 /// `disabled`, etc.) use [`MenuBuilder::item`] with a [`MenuItem`] literal.
 ///
