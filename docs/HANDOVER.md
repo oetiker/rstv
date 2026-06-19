@@ -38,7 +38,7 @@ worktree.)
   worktree's `docs/superpowers/` and `.git/.../sdd/progress.md`), not here.
 
 **What is stacked on the branch (all two-stage + final-reviewed clean, un-merged;
-integrated-tree gate green: 1275 lib tests, `clippy --all-targets`, `fmt`):**
+integrated-tree gate green: 1277 lib tests, `clippy --all-targets`, `fmt`):**
 - **Axis A + C.1** (`45d5f04`, `f9d611e`) — the original `tcv` consumer-api gaps:
   window decoration flags made public + builders; `get_help_ctx` bubbles to the
   focused child (idle status-line path, faithful to `TView::TopView`).
@@ -75,7 +75,7 @@ integrated-tree gate green: 1275 lib tests, `clippy --all-targets`, `fmt`):**
   **Recorded exceptions:** `ThemeColorPick` (payload is `Color`, not `FieldValue`)
   + dialog-OPEN pre-fill reads (structural "build UI from known widget state").
   Docs updated (`apps/dialogs.md`, `internals/custom-view.md`, IMPLEMENTATION-LOG).
-  Gate: 1275 lib tests, clippy, fmt, examples green; no snapshot changes.
+  Gate: 1277 lib tests, clippy, fmt, examples green; no snapshot changes.
 
 **The driving design — spec v5 (read before Phase 3):**
 `docs/superpowers/specs/2026-06-18-unified-data-movement-design.md` — unify the
