@@ -33,9 +33,25 @@
 /// Carries one variant per kind of value a control transfers. Cluster controls
 /// (check boxes, radio buttons) keep their bit value internal and the color
 /// picker uses a dedicated accessor, so neither has a variant here.
+///
+/// Dialog gather walks child views in order, collecting each
+/// [`View::value`](crate::view::View::value) result into a
+/// `Vec<Option<FieldValue>>`; scatter distributes an edited record back by
+/// calling [`View::set_value`](crate::view::View::set_value) in the same order.
+/// Controls that do not participate return `None` from `value`.
+///
+/// # Turbo Vision heritage
+///
+/// Replaces the original untyped `getData`/`setData` buffer protocol.
+/// `TMemoData` (a `length` word + inline byte buffer) and the
+/// `TVTransfer` flag (`vtGetData`/`vtSetData`/`vtDataSize`) are fully
+/// subsumed by this typed enum.
 #[derive(Clone, Debug, PartialEq)]
 pub enum FieldValue {
-    /// A text field's contents (an input line).
+    /// A text field's string contents, used by `InputLine::value` and
+    /// `Memo::value`. Produced during a dialog gather walk and consumed
+    /// during scatter. Replaces the raw `TMemoData` buffer that
+    /// `TMemo::getData`/`setData` filled in the original.
     Text(String),
     /// An integer value (a scroll bar's position; read by the scroller via
     /// [`View::value`](crate::view::View::value)).
