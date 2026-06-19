@@ -280,6 +280,9 @@ impl CaptureHandler for ModalFrame {
 /// [`Program::pump_once`] in tests.
 ///
 /// # Turbo Vision heritage
+/// Boxed per-idle-pass callback registered via [`Program::set_on_idle`].
+type IdleHook = Box<dyn FnMut(&mut Program)>;
+
 /// Ports `TProgram` (`tprogram.cpp`). The original derived an application class
 /// from this root by inheritance; here [`Application`] embeds a `Program` and
 /// forwards to it (deviation D2), and the single event loop replaces the nested
@@ -369,6 +372,10 @@ pub struct Program {
     /// Successor to `TApplication::writeShellMsg` (virtual in C++); set via
     /// [`Program::set_shell_msg_hook`].
     shell_msg_hook: Option<Box<dyn Fn() -> String>>,
+    /// Optional per-idle-pass callback (see [`Program::set_on_idle`]). Fired from
+    /// the run loop — never inside [`pump_once`](Self::pump_once)'s destructured
+    /// borrow — on every event-less pass.
+    on_idle: Option<IdleHook>,
 }
 
 /// What to do with a view-triggered modal's result, run AFTER the modal loop ends
@@ -596,6 +603,7 @@ impl Program {
             clipboard_editor_id: None,
             clipboard_has_selection: false,
             shell_msg_hook: None,
+            on_idle: None,
         }
     }
 
@@ -627,6 +635,26 @@ impl Program {
     /// lives in [`default_shell_msg`].
     pub fn set_shell_msg_hook(&mut self, hook: Box<dyn Fn() -> String>) {
         self.shell_msg_hook = Some(hook);
+    }
+
+    /// Register a callback run once on every **idle** pass of the event loop —
+    /// each iteration where no input event was waiting.
+    ///
+    /// Use it for background work that should advance whenever the app is not
+    /// busy: a clock, an animation frame, a periodic refresh. The callback gets
+    /// `&mut Program`, so it can insert/close windows, post commands, or read
+    /// state. Keep it cheap — it runs on the loop's idle cadence (the 20 ms frame
+    /// tick), not a real-time scheduler. For exact timing, prefer a timer
+    /// ([`Event::Timer`]).
+    ///
+    /// Only one idle callback is held; a second call replaces the first.
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// The successor to overriding `TProgram::idle`, which Turbo Vision called
+    /// once per event-less loop pass (the guide's clock / heap-display pattern).
+    pub fn set_on_idle(&mut self, f: impl FnMut(&mut Program) + 'static) {
+        self.on_idle = Some(Box::new(f));
     }
 
     /// Thin test accessor over [`resolve_shell_msg`]: returns the same string
@@ -801,11 +829,30 @@ impl Program {
     /// **Quit-from-popup note:** the inner `exec_view`'s result is discarded here
     /// and `end_state` restored, so a quit command ending the *inner* history modal
     /// is swallowed (no app quit from inside the popup). The popup is dismiss-only.
-    fn pump_and_drive(&mut self) {
-        self.pump_once();
+    ///
+    /// On an **idle** pass (no input event — [`pump_once`](Self::pump_once)
+    /// returned `true`) it fires the user idle hook
+    /// ([`set_on_idle`](Self::set_on_idle)). The hook runs **outside** any
+    /// `pump_once` destructured borrow: this method holds a whole `&mut self`, so
+    /// it takes the boxed `FnMut` out (calling it then holds the only `&mut self`)
+    /// and restores it — unless the callback replaced it via `set_on_idle`, in
+    /// which case the new box is kept. Returns the `was_idle` bool.
+    fn pump_and_drive(&mut self) -> bool {
+        let was_idle = self.pump_once();
         if let Some((view, completion, initial_focus)) = self.pending_modal.take() {
             self.exec_view_with_completion(view, Some(completion), initial_focus, None, false);
         }
+        if was_idle {
+            let mut h = self.on_idle.take();
+            if let Some(f) = h.as_mut() {
+                f(self);
+            }
+            // Restore unless the callback replaced it via set_on_idle.
+            if self.on_idle.is_none() {
+                self.on_idle = h;
+            }
+        }
+        was_idle
     }
 
     /// The end-command validation gate for the **app run loop**
@@ -1669,7 +1716,12 @@ impl Program {
     /// (`out_events` / `timers` / `deferred`) can be borrowed alongside
     /// `group` / `captures`. The dispatch is a free function with explicit field
     /// borrows; there are no `&mut self` helpers with overlapping field sets.
-    pub fn pump_once(&mut self) {
+    ///
+    /// Returns `true` when this pass was **idle** — the `None =>` arm ran because
+    /// no input event (real, queued, or synthesized mouse-auto) was waiting. The
+    /// run loop uses this to fire the user idle hook ([`set_on_idle`](Self::set_on_idle))
+    /// outside this destructured borrow.
+    pub fn pump_once(&mut self) -> bool {
         let Program {
             group,
             renderer,
@@ -1694,6 +1746,10 @@ impl Program {
             clipboard_editor_id,
             clipboard_has_selection,
             shell_msg_hook,
+            // The idle hook is fired from the run loop (outside this destructured
+            // borrow), never here; bind it `_` to satisfy the exhaustive
+            // destructure under `-D warnings`.
+            on_idle: _,
         } = self;
 
         // 1. Resize check — the realization of setScreenMode/cmScreenChanged.
@@ -1747,6 +1803,11 @@ impl Program {
             }
             None => mouse_auto.synthesize(now),
         };
+
+        // A pass is "idle" iff the final event (after the mouse-auto synthesizer)
+        // is None — i.e. the `None =>` arm below runs. The run loop fires the user
+        // idle hook on these passes.
+        let was_idle = ev.is_none();
 
         match ev {
             // 4. No event -> idle (ports TProgram::idle), then fall through to
@@ -2887,6 +2948,8 @@ impl Program {
             let mut dc = DrawCtx::new(buf, theme, bounds, bounds.a);
             group.draw(&mut dc);
         });
+
+        was_idle
     }
 
     // -- test/inspection accessors ------------------------------------------
@@ -11079,5 +11142,38 @@ mod tests {
         assert_eq!(program.shell_msg(), "first");
         program.set_shell_msg_hook(Box::new(|| "second".to_string()));
         assert_eq!(program.shell_msg(), "second");
+    }
+
+    #[test]
+    fn on_idle_fires_each_idle_pass() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+
+        // Settle startup: the first idle pass queues a COMMAND_SET_CHANGED
+        // broadcast (command_set_changed == true at construction), and the next
+        // pass dispatches it — a non-idle pass. Drain both so the loop below sees
+        // only genuinely event-less passes.
+        program.pump_and_drive(); // idle: emits the startup broadcast
+        program.pump_and_drive(); // non-idle: dispatches it
+
+        let ticks = Rc::new(Cell::new(0u32));
+        let ticks_in = ticks.clone();
+        program.set_on_idle(move |_p| {
+            ticks_in.set(ticks_in.get() + 1);
+        });
+
+        // No events queued -> every pump pass is now idle. Drive a few passes.
+        for _ in 0..3 {
+            program.pump_and_drive();
+        }
+
+        assert_eq!(
+            ticks.get(),
+            3,
+            "idle hook should fire once on each event-less pass, got {}",
+            ticks.get()
+        );
     }
 }
