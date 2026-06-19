@@ -526,33 +526,55 @@ impl Editor {
 
     // -- test/inspection accessors ------------------------------------------
 
-    /// Logical text length.
+    /// Number of logical text bytes currently in the buffer (not counting the gap).
+    ///
+    /// Use this to check whether the editor is empty (`buf_len() == 0`) or to
+    /// drive a progress indicator. For the raw text itself, call [`text`](Editor::text).
     pub fn buf_len(&self) -> usize {
         self.buf_len
     }
 
-    /// The cursor position (logical offset).
+    /// Byte offset of the cursor in the logical (gap-elided) text.
+    ///
+    /// Use this to record the cursor position before a programmatic edit, or to
+    /// verify cursor placement in tests. Offsets are byte-granular; grapheme
+    /// boundaries are respected by the navigation methods but not enforced here.
     pub fn cur_ptr(&self) -> usize {
         self.cur_ptr
     }
 
-    /// The content extent (`(max line length, line count)`).
+    /// Content extent: `x` = maximum line length (fixed at 256), `y` = number of lines.
+    ///
+    /// Use this to size or configure scroll bars programmatically: `limit().y` is
+    /// the total line count, which equals the vertical scroll range. `limit().x` is
+    /// always 256 (the fixed maximum line length used to set horizontal scroll range).
     pub fn limit(&self) -> Point {
         self.limit
     }
 
-    /// The scroll offset (viewport top-left).
+    /// Viewport top-left: `x` = first visible column, `y` = first visible row.
+    ///
+    /// Use this to read the current scroll position, for instance to restore it
+    /// after a programmatic buffer reload. The editor updates `delta` automatically
+    /// when the cursor moves off-screen; set it via [`apply_scroll_delta`](Editor::apply_scroll_delta).
     pub fn delta(&self) -> Point {
         self.delta
     }
 
-    /// The cursor's display position (zero-based row/col). Inspection hook for
-    /// tests asserting indicator/cursor wiring.
+    /// Cursor position in display coordinates: `x` = column, `y` = row (both zero-based).
+    ///
+    /// Use this to read the cursor's visual position, for example to assert
+    /// indicator wiring in tests or to display "line N, col M" in a status bar.
+    /// Updated by every navigation and edit operation.
     pub fn cur_pos(&self) -> Point {
         self.cur_pos
     }
 
-    /// Whether the buffer has unsaved changes.
+    /// Whether the buffer has unsaved changes since the last save or load.
+    ///
+    /// Use this to decide whether to prompt before closing, or to update a dirty
+    /// indicator. Set by any edit; cleared by [`FileEditor`]'s save path. The
+    /// clipboard editor is never marked modified.
     pub fn modified(&self) -> bool {
         self.modified
     }
@@ -1384,8 +1406,13 @@ impl Editor {
         self.flush_if_unlocked(ctx);
     }
 
-    /// Public ctx-taking insert used by the clipboard-paste broker. Inserts then
-    /// flushes (the flush republishes scroll-bar params next pump).
+    /// Insert `text` at the cursor, optionally leaving the inserted bytes selected.
+    ///
+    /// Use this to inject text from the outside (clipboard paste, template fill,
+    /// programmatic population). `select_text = true` leaves the new text selected
+    /// (useful for a paste that should be immediately replaceable). Flushes after
+    /// the insert so scroll-bar params and the indicator are updated on the next pump.
+    /// For a context-free insert (no flush) use the internal `insert_text_core`.
     pub fn insert_text(&mut self, text: &[u8], select_text: bool, ctx: &mut Context) {
         self.lock();
         self.insert_text_core(text, select_text);
@@ -2144,9 +2171,13 @@ impl View for Editor {
         ev.clear();
     }
 
-    /// Flip a state flag, then react: on a change of activity, show/hide the
-    /// scroll bars and indicator and re-gray the editing commands; on focus,
-    /// broadcast the focus gain/loss.
+    /// Set or clear a view state flag and react to the change.
+    ///
+    /// On `Active`: shows or hides the paired scroll bars and indicator and
+    /// re-grays the editing commands (Cut/Copy/Paste/Undo etc.). On `Focused`:
+    /// broadcasts `RECEIVED_FOCUS` or `RELEASED_FOCUS` so other views (such as
+    /// the indicator) can update. Override `update_commands` rather than this
+    /// method to customize command gating.
     fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
         self.state.set_flag(flag, enable);
         if flag == StateFlag::Focused {
@@ -2180,8 +2211,12 @@ impl View for Editor {
         // the first active/event boundary.
     }
 
-    /// Geometry + clamp `delta` + flag a redraw. Scrollbar params republish on
-    /// the next flush (mirrors the scroller).
+    /// Resize and reposition the editor to `bounds`, clamping the scroll offset so
+    /// the current content stays in view.
+    ///
+    /// Called by the parent group when the window is resized. Scroll-bar params are
+    /// republished on the next flush rather than inline (the same pattern as
+    /// [`Scroller`](crate::widgets::Scroller)).
     fn change_bounds(&mut self, bounds: Rect) {
         self.state.set_bounds(bounds);
         self.delta.x = 0.max(self.delta.x.min(self.limit.x - self.state.size.x));
@@ -2189,7 +2224,12 @@ impl View for Editor {
         self.update(UF_VIEW);
     }
 
-    /// The editor is valid when its buffer allocated successfully.
+    /// Returns `true` when the editor's buffer allocated successfully; `false` if
+    /// allocation failed (a zero-size fixed buffer).
+    ///
+    /// Called by the framework before a close or dialog-accept to decide whether to
+    /// proceed. The base editor only checks the allocation flag; `FileEditor`
+    /// overrides this to run the modified-save Yes/No/Cancel prompt instead.
     fn valid(&mut self, _cmd: crate::command::Command, _ctx: &mut Context) -> bool {
         self.is_valid
     }
