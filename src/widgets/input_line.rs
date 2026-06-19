@@ -196,6 +196,24 @@ impl InputLine {
         Self::new(bounds, limit, None, LimitMode::MaxBytes)
     }
 
+    /// Replace this field's validator after construction.
+    ///
+    /// Pass `Some(validator)` to attach a [`Validator`](crate::validate::Validator)
+    /// that filters keystrokes and checks the field on focus-change/close, or
+    /// `None` to remove any constraint. The previous validator (if any) is dropped.
+    ///
+    /// Most fields set their validator once via [`InputLine::new`]; use this when
+    /// the constraint is only known later (e.g. it depends on another control's
+    /// value gathered at dialog-open time).
+    ///
+    /// # Turbo Vision heritage
+    ///
+    /// Mirrors `TInputLine::setValidator`, which disposed the old validator and
+    /// assigned the new one.
+    pub fn set_validator(&mut self, validator: Option<Box<dyn crate::validate::Validator>>) {
+        self.validator = validator;
+    }
+
     // -- geometry helpers (byte ↔ column) ----------------------------------
 
     /// The display column of the prefix `data[..pos]` (`pos` is a byte offset).
@@ -2254,5 +2272,36 @@ mod tests {
                 "Enter must remain live (bubble) under the active preset"
             );
         }
+    }
+
+    #[test]
+    fn set_validator_replaces_constructor_validator() {
+        use crate::validate::FilterValidator;
+        // Build with no validator, then attach one that only allows digits.
+        let mut line = InputLine::new(Rect::new(0, 0, 10, 1), 9, None, LimitMode::default());
+        assert!(line.validator.is_none());
+
+        line.set_validator(Some(Box::new(FilterValidator::new("0123456789"))));
+        assert!(line.validator.is_some());
+        // The freshly-attached validator rejects a non-digit keystroke.
+        let mut non_digit = String::from("a");
+        let mut digit = String::from("7");
+        assert!(
+            !line
+                .validator
+                .as_ref()
+                .unwrap()
+                .is_valid_input(&mut non_digit, false)
+        );
+        assert!(
+            line.validator
+                .as_ref()
+                .unwrap()
+                .is_valid_input(&mut digit, false)
+        );
+
+        // Clearing it removes the constraint.
+        line.set_validator(None);
+        assert!(line.validator.is_none());
     }
 }
