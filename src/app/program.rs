@@ -3064,22 +3064,24 @@ fn apply_modal_completion(
                 .and_then(|v| v.value())
                 .and_then(field_text)
                 .unwrap_or_default();
-            let opts = group
+            // Options via value() (Bits) — no downcast. Mask to bits 0-3
+            // (case, whole-words, prompt, replace-all), then set EF_DO_REPLACE
+            // unconditionally for the replace flow.
+            let opts = (group
                 .find_mut(opts_id)
-                .and_then(|v| v.as_any_mut())
-                .and_then(|a| a.downcast_mut::<crate::widgets::CheckBoxes>())
-                .map(|cb| cb.cluster.value as u16)
+                .and_then(|v| v.value())
+                .and_then(field_bits)
                 .unwrap_or(0)
-                & 0x000F; // bits 0-3: case, whole-words, prompt, replace-all
-            if let Some(ed) = group
-                .find_mut(editor_id)
-                .and_then(|v| v.as_any_mut())
-                .and_then(|a| a.downcast_mut::<crate::widgets::Editor>())
-            {
-                ed.set_find_str(find_str);
-                ed.set_replace_str(replace_str);
-                // EF_DO_REPLACE (0x0010) is set unconditionally for replace.
-                ed.set_editor_flags(opts | crate::widgets::EF_DO_REPLACE);
+                & 0x000F)
+                | crate::widgets::EF_DO_REPLACE as u32;
+            // Deliver via set_modal_data (the 3-element Replace shape: find +
+            // replace + flags) — virtual dispatch, never a downcast.
+            if let Some(ed) = group.find_mut(editor_id) {
+                ed.set_modal_data(crate::data::FieldValue::List(vec![
+                    crate::data::FieldValue::Text(find_str),
+                    crate::data::FieldValue::Text(replace_str),
+                    crate::data::FieldValue::Bits(opts),
+                ]));
             }
             Some(Event::Command(Command::SEARCH_AGAIN))
         }

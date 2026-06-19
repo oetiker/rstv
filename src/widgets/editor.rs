@@ -1571,17 +1571,8 @@ impl Editor {
         self.editor_flags
     }
 
-    /// Set `find_str` — called from `FindPick`/`ReplacePick` completion.
-    pub(crate) fn set_find_str(&mut self, s: String) {
-        self.find_str = s;
-    }
-
-    /// Set `replace_str` — called from `ReplacePick` completion.
-    pub(crate) fn set_replace_str(&mut self, s: String) {
-        self.replace_str = s;
-    }
-
-    /// Set `editor_flags` — called from `FindPick`/`ReplacePick` completion.
+    /// Set `editor_flags` — used in tests and internal construction.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn set_editor_flags(&mut self, f: u16) {
         self.editor_flags = f;
     }
