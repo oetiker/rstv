@@ -22,6 +22,6 @@ Rust module(s): src/widgets/static_text.rs   |   magiblot: include/tvision/dialo
 
 ## Summary
 
-- PORTED: 3   EQUIVALENT: 3   NOT-PORTED: 4   MISSING: 0   UNSURE: 0
+- PORTED: 4   EQUIVALENT: 3   NOT-PORTED: 3   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 3   |   → concept: 0
 - Notable findings: `Draw` omits the `showMarkers`/`specialChars` column-0 glyph decoration (intentional, commented at `static_text.rs:304`; visible behavioral difference tracked in gap-report §2b). `HandleEvent`'s `focus_link` selectable-guard is delegated to `Group::focus_descendant` — documented in `focus_link`'s rustdoc but not in the method's own entry — a minor clarity gap. The NOT-PORTED count (4) is fully accounted for: stream persistence (2) + `shutDown` + `DataSize`-equivalent absence.

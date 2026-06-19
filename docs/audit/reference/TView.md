@@ -106,6 +106,6 @@ Rust module(s): src/view/view.rs, src/view/mod.rs, src/view/context.rs, src/view
 
 ## Summary
 
-- PORTED: 23   EQUIVALENT: 30   NOT-PORTED: 5   MISSING: 0   UNSURE: 0
+- PORTED: 28   EQUIVALENT: 45   NOT-PORTED: 5   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): ~28 (most map-only EQUIVALENT rows score 2; the data-member fields and verb helpers carry "what" but not always "how/when")   |   → concept: 1 (`DrawView` → view-tree/redraw model)
 - Notable findings: **No gaps and no suspect items** — every TView field/method has a faithful counterpart or a documented, deliberate deviation. The five NOT-PORTED entries are all the streaming family (`Load`/`Store`/`GetPeerViewPtr`/`PutPeerViewPtr`) plus `Exposed` — dropped under the documented `TStreamable`-removed (D-stream) and whole-tree-redraw (D-redraw) decisions. The large EQUIVALENT count reflects the three structural deviations that define the whole port: D2 (data→`ViewState` / methods→`View` trait), D3 (owner/sibling/peer pointers → `ViewId` + downward `Context`, so focus/select/sibling-nav/coordinate-transforms move to `Group`), and D5/D7 (flag words → struct-of-bools, palette → `Theme`). All are pre-decided and individually documented. The one detail worth a reader's note: `View::valid` carries `&mut Context` (an extension beyond C++ `Valid(command)`) to support the async-modal-from-a-view seam — clearly documented, not a divergence.

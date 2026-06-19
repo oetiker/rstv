@@ -21,6 +21,6 @@ Rust module(s): no dedicated module — sorted `Vec`/`partition_point` used inli
 
 ## Summary
 
-- PORTED: 0   EQUIVALENT: 5   NOT-PORTED: 2   MISSING: 0   UNSURE: 0
+- PORTED: 0   EQUIVALENT: 6   NOT-PORTED: 2   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 0   |   → concept: 0
 - Notable findings: No gaps or suspect items. The sorted-insert idiom (`partition_point` + `Vec::insert`) is concretely applied in `FileCollection::insert` and documented in its module doc. The `Duplicates` flag has no Rust equivalent because whether duplicates are admitted is encoded in the insertion logic rather than a runtime flag — an intentional, reasonable deviation. Both NOT-PORTED entries are `TStreamable` machinery (D12).

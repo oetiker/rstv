@@ -54,6 +54,6 @@ Rust module(s): `src/command.rs`, `src/app/`, `src/event/key.rs`, `src/view/view
 
 ## Summary
 
-- PORTED: 13   EQUIVALENT: 7   NOT-PORTED: 18   MISSING: 0   UNSURE: 0
+- PORTED: 11   EQUIVALENT: 7   NOT-PORTED: 21   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 17   |   → concept: 0
 - Notable finding: The `cmXXXX` command family (the single largest entry, spanning pages 322–325 with ~45 individual constants across 6 tables) is fully ported as `Command` newtype associated constants using namespaced `&'static str` identity (deviation D1). Every constant from `cmValid` through `cmFileClear` has a Rust counterpart; the deviation is deliberate and documented. The 18 NOT-PORTED entries are overwhelmingly DOS-era plumbing (`Abstract`, `CheckSnow`, `CursorLines`, `CtrlBreakHit`, all `Dispose*` procedures, `DisposeMenu`/`DisposeNode`/`DisposeStr`, the `ColorSel` builder functions, `AppPalette`/`apXXXX`, `ButtonCount`, `ClearScreen`, `coXXXX`) — none of these represent gaps in the Rust port's functionality.

@@ -20,6 +20,6 @@ Rust module(s): src/command.rs   |   magiblot: include/tvision/views.h / source/
 
 ## Summary
 
-- PORTED: 5   EQUIVALENT: 2   NOT-PORTED: 0   MISSING: 0   UNSURE: 0
+- PORTED: 6   EQUIVALENT: 2   NOT-PORTED: 0   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 7   |   → concept: 0
 - Notable findings: All semantics are present and correct. The most pervasive doc gap is that individual method rustdocs score 2 (what, not how/when) — in particular the `insert`/`remove` polarity-neutral alias rationale lives only in the type-level doc, not on the methods themselves, so readers who arrive at the method directly miss the denylist context.

@@ -20,6 +20,6 @@ Rust module(s): `src/widgets/cluster.rs`   |   magiblot: `include/tvision/dialog
 
 ## Summary
 
-- PORTED: 4   EQUIVALENT: 2   NOT-PORTED: 1   MISSING: 0   UNSURE: 0
+- PORTED: 4   EQUIVALENT: 2   NOT-PORTED: 0   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 5   |   → concept: 0
 - Notable finding: The `SetData` semantics include `Sel = Value` initialization, which ensures the selection bar starts on the pressed button after a data load. The Rust port opts out of the value protocol entirely, meaning direct `cluster.value` mutation without matching `cluster.sel` mutation would leave the visual cursor misplaced. This usage constraint is not documented anywhere in the public API.

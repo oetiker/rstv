@@ -23,6 +23,6 @@ Rust module(s): `src/view/geometry.rs` (re-exported as `tv::Point`)   |   magibl
 
 ## Summary
 
-- PORTED: 2   EQUIVALENT: 7   NOT-PORTED: 1   MISSING: 0   UNSURE: 0
+- PORTED: 2   EQUIVALENT: 7   NOT-PORTED: 2   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 4 (`x`, `y`, `Point::new`, operator impls)   |   → concept: 0
 - Notable findings: No gaps or suspect items. All arithmetic operators are faithfully present as idiomatic Rust trait impls. The one NOT-PORTED entry (stream operators) is correct and expected. The four public symbols scoring 2 could each be nudged to 3 by adding a sentence on when negative coordinates arise (scrolled-offscreen views) — the module doc explains this but the field-level docs do not.

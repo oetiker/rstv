@@ -26,6 +26,6 @@ Rust module(s): src/widgets/static_text.rs   |   magiblot: include/tvision/dialo
 
 ## Summary
 
-- PORTED: 1   EQUIVALENT: 4   NOT-PORTED: 6   MISSING: 0   UNSURE: 0
+- PORTED: 2   EQUIVALENT: 4   NOT-PORTED: 6   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 3   |   → concept: 0
 - Notable findings: The high NOT-PORTED count is expected — five entries are the Pascal `FormatStr`/`ParamList` machinery and stream persistence, all eliminated by design following magiblot. No gaps. The most actionable doc nudge: `set_text` and `text_len` lack a "when to use" paragraph; `set_text` should explicitly state that the caller formats via `format!(…)` rather than passing a format string.

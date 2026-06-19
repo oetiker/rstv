@@ -36,6 +36,6 @@ Rust module(s): `src/widgets/button.rs`   |   magiblot: `include/tvision/dialogs
 
 ## Summary
 
-- PORTED: 9   EQUIVALENT: 6   NOT-PORTED: 3   MISSING: 0   UNSURE: 0
+- PORTED: 11   EQUIVALENT: 8   NOT-PORTED: 3   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 7   |   → concept: 0
 - Notable finding: No correctness gaps or SUSPECT items. The most important design point is `DrawState` — C++ exposes it as a separate public method (called by both `Draw` and `HandleEvent`), but Rust merges it into `draw()` reading `self.down`; this is a deliberate and functionally correct deviation but is not called out in the `draw` rustdoc, which should note the merge for readers looking for the C++ counterpart.

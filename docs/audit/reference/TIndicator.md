@@ -20,6 +20,6 @@ Rust module(s): `src/widgets/indicator.rs`   |   magiblot: `include/tvision/edit
 
 ## Summary
 
-- PORTED: 4   EQUIVALENT: 3   NOT-PORTED: 1   MISSING: 0   UNSURE: 0
+- PORTED: 4   EQUIVALENT: 4   NOT-PORTED: 1   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 6   |   → concept: 0
 - Notable finding: No missing or suspect items. The most important gap is that `SetValue`/`set_value` silently drops the C++ no-op guard (skip update when location and modified are unchanged) because the whole-tree redraw makes it harmless — but this deviation is uncommented in the rustdoc, and the deferred-broker update path (`Deferred::IndicatorSetValue`) is not mentioned, leaving callers without a route back to the liveness invariant.

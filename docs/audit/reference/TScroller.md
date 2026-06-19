@@ -40,6 +40,6 @@ Rust module(s): `src/widgets/scroller.rs`   |   magiblot: `include/tvision/views
 
 ## Summary
 
-- PORTED: 6   EQUIVALENT: 8   NOT-PORTED: 5   MISSING: 0   UNSURE: 0
+- PORTED: 5   EQUIVALENT: 8   NOT-PORTED: 6   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 11   |   → concept: 1
 - Notable finding: `apply_delta` (the Rust analog of C++ `scrollDraw`) does not identify itself as such in its rustdoc — a reader looking for the `scrollDraw` counterpart will find the connection only by reading the module-level "Turbo Vision heritage" section, not the method doc.

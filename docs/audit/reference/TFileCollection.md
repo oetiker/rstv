@@ -21,6 +21,6 @@ Rust module(s): `src/dialog/filedlg.rs`   |   magiblot: `include/tvision/stddlg.
 
 ## Summary
 
-- PORTED: 2   EQUIVALENT: 7   NOT-PORTED: 4   MISSING: 0   UNSURE: 0
+- PORTED: 2   EQUIVALENT: 6   NOT-PORTED: 3   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 4   |   → concept: 0
 - Notable findings: No gaps or suspect items. The four NOT-PORTED entries are all correct: `freeItem` is RAII; the general-purpose collection manipulation methods are genuinely not needed (the file dialog only inserts and reads by index); and `TStreamable` is dropped per D12. The most important correctness point is the `search_rec_compare` invariant — "The sign of every branch matters — do not 'tidy' it" is documented in the source, and the test suite verifies all seven comparison branches.

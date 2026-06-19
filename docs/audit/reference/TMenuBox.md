@@ -17,6 +17,6 @@ Rust module(s): `src/menu/menu_box.rs`   |   magiblot: `include/tvision/menus.h`
 
 ## Summary
 
-- PORTED: 4   EQUIVALENT: 1   NOT-PORTED: 0   MISSING: 0   UNSURE: 0
+- PORTED: 5   EQUIVALENT: 1   NOT-PORTED: 0   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 2   |   → concept: 0
 - Notable finding: No gaps. The framed drop-down box is the most draw-complex of the three menu types, and every branch (separator row, command row with param, submenu row with `►` marker, highlight, disabled) is ported correctly and covered by the snapshot test. The `FrameKind` enum replacing the C++ `short n` array-offset encoding is a minor unannounced readability improvement — not a behavioural deviation.

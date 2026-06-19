@@ -40,6 +40,6 @@ Rust module(s): src/validate.rs   |   magiblot: include/tvision/validate.h / sou
 
 ## Summary
 
-- PORTED: 18   EQUIVALENT: 2   NOT-PORTED: 4   MISSING: 0   UNSURE: 0
+- PORTED: 16   EQUIVALENT: 1   NOT-PORTED: 3   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 2   |   → concept: 0
 - Notable findings: The recursive Paradox-mask engine is ported **verbatim** and was traced function-for-function (`scan`/`process`/`iteration`/`group`/`check_complete`/`skip_to_comma`/`syntax_check`) against `tvalidat.cpp` — including every subtle post-fixup (`prAmbiguous↔prIncompNoFill`, `prEmpty→prIncomplete`, greedy `index++`, trailing-input→prError, autofill-then-reprocess) and the final `prAmbiguous→prComplete` / `prIncompNoFill→prIncomplete` public mapping. No validation-logic divergence found; the only deltas are idiomatic (`PString`→`String`, byte-level over `&[u8]`/`Vec<u8>`, a per-call transient scanner because methods are `&self`, the fixed 256-byte C++ buffer replaced by a growable `Vec`). All 12 Table-19.41 character classes are present and behaviour-tested with hand-traced golden vectors.

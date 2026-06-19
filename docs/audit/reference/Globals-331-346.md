@@ -69,6 +69,6 @@ Rust module(s): `src/app/program.rs`, `src/app/application.rs`, `src/event/mod.r
 
 ## Summary
 
-- PORTED: 6   EQUIVALENT: 28   NOT-PORTED: 22   MISSING: 0   UNSURE: 0
+- PORTED: 6   EQUIVALENT: 29   NOT-PORTED: 23   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 33   |   → concept: 0
 - Notable finding: The Init*/Done* DOS subsystem lifecycle procedures (InitDosMem, InitSysError, InitEvents, InitMemory, InitVideo, DoneDosMem, DoneSysError, DoneMemory) are the single largest NOT-PORTED group (8 entries); they collapse cleanly into the `CrosstermBackend` RAII `Drop` and auto-initializing `thread_local!` store — a deliberate, architecture-level deviation that is documented in `application.rs`'s module doc but is not surfaced in individual rustdoc items. The 22 NOT-PORTED entries are all either DOS/EMS memory management, DOS interrupt vectors, or scan-code utilities that have no crossterm/Rust equivalent.

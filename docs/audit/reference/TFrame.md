@@ -16,6 +16,6 @@ Rust module(s): src/frame.rs   |   magiblot: include/tvision/views.h / source/tv
 
 ## Summary
 
-- PORTED: 3   EQUIVALENT: 2   NOT-PORTED: 0   MISSING: 0   UNSURE: 0
+- PORTED: 4   EQUIVALENT: 2   NOT-PORTED: 0   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 3   |   → concept: 0
 - Notable findings: No gaps or suspect items. The one non-obvious design point — Frame not overriding `set_state`, relying on Group propagation + whole-tree redraw instead — is documented in the module doc but the `SetState` mapping could carry a short explicit note in its own rustdoc to help readers who come looking for the C++ override.

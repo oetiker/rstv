@@ -37,6 +37,6 @@ Rust module(s): `src/dialog/filedlg.rs`   |   magiblot: `include/tvision/stddlg.
 
 ## Summary
 
-- PORTED: 13   EQUIVALENT: 9   NOT-PORTED: 2   MISSING: 0   UNSURE: 0
+- PORTED: 15   EQUIVALENT: 9   NOT-PORTED: 2   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 18   |   → concept: 0
 - Notable findings: No missing or suspect items. The two most notable idiomatic deviations — raw `TFileInputLine*`/`TFileList*` pointers becoming `ViewId` handles (D3), and `getData`/`setData` becoming the D10 value protocol — are both deliberate, documented, and correctly implemented. The `Load`/`Store`/`shutDown` trio is cleanly not-ported per D12 with no stubs left behind.

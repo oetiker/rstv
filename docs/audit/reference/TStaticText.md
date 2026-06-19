@@ -20,6 +20,6 @@ Rust module(s): src/widgets/static_text.rs   |   magiblot: include/tvision/dialo
 
 ## Summary
 
-- PORTED: 2   EQUIVALENT: 3   NOT-PORTED: 3   MISSING: 0   UNSURE: 0
+- PORTED: 2   EQUIVALENT: 4   NOT-PORTED: 3   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 2   |   → concept: 0
 - Notable findings: No gaps or suspect items. The three NOT-PORTED entries are all stream-persistence machinery (`Load`/`Done`/`Store`) dropped project-wide by design. The one worth a doc nudge: `text()` could explicitly note the absence of the 255-byte cap from `getText` to help C++ veterans understand the deviation.

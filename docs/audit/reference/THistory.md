@@ -23,6 +23,6 @@ Rust module(s): `src/widgets/history.rs` (`struct THistory`)   |   magiblot: `in
 
 ## Summary
 
-- PORTED: 3   EQUIVALENT: 5   NOT-PORTED: 2   MISSING: 0   UNSURE: 0
+- PORTED: 3   EQUIVALENT: 6   NOT-PORTED: 2   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 8   |   → concept: 0
 - Notable finding: `initHistoryWindow` omits the C++ `helpCtx` copy (`p->helpCtx = link->helpCtx`). This is functionally silent (help context routing is not ported), but it is not documented as a deliberate omission — a comment on `Deferred::OpenHistory` noting the omission would close the gap for future help-routing work.

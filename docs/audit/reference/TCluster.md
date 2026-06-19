@@ -36,6 +36,6 @@ Rust module(s): `src/widgets/cluster.rs`   |   magiblot: `include/tvision/dialog
 
 ## Summary
 
-- PORTED: 12   EQUIVALENT: 7   NOT-PORTED: 3   MISSING: 0   UNSURE: 0
+- PORTED: 11   EQUIVALENT: 10   NOT-PORTED: 3   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 10   |   → concept: 0
 - Notable finding: No missing or suspect items. The most important gap is that cluster `value`/`sel` fields are publicly mutable (`pub`) with no accessor, while the guide marks both as read-only — callers can corrupt state without going through `press`/`moved_to`. This is a deliberate simplification not flagged in docs.

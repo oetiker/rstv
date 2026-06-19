@@ -23,6 +23,6 @@ Rust module(s): src/desktop/desktop.rs   |   magiblot: include/tvision/app.h / s
 
 ## Summary
 
-- PORTED: 5   EQUIVALENT: 2   NOT-PORTED: 2   MISSING: 0   UNSURE: 0
+- PORTED: 6   EQUIVALENT: 2   NOT-PORTED: 2   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 3   |   → concept: 0
 - Notable findings: No gaps or suspect items. The two NOT-PORTED entries (`tileError`, `shutDown`) are both deliberate and commented — `tileError` is silently absorbed into early-return guards; `shutDown` is replaced by RAII. The most documentation-incomplete item is `getTileRect` on `Application`, which explains what the method returns but not that callers should pass its result directly to `Desktop::tile`/`cascade`.

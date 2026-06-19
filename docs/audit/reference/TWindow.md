@@ -41,6 +41,6 @@ Rust module(s): `src/window/window.rs`, `src/window/mod.rs`   |   magiblot: `inc
 
 ## Summary
 
-- PORTED: 7   EQUIVALENT: 9   NOT-PORTED: 6   MISSING: 0   UNSURE: 0
+- PORTED: 11   EQUIVALENT: 10   NOT-PORTED: 6   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 13   |   → concept: 0
 - Notable finding: No correctness gaps or SUSPECT items. The most architecturally significant deviation is `cmSelectWindowNum` handling: C++ does it inline in `TWindow::handleEvent` (matching on `event.message.infoInt == number`), but Rust moves the whole mechanism to `program_handle_event` + `Desktop::select_window_num` + `Group::focus_by_number` — the window's `select_window_num` method is in the `#[delegate(skip(…))]` list and the `handle_event` doc comment explains why. This is correct and deliberate, but it is the one place where a reader looking for the C++ broadcast-handler will not find it in the Window at all.

@@ -22,6 +22,6 @@ Rust module(s): src/dialog/filedlg.rs   |   magiblot: include/tvision/stddlg.h /
 
 ## Summary
 
-- PORTED: 5   EQUIVALENT: 2   NOT-PORTED: 1   MISSING: 0   UNSURE: 0
+- PORTED: 6   EQUIVALENT: 2   NOT-PORTED: 1   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 4   |   → concept: 0
 - Notable finding: The `setState` → `MakeButtonDefault` pump broker is the non-obvious design point — the C++ reaches the owner by raw downcast (`(TChDirDialog*)owner`), while Rust routes the request through the `Deferred` channel. This is documented in the method and field comments; no gap.

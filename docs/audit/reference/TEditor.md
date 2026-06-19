@@ -104,7 +104,7 @@ Rust module(s): src/widgets/editor.rs (`Editor`, plus the `Memo`/`FileEditor` em
 
 ## Summary
 
-- PORTED: 36   EQUIVALENT: 11   NOT-PORTED: 5   MISSING: 0   UNSURE: 0
+- PORTED: 50   EQUIVALENT: 10   NOT-PORTED: 4   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): ~8 (mostly private fields surfaced by score-2 read accessors; the public surface — `new`, `draw`, `handle_event`, `search` — scores 3)   |   → concept: 0
 - Notable findings: **No missing or suspect behavior** — the entire TEditor
   surface (gap buffer, undo, selection, clipboard, search/replace, file editor,

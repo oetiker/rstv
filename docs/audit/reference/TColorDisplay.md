@@ -19,6 +19,6 @@ Rust module(s): `src/dialog/colorpick/info.rs`   |   magiblot: `include/tvision/
 
 ## Summary
 
-- PORTED: 0   EQUIVALENT: 4   NOT-PORTED: 1   MISSING: 0   UNSURE: 0
+- PORTED: 0   EQUIVALENT: 5   NOT-PORTED: 1   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 3   |   → concept: 0
 - Notable: The `text` field (static text string drawn in palette colors) is NOT-PORTED because the rebuilt `InfoColumn` shows structured old/new swatches and a variant readout instead — a richer, equivalent capability.

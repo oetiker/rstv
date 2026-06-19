@@ -18,6 +18,6 @@ Rust module(s): src/widgets/outline.rs   |   magiblot: include/tvision/outline.h
 
 ## Summary
 
-- PORTED: 5   EQUIVALENT: 1   NOT-PORTED: 0   MISSING: 0   UNSURE: 0
+- PORTED: 6   EQUIVALENT: 1   NOT-PORTED: 0   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 6   |   → concept: 0
 - Notable findings: No gaps or correctness issues. All four fields and both constructors are ported faithfully. The main doc gap is that none of the public items score 3 — the builder-chain pattern and its relationship to the C++ 4-arg constructor, plus the ownership/drop semantics, would each benefit from a short "how/when" sentence.

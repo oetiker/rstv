@@ -29,6 +29,6 @@ Rust module(s): `src/dialog/filedlg.rs`   |   magiblot: `include/tvision/stddlg.
 
 ## Summary
 
-- PORTED: 7   EQUIVALENT: 5   NOT-PORTED: 5   MISSING: 0   UNSURE: 0
+- PORTED: 7   EQUIVALENT: 5   NOT-PORTED: 6   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 6   |   → concept: 0
 - Notable findings: No gaps or suspect items. The five NOT-PORTED entries are all correctly modeled: `getData`/`setData`/`dataSize` were no-ops in C++ (→ `value() == None`); `newList`/`list()` are replaced by the Vec-based `read_directory`; and `tooManyFiles` has no Rust analog. The most non-obvious entry is `getKey`→`search` with its attr-routing invariant (the discriminating test in `search_attr_routes_into_file_vs_dir_section` proves it correctly).

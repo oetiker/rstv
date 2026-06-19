@@ -21,6 +21,6 @@ Rust module(s): `src/validate.rs`   |   magiblot: `include/tvision/validate.h` /
 
 ## Summary
 
-- PORTED: 2   EQUIVALENT: 2   NOT-PORTED: 3   MISSING: 0   UNSURE: 0
+- PORTED: 3   EQUIVALENT: 2   NOT-PORTED: 3   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 2   |   → concept: 0
 - Notable finding: The `lookup` collapse (linear `any` scan vs. C++ binary search in a `TStringCollection`) is correct for membership but loses O(log n) performance on large lists; worth a note in the `is_valid` doc. The nil-arg form of `newStringList` (dispose-without-assigning) has no Rust analog — passing an empty `Vec` differs in that it replaces rather than just frees, which is not documented.

@@ -31,6 +31,6 @@ Rust module(s): `src/view/geometry.rs` (re-exported as `tv::Rect`)   |   magiblo
 
 ## Summary
 
-- PORTED: 7   EQUIVALENT: 7   NOT-PORTED: 2   MISSING: 0   UNSURE: 0
+- PORTED: 9   EQUIVALENT: 7   NOT-PORTED: 2   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 7 (`a`, `b`, `new`, `from_points`, `contains`, `grow`, `intersect`, `r#move`, `r#union`, `is_empty`)   |   → concept: 0
 - Notable findings: No gaps or suspect items — every guide method has a direct counterpart, and the two raw-identifier renames (`r#move`, `r#union`) are correctly explained in the module doc. The most actionable doc gap: `contains` scores 2 but the half-open edge-exclusion rule (right/bottom edges excluded) is critical for correct hit-testing and deserves a sentence in the method doc itself, not just in a test comment. Seven public symbols currently score 2; all could reach 3 with a "when/how to use" phrase.

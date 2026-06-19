@@ -47,6 +47,6 @@ Rust module(s): src/widgets/outline.rs   |   magiblot: include/tvision/outline.h
 
 ## Summary
 
-- PORTED: 22   EQUIVALENT: 5   NOT-PORTED: 3   MISSING: 0   UNSURE: 0
+- PORTED: 25   EQUIVALENT: 5   NOT-PORTED: 3   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 19   |   → concept: 0
 - Notable findings: No correctness gaps. The `expanded` and `selected` entries in the p. 492 class diagram are guide-diagram artifacts — not real C++ members (no distinct method or field exists in `toutline.h`/`.cpp`). The most impactful doc gap is `ov_update`: the "must call after insert" contract lives only in the module doc, not on the function itself, so a user landing directly on `ov_update` via rustdoc will miss it.

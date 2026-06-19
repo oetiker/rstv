@@ -20,6 +20,6 @@ Rust module(s): `src/screen/draw_buffer.rs`   |   magiblot: `include/tvision/dra
 
 ## Summary
 
-- PORTED: 5   EQUIVALENT: 3   NOT-PORTED: 0   MISSING: 0   UNSURE: 0
+- PORTED: 6   EQUIVALENT: 3   NOT-PORTED: 0   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 2   |   → concept: 0
 - Notable findings: No gaps or suspect items. The `put_attribute` and `put_char` doc strings score 2 — they explain what each method does but a short "prefer this over `move_char` when changing only one axis of a cell" would push them to 3.

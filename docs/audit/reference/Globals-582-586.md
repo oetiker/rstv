@@ -24,6 +24,6 @@ Rust module(s): `src/validate.rs`, `src/window/window.rs`, `src/widgets/editor.r
 
 ## Summary
 
-- PORTED: 0   EQUIVALENT: 12   NOT-PORTED: 4   MISSING: 0   UNSURE: 0
+- PORTED: 0   EQUIVALENT: 13   NOT-PORTED: 4   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 5 (`voFill`/`voTransfer` → `PXPictureValidator` fields, `vsOK`/`vsSyntax` → `is_status_ok`, `wnNoNumber` → `Window::new` doc)   |   → concept: 0
 - Notable finding: No gaps or suspect items. The four NOT-PORTEDs (`vmtHeaderSize`, `voReserved`, `WindowColorItems`, `WordRec`) are all correct non-ports — Pascal VMT artifacts and the unported colour-editor subsystem. The most actionable doc gap is `wnNoNumber`: `Window::new`'s `number` parameter should document that passing `0` means "no number" (the `wnNoNumber` sentinel), since this is the only way to create an unnumbered window.

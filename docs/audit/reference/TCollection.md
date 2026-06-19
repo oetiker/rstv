@@ -43,6 +43,6 @@ Rust module(s): no dedicated module — `Vec<T>` / slices used inline throughout
 
 ## Summary
 
-- PORTED: 0   EQUIVALENT: 16   NOT-PORTED: 10   MISSING: 0   UNSURE: 0
+- PORTED: 0   EQUIVALENT: 20   NOT-PORTED: 10   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 0   |   → concept: 0
 - Notable findings: No gaps or suspect items. The "collections become `Vec`" idiom is consistently applied and explicitly documented in the filedlg module doc (lines 11-14: "Following tvision-rs's 'collections become `Vec`' convention"). The 10 NOT-PORTED entries are all DOS memory-manager artifacts (`Delta`, `Pack`, `nil`-pointer handling) or `TStreamable` machinery (D12) — all intentionally absent. No `TCollection` type is needed or missing.

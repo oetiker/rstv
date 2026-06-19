@@ -42,6 +42,6 @@ Rust module(s): `src/widgets/scrollbar.rs`   |   magiblot: `include/tvision/view
 
 ## Summary
 
-- PORTED: 11   EQUIVALENT: 13   NOT-PORTED: 2   MISSING: 0   UNSURE: 0
+- PORTED: 14   EQUIVALENT: 14   NOT-PORTED: 2   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 13   |   → concept: 1
 - Notable finding: `set_params` omits the C++ `drawView()` call (D9 whole-tree redraw handles repaint) but does not call this out explicitly in its own doc comment — a reader searching for why the scrollbar does not call `draw_view` on a range change will find the answer only in the module-level heritage section, not at the method level.

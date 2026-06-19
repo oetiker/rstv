@@ -40,6 +40,6 @@ Rust module(s): `src/widgets/terminal.rs`   |   magiblot: `include/tvision/textv
 
 ## Summary
 
-- PORTED: 9   EQUIVALENT: 2   NOT-PORTED: 4   MISSING: 0   UNSURE: 0
+- PORTED: 11   EQUIVALENT: 2   NOT-PORTED: 4   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 3   |   → concept: 1
 - Notable finding: All four NOT-PORTED entries (`curLoc`, `screenLines`, `calcWidth`, `queFull`) are Borland Pascal TV 2.0 artifacts absent from the magiblot C++ port that is `tvision-rs`'s source of truth — no gaps. The one undocumented deviation (`draw()` omits `setCursor(-1,-1)` reset at entry) is benign under D9 whole-tree-redraw but is not called out anywhere.

@@ -20,6 +20,6 @@ Rust module(s): src/widgets/editor.rs (`struct Memo`)   |   magiblot: include/tv
 
 ## Summary
 
-- PORTED: 2   EQUIVALENT: 4   NOT-PORTED: 2   MISSING: 0   UNSURE: 0
+- PORTED: 2   EQUIVALENT: 5   NOT-PORTED: 2   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 4   |   → concept: 0
 - Notable findings: No gaps or suspect items. The most important design point — `getData`/`setData`/`dataSize` collapsed into the D10 `value`/`set_value` typed-value protocol — is the single dominant mapping for this class. The `dataSize` method has no public counterpart (correct: allocation sizing is implicit in `FieldValue`), and this should be made explicit in the `Memo` rustdoc to help callers who come from the C++ API looking for it.

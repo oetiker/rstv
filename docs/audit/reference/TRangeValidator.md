@@ -30,6 +30,6 @@ Rust module(s): src/validate.rs   |   magiblot: include/tvision/validate.h / sou
 
 ## Summary
 
-- PORTED: 4   EQUIVALENT: 3   NOT-PORTED: 2   MISSING: 0   UNSURE: 0
+- PORTED: 3   EQUIVALENT: 3   NOT-PORTED: 2   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 3   |   → concept: 0
 - Notable findings: Validation logic is a faithful port. The one behavioural difference — `parse::<i32>()` rejecting `sscanf`-style trailing junk / lone signs — is a deliberate, commented stricter simplification (benign because the charset filter pre-restricts the field), so it is OK not SUSPECT. The sign-of-min charset selection, charset-gate-then-range order, value-naming error box, and the typed-transfer mapping (D10) all match the C++. Inherited `isValidInput` (charset-only, no range while typing) is correctly preserved.

@@ -58,6 +58,6 @@ Rust module(s): src/view/group.rs (also src/view/mod.rs, src/view/context.rs, sr
 
 ## Summary
 
-- PORTED: 11   EQUIVALENT: 13   NOT-PORTED: 11   MISSING: 0   UNSURE: 0
+- PORTED: 10   EQUIVALENT: 15   NOT-PORTED: 10   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): ~9 (Init, Awaken, Delete, EndModal, Execute, GetData, InsertBefore, SelectNext, SetData score 2)   |   → concept: 4 (Phase, EndModal, ExecView, Execute → event-phase / modal-loop / single-event-loop guide chapters)
 - Notable findings: **No gaps and no SUSPECT items.** Every guide entry has a faithful or deliberately-mapped counterpart. The large NOT-PORTED count (11) is entirely the expected, documented infrastructure drops — the cache-buffer family (`Buffer`/`Draw`-from-buffer/`Lock`/`Unlock`/`Redraw`) replaced by whole-tree redraw + diff, the stream family (`Load`/`Store`/`GetSubViewPtr`/`PutSubViewPtr`) dropped with `TStreamable`, `DataSize` subsumed by the D10 value protocol, and `EventError` obsoleted by the single event loop. The non-obvious semantic point worth a reader's attention: `Insert`'s "becomes current" cascade is **deferred** (`currency_dirty` + `settle_currency`) rather than synchronous as in C++ — a documented D3 deviation whose load-bearing keystone is the `currency_dirty` clear in `set_current` (commented at length). The collection-walk methods (`First`/`Last`/`FirstThat`/`ForEach`) have no named symbols — they are idiomatically open-coded as `Vec`/iterator operations, which is correct but means a C++ veteran searching by name will not find them.

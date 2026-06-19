@@ -24,6 +24,6 @@ Rust module(s): `src/text.rs` (`tv::text::StringList`)   |   magiblot: `include/
 
 ## Summary
 
-- PORTED: 0   EQUIVALENT: 1   NOT-PORTED: 9   MISSING: 0   UNSURE: 0
+- PORTED: 0   EQUIVALENT: 1   NOT-PORTED: 8   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 1   |   → concept: 0
 - Notable finding: `Put` is the only user-visible capability and it maps cleanly to `StringList::insert`. All other entries are stream/persistence machinery (resource/streamable subsystem dropped, deviation D12). The maker-vs-reader split is intentionally collapsed.

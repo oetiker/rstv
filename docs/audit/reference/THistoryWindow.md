@@ -21,6 +21,6 @@ Rust module(s): `src/widgets/history.rs` (`struct HistoryWindow`)   |   magiblot
 
 ## Summary
 
-- PORTED: 4   EQUIVALENT: 3   NOT-PORTED: 1   MISSING: 0   UNSURE: 0
+- PORTED: 3   EQUIVALENT: 4   NOT-PORTED: 1   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 5   |   → concept: 0
 - Notable finding: `historyId` is listed as a THistoryWindow field in the guide but is not a field of the C++ class (the id lives only in the THistoryViewer); both C++ and Rust are consistent — it is not a gap. The most actionable documentation gap is `GetPalette`: the 7-slot `cpHistoryWindow` mapping to the Rust `Window` blue family + `HistoryViewer::LIST_ROLES` is implicit and a reader tracing the C++ palette chain cannot easily verify the equivalence from the current rustdoc.

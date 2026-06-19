@@ -335,6 +335,6 @@ C++ `sfXXXX` are bits in `TView.State`. Rust replaces the flag word with `tv::vi
 
 ## Summary
 
-- PORTED: 0   EQUIVALENT: 22   NOT-PORTED: 37   MISSING: 0   UNSURE: 0
+- PORTED: 3   EQUIVALENT: 35   NOT-PORTED: 43   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 18   |   → concept: 0
 - Notable finding: The entire DOS-driver/stream/video-mode layer (Register*, SaveCtrlBreak, ScreenBuffer, ScreenMode, SetVideoMode, SetMemTop, SetBufferSize, smXXXX, ShowMouse, ShowMarkers, SpecialChars, StartupMode, stXXXX, StreamError, StoreHistory, StoreIndexes, SysColorAttr, SysErrActive, SysErrorFunc, SysMonoAttr, SystemError, RepeatDelay, PtrRec, PrintStr) is intentionally NOT-PORTED — 37 entries — representing the bulk of the DOS-era substrate that has no Rust analog. The `sfXXXX` state flags, `sbXXXX` scrollbar parts, and `ShadowSize`/`ShadowAttr` are cleanly EQUIVALENT; `ShowMarkers`/`SpecialChars` (monochrome focus indicators) are the only functional gaps that could be added without touching DOS infrastructure.

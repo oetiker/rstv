@@ -381,6 +381,6 @@ All `of*` bit constants map to fields of the `Options` struct-of-bools (deviatio
 
 ## Summary
 
-- PORTED: 2   EQUIVALENT: 53   NOT-PORTED: 26   MISSING: 0   UNSURE: 0
+- PORTED: 2   EQUIVALENT: 68   NOT-PORTED: 28   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 37   |   → concept: 0
 - Notable finding: The **entire `kbXXXX` family** (Tables 19.19–19.26, ~60+ named C++ constants) collapses cleanly to the `Key` enum + `KeyModifiers` struct-of-bools (deviation D5). All entries are EQUIVALENT/OK. The largest NOT-PORTED cluster is the DOS memory-manager family (`LowMemory`, `LowMemSize`, `MaxBufMem`, `MaxHeapSize`, `MemAlloc`, `MemAllocSeg`, `NewBuffer`, `NewCache`) — all correct and intentional (no DOS heap analog in Rust). The **`mfXXXX` → `MessageBoxKind` + `MessageBoxButtons`** split is the most user-visible idiomatic substitution and is well-documented. `ovSelected` is not a real TV2 constant (no graph flag to port; selection is a theme role).

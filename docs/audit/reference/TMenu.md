@@ -14,6 +14,6 @@ Rust module(s): `src/menu/mod.rs`   |   magiblot: `include/tvision/menus.h` / `s
 
 ## Summary
 
-- PORTED: 0   EQUIVALENT: 5   NOT-PORTED: 1   MISSING: 0   UNSURE: 0
+- PORTED: 0   EQUIVALENT: 6   NOT-PORTED: 1   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 5   |   → concept: 0
 - Notable finding: The two-arg `TMenu(itemList, theDefault)` constructor — which lets the caller designate any item as the default, not just the first — has no builder equivalent and is only accessible via a struct literal; this is not called out in the `MenuBuilder` documentation.

@@ -62,6 +62,6 @@ Rust module(s): `src/event/mod.rs`, `src/event/key.rs`, `src/command.rs`   |   m
 
 ## Summary
 
-- PORTED: 3   EQUIVALENT: 23   NOT-PORTED: 8   MISSING: 0   UNSURE: 0
+- PORTED: 4   EQUIVALENT: 28   NOT-PORTED: 8   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 15   |   → concept: 0
 - Notable finding: The entire TEvent tagged union → `enum Event` mapping is clean and well-documented (deviation D4). The most actionable doc gaps are `Event::Nothing` (should explicitly state it doubles as the consumed-event sentinel, not only "no event"), `KeyEvent` (the `TKey` heritage link is implicit), and `EventMask` (the "always-on classes need no flag" invariant deserves a stronger statement). The `scanCode` field is the only deliberate NOT-PORTED with real information loss for apps that inspected raw hardware scan codes; it is correctly justified. The five `MessageEvent.info*` payload slots (Long/Word/Int/Byte/Char) are all NOT-PORTED because no framework code used them as anything other than an `infoPtr` — the Rust `source: Option<ViewId>` covers the one framework-level case, and apps that sent arbitrary integer payloads in C++ have no migration path in the current API.

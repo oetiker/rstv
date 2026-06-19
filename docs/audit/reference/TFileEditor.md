@@ -27,6 +27,6 @@ Rust module(s): src/widgets/editor.rs (`struct FileEditor`)   |   magiblot: incl
 
 ## Summary
 
-- PORTED: 7   EQUIVALENT: 5   NOT-PORTED: 3   MISSING: 0   UNSURE: 0
+- PORTED: 8   EQUIVALENT: 4   NOT-PORTED: 3   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 9   |   → concept: 0
 - Notable findings: No functional gaps. The most important design divergence is the async-modal pattern replacing all synchronous `editorDialog` calls (`saveAs`, `valid`, `loadFile` error): the first call requests a message/file-dialog box and returns; the completion routes an answer back via `set_modal_answer` and re-posts the triggering command, which re-runs the method to consume the answer. This seam is documented at the struct level but individual method doc scores are mostly 2 — none fully explains the round-trip mechanics. The `saveAs`-clipboard edge case (C++ clears `fileName` after clipboard save) is the one behavioral nuance that has no direct Rust equivalent, but it is inconsequential in practice (the clipboard editor never has a file name).

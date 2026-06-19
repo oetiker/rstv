@@ -38,6 +38,6 @@ Validator hook: `src/validate.rs`   |   Value protocol: `src/data.rs`
 
 ## Summary
 
-- PORTED: 11   EQUIVALENT: 5   NOT-PORTED: 3   MISSING: 0   UNSURE: 0
+- PORTED: 14   EQUIVALENT: 7   NOT-PORTED: 3   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 13   |   → concept: 0
 - Notable findings: No gaps or suspect items. The most important finding is the `SetValidator` shape change: the guide's post-construction `SetValidator` method is absent — validator assignment is constructor-only in tvision-rs. This is a deliberate API difference (ownership model) but is under-documented (score 1); a short note in `InputLine::new` explaining why there is no `set_validator` would close the gap for users porting from the C++ API.

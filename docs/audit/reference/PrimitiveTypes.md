@@ -20,7 +20,7 @@ magiblot: `include/tvision/ttypes.h` (TByteArray, TWordArray), `include/tvision/
 
 ### TCharSet summary
 
-- PORTED: 0   EQUIVALENT: 3   NOT-PORTED: 0   MISSING: 0   UNSURE: 0
+- PORTED: 0   EQUIVALENT: 6   NOT-PORTED: 5   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 3 (all score 2; no free-standing public type, so the doc target is the `FilterValidator` struct and its constructor) |
 
 ---

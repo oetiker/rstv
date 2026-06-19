@@ -57,6 +57,6 @@ Rust module(s): src/app/program.rs (also src/app/mod.rs, src/app/application.rs,
 
 ## Summary
 
-- PORTED: 3   EQUIVALENT: 18   NOT-PORTED: 4   MISSING: 0   UNSURE: 0
+- PORTED: 3   EQUIVALENT: 22   NOT-PORTED: 3   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 6 (Desktop/MenuBar/StatusLine handles score 2; ExecuteDialog, InsertWindow, PutEvent score 2)   |   → concept: 0
 - Notable findings: No SUSPECT divergences — every reshape (single event loop D9, embed-and-delegate D2, factory-closure init hooks, AppPalette→Theme D7, PutEvent single-slot→queue, raw-pointer globals→ViewId handles) is a documented, commented deviation. The one genuine **coverage gap**: `InsertWindow`'s `CanMoveFocus`/`ValidView` guards are not applied at `desktop_insert` (the active-window validation-protection on window insertion); C++ `InsertWindow` runs `ValidView` then `CanMoveFocus` and disposes the window if the active window can't release focus. In Rust the focus-release gate exists only on Alt-N selection and modal close, not on desktop insert — worth a gap-report entry. `OutOfMemory`/`ValidView`/v1.0-compat-palettes are intentional DOS-era / legacy NOT-PORTED items with written reasons.

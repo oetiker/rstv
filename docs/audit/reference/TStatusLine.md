@@ -24,6 +24,6 @@ Rust module(s): src/status/status_line.rs   |   magiblot: include/tvision/menus.
 
 ## Summary
 
-- PORTED: 5   EQUIVALENT: 6   NOT-PORTED: 0   MISSING: 0   UNSURE: 0
+- PORTED: 5   EQUIVALENT: 7   NOT-PORTED: 0   MISSING: 0   UNSURE: 0
 - SUSPECT: 0   |   doc<3 (public): 5   |   → concept: 0
 - Notable findings: No gaps or suspect items. The most non-obvious design point is `Update` → `set_help_ctx`: the C++ `update()` walks the view tree itself (`TopView()`), while Rust separates concerns — `Program` drives the idle call and passes the resolved context. The `set_help_ctx` rustdoc documents what/when but a short note naming the C++ `update()` heritage would reach score 3.
