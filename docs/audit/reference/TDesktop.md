@@ -19,10 +19,10 @@ Rust module(s): src/desktop/desktop.rs   |   magiblot: include/tvision/app.h / s
 | `tile` (method) | 414 | PORTED | OK | `tv::Desktop::tile` (impl `View::tile`) | 3 | C++: count tileable, `mostEqualDivisors`, fit guard → `tileError`, else `lock`/walk/`unlock`. Rust: identical grid math, no `lock`/`unlock` (D9), silent early return replaces `tileError()`. Documented. |
 | `tileError` (method) | 414 | NOT-PORTED | — | — | — | C++ `tileError()` is a virtual no-op hook for subclasses to display an error. Rust replaces both call sites (in `tile` and `cascade`) with a silent early return — the caller simply leaves window bounds unchanged. The hook could be re-added if a subclass ever needs it; noted in comments. Not ported: no subclassing model (D2 embed-and-delegate). |
 | `shutDown` (method) | 414 | NOT-PORTED | — | — | — | C++ `shutDown` nulls `background` then calls `TGroup::shutDown`. Rust drops the whole tree via RAII; no separate shutdown phase (deviation D12, documented in module doc). |
-| `getTileRect` (method on TApplication) | 415 | EQUIVALENT | OK | `tv::Application::get_tile_rect() -> Option<Rect>` | 2 | C++ lives on `TApplication`, not `TDeskTop`. Rust lands on `Application` (`src/app/application.rs`). Returns the desktop's local-origin extent (the rect passed to `tile`/`cascade`). Returns `None` when no desktop was inserted. Doc describes what it returns but not the "pass to tile/cascade" usage context. NOTE: `src/app/application.rs` is out of scope for this sweep — stays at 2. |
+| `getTileRect` (method on TApplication) | 415 | EQUIVALENT | OK | `tv::Application::get_tile_rect() -> Option<Rect>` | 3 | C++ lives on `TApplication`, not `TDeskTop`. Rust lands on `Application` (`src/app/application.rs`). Returns the desktop's local-origin extent (the rect passed to `tile`/`cascade`). Returns `None` when no desktop was inserted. Rustdoc now adds "how to use" context: call it directly for window-positioning logic, adjust by sizing the desktop rather than overriding, heritage note on virtual C++ method. |
 
 ## Summary
 
 - PORTED: 6   EQUIVALENT: 2   NOT-PORTED: 2   MISSING: 0   UNSURE: 0
-- SUSPECT: 0   |   doc<3 (public): 1   |   → concept: 0
-- Notable findings: `background()` raised to 3 (added PREV-cycle usage context). `getTileRect`/`Application::get_tile_rect` stays at 2 — it lives in `src/app/application.rs`, which is out of scope for this sweep.
+- SUSPECT: 0   |   doc<3 (public): 0   |   → concept: 0
+- Notable findings: `background()` raised to 3 (added PREV-cycle usage context). `getTileRect`/`Application::get_tile_rect` raised to 3 — rustdoc now adds "how to use" guidance (call for window positioning, adjust by sizing desktop, heritage note on virtual C++).
