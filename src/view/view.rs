@@ -304,11 +304,27 @@ pub enum StateFlag {
 /// flag words become structs-of-bools (deviation D5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ViewState {
-    /// Top-left, relative to the owner.
+    /// Top-left corner of the view in its owner's coordinate space.
+    ///
+    /// Read this when you need the view's owner-relative position (e.g. to
+    /// compute sibling offsets). Write via [`set_bounds`](Self::set_bounds) or
+    /// [`move_to`](Self::move_to) — never set the field directly inside
+    /// [`View::change_bounds`], which calls those helpers.
     pub origin: Point,
-    /// Width/height.
+    /// Width and height of the view (`x` = columns, `y` = rows).
+    ///
+    /// Together with [`origin`](Self::origin) this defines the view's bounds in
+    /// owner space. Read it via [`get_bounds`](Self::get_bounds) /
+    /// [`get_extent`](Self::get_extent); set via `set_bounds` or `grow_to`.
     pub size: Point,
-    /// Cursor position within the view (view-local).
+    /// View-local hardware-cursor position (column, row) within this view.
+    ///
+    /// Set via [`set_cursor`](Self::set_cursor). It is only shown when both
+    /// [`State::cursor_vis`] is `true` and the view is focused; the event
+    /// loop reads this field and places the hardware cursor in absolute
+    /// coordinates (the loop knows the tree; a leaf does not). Reading the
+    /// field directly is fine; prefer [`View::cursor_request`] when you need
+    /// the loop-side absolute-cursor logic.
     pub cursor: Point,
     /// State flags.
     pub state: State,
@@ -322,7 +338,13 @@ pub struct ViewState {
     /// (mouse-down, key-down, command) are unconditional rather than opt-in, so
     /// only the mouse-move / auto-repeat opt-ins survive here.
     pub event_mask: EventMask,
-    /// Help context.
+    /// The help context for status-line switching while this view is focused.
+    ///
+    /// Set during construction (e.g. `state.help_ctx = HelpCtx::custom("myapp.topic")`).
+    /// The value [`HelpCtx::NO_CONTEXT`] (the ctor default) means no context is
+    /// provided; the status line typically falls back to the owner's context in
+    /// that case. While the view is being dragged, [`get_help_ctx`](Self::get_help_ctx)
+    /// returns [`HelpCtx::DRAGGING`] regardless of this field.
     pub help_ctx: HelpCtx,
     /// This view's global identity, set by [`Group::insert`](crate::view::Group)
     /// when the view enters a group; `None` before insertion. NOT an up-pointer
@@ -367,16 +389,30 @@ impl ViewState {
     // -- Geometry (faithful inline bodies from views.h / tview.cpp) ----------
 
     /// The view's bounds in owner coordinates: `{ origin, origin + size }`.
+    ///
+    /// Use this whenever you need the half-open rect that describes where the
+    /// view sits in its parent's frame, e.g. for hit-testing or sibling-offset
+    /// calculations. For the same rect anchored at `(0, 0)` (local frame), use
+    /// [`get_extent`](Self::get_extent) instead.
     pub fn get_bounds(&self) -> Rect {
         Rect::from_points(self.origin, self.origin + self.size)
     }
 
     /// The view's extent in its own local coordinates: `{ 0, 0, size.x, size.y }`.
+    ///
+    /// Use this inside [`View::draw`] to fill the whole view, clip child rects, or
+    /// compute layout in view-local space. Because the origin is always `(0, 0)`,
+    /// there is no translation needed.
     pub fn get_extent(&self) -> Rect {
         Rect::new(0, 0, self.size.x, self.size.y)
     }
 
     /// Set the bounds: `origin = bounds.a; size = bounds.b - bounds.a`.
+    ///
+    /// The low-level primitive used by [`move_to`](Self::move_to),
+    /// [`grow_to`](Self::grow_to), and [`ViewState::new`]. Call through
+    /// [`View::change_bounds`] in normal use so that groups can propagate the
+    /// resize to their children.
     pub fn set_bounds(&mut self, bounds: Rect) {
         self.origin = bounds.a;
         self.size = bounds.b - bounds.a;
@@ -384,17 +420,20 @@ impl ViewState {
 
     /// Relocate the top-left to `(x, y)`, keeping the size.
     ///
-    /// The owner-dependent size-limit clamp lives on the group (which drives
-    /// resize), so here this is a plain bounds recompute; the redraw is the
-    /// loop's whole-tree repaint.
+    /// A low-level position change that updates only the bounds fields (no
+    /// redraw, no size-limit clamp). Typically called from within a group's
+    /// layout pass or from [`View::change_bounds`]; the loop's whole-tree
+    /// repaint redraws the view at its new position automatically.
     pub fn move_to(&mut self, x: i32, y: i32) {
         self.set_bounds(Rect::new(x, y, x + self.size.x, y + self.size.y));
     }
 
     /// Keep the origin, set the size to `(x, y)`.
     ///
-    /// Like [`move_to`](Self::move_to), the owner-dependent size-limit clamp lives
-    /// on the group; here it is a plain bounds recompute.
+    /// A low-level size change symmetric with [`move_to`](Self::move_to): no
+    /// redraw or size-limit clamp. Size-limit enforcement lives on the group (which
+    /// calls [`View::size_limits`] before adjusting children); use
+    /// [`View::change_bounds`] or the free function `locate` for the full path.
     pub fn grow_to(&mut self, x: i32, y: i32) {
         self.set_bounds(Rect::new(
             self.origin.x,
@@ -406,44 +445,73 @@ impl ViewState {
 
     // -- Verb helpers (the dropped redraw side effects noted inline) --
 
-    /// Make the view visible.
+    /// Make the view visible (`state.visible = true`).
     ///
-    /// The repaint and reset-current side effects of becoming visible are dropped:
-    /// the loop repaints the whole tree, and the group owns currency.
+    /// The plain field write; the loop's whole-tree redraw picks up the change
+    /// on the next pump. Call this inside a widget's constructor or a layout
+    /// pass. To show a view that is already inserted into a live group (so that
+    /// sibling scroll bars track it), use
+    /// [`Context::request_set_visible`](crate::view::Context::request_set_visible)
+    /// (deferred, runs the owner's currency tail).
     pub fn show(&mut self) {
         self.state.visible = true;
     }
 
-    /// Make the view invisible (see [`show`](Self::show)).
+    /// Make the view invisible (`state.visible = false`).
+    ///
+    /// Like [`show`](Self::show): a plain field flip for use during construction
+    /// or layout. To hide a view that is already inserted into a live group
+    /// (and keep sibling bars in sync), use
+    /// [`Context::request_set_visible`](crate::view::Context::request_set_visible).
     pub fn hide(&mut self) {
         self.state.visible = false;
     }
 
     /// Move the cursor to view-local `(x, y)`.
     ///
-    /// Pushing the hardware cursor needs the tree for absolute coordinates, so the
-    /// group and event loop place the cursor.
+    /// Call this inside `draw` or `handle_event` to position the insertion
+    /// point (e.g. an input line moving the caret after editing). The cursor
+    /// is only shown when the view is focused and [`State::cursor_vis`] is
+    /// `true`; make both conditions hold with [`show_cursor`](Self::show_cursor).
+    /// The event loop translates the view-local position to absolute screen
+    /// coordinates using the tree — no manual offset is needed here.
     pub fn set_cursor(&mut self, x: i32, y: i32) {
         self.cursor = Point::new(x, y);
     }
 
     /// Make the hardware cursor visible while this view is focused.
-    /// The actual cursor placement is the loop's job (needs absolute coords).
+    ///
+    /// Sets [`State::cursor_vis`]. The event loop places the cursor at the
+    /// absolute screen position corresponding to [`cursor`](Self::cursor). Call
+    /// once in your widget's constructor (or just after [`set_cursor`](Self::set_cursor))
+    /// if you want an insertion-point cursor; pair with [`block_cursor`](Self::block_cursor)
+    /// or [`normal_cursor`](Self::normal_cursor) to pick the shape.
     pub fn show_cursor(&mut self) {
         self.state.cursor_vis = true;
     }
 
-    /// Hide the hardware cursor.
+    /// Hide the hardware cursor while this view is focused.
+    ///
+    /// Clears [`State::cursor_vis`]. The hardware cursor will not be shown even
+    /// if the view is focused. Widgets that draw a cursor in software (e.g. by
+    /// painting a highlighted cell) call this to suppress the hardware cursor.
     pub fn hide_cursor(&mut self) {
         self.state.cursor_vis = false;
     }
 
-    /// Use the block (insert) cursor shape.
+    /// Switch the hardware cursor to block (insert / overwrite) shape.
+    ///
+    /// Sets [`State::cursor_ins`]; [`normal_cursor`](Self::normal_cursor) clears
+    /// it. Many input-line widgets switch between shapes depending on an insert
+    /// mode toggle, calling this or `normal_cursor` on each toggle.
     pub fn block_cursor(&mut self) {
         self.state.cursor_ins = true;
     }
 
-    /// Use the underline (normal) cursor shape.
+    /// Switch the hardware cursor to underline (normal) shape.
+    ///
+    /// Clears [`State::cursor_ins`]. This is the default shape; call this after
+    /// [`block_cursor`](Self::block_cursor) when leaving insert mode.
     pub fn normal_cursor(&mut self) {
         self.state.cursor_ins = false;
     }
@@ -456,8 +524,13 @@ impl ViewState {
         self.id
     }
 
-    /// This view's help context: [`HelpCtx::DRAGGING`] while dragging, else
-    /// `help_ctx`.
+    /// Returns the effective help context: [`HelpCtx::DRAGGING`] while the view
+    /// is being dragged, otherwise [`help_ctx`](Self::help_ctx).
+    ///
+    /// The status line calls this (via [`View::get_help_ctx`]) on the focused
+    /// view to decide which help topic to display. Usually you read
+    /// `view.help_ctx` directly; call this method only when you need the
+    /// drag-override behavior included.
     pub fn get_help_ctx(&self) -> HelpCtx {
         if self.state.dragging {
             HelpCtx::DRAGGING
@@ -717,17 +790,26 @@ pub trait View {
     /// [`FileEditor`](crate::widgets::FileEditor) caches it for the re-validate).
     fn set_modal_answer(&mut self, _cmd: Command) {}
 
-    /// This control's typed value as a [`FieldValue`], or `None` for a non-data
-    /// view. Base: `None` (a bare view carries no transferable data); data controls
-    /// (e.g. [`InputLine`](crate::widgets::InputLine)) override. See the D10 value
-    /// protocol in [`crate::data`].
+    /// This control's current value as a [`FieldValue`], or `None` for a view
+    /// that carries no transferable data.
+    ///
+    /// The dialog gather walk calls this on every child in insertion order and
+    /// collects the results into a `Vec<Option<FieldValue>>`. Override in a
+    /// data-bearing control (e.g. `InputLine` returns `FieldValue::Text`,
+    /// `ScrollBar` returns `FieldValue::Int`). The base returns `None` — a bare
+    /// view carries nothing. Controls that don't participate (buttons, labels)
+    /// simply leave the base in place.
     fn value(&self) -> Option<FieldValue> {
         None
     }
 
-    /// Load a typed [`FieldValue`] into this control. Base: ignore (a non-data
-    /// view has nowhere to put it); data controls override. A control ignores a
-    /// `FieldValue` variant it does not understand.
+    /// Load a typed [`FieldValue`] into this control.
+    ///
+    /// The dialog scatter walk calls this on every child in insertion order,
+    /// distributing an edited record. Override in a data-bearing control; the base
+    /// ignores the call. A control **should** silently ignore a [`FieldValue`]
+    /// variant it does not understand (e.g. an `InputLine` ignores `FieldValue::Int`)
+    /// so that record schemas with mixed control types work without downcasting.
     fn set_value(&mut self, _v: FieldValue) {}
 
     /// Scatter a typed [`FieldValue`] into this control with a `Context`. Default:
@@ -740,13 +822,23 @@ pub trait View {
         self.set_value(v);
     }
 
-    /// Called after a view tree is loaded/created so the view can finish
-    /// initializing. Base is a no-op.
+    /// Post-construction initialization hook. Called once after the view has
+    /// been inserted into its group and the group's layout is complete — the
+    /// earliest point at which a view may safely resolve sibling ids or run
+    /// initialization that requires a fully-wired tree. Override when a widget
+    /// needs to do work that cannot happen during construction (e.g. reading a
+    /// linked control's current value). Base is a no-op.
     fn awaken(&mut self) {}
 
     /// The `(min, max)` size this view may take inside an owner of `owner_size`.
-    /// Delegates to `ViewState::size_limits`; override to impose a minimum size
-    /// (a window does).
+    ///
+    /// Returns `(Point::new(0,0), owner_size)` by default, or
+    /// `(0, (i32::MAX, i32::MAX))` when [`GrowMode::fixed`](GrowMode) is set
+    /// (the view does not track the owner's size). Override to impose a minimum
+    /// size: `Window` returns a 16×6 minimum so the frame stays readable. The
+    /// result is consumed by [`View::calc_bounds`] and the free function
+    /// `locate`; callers generally should not call this directly — use
+    /// `calc_bounds` instead, which keeps the two in sync.
     fn size_limits(&self, owner_size: Point) -> (Point, Point) {
         self.state().size_limits(owner_size)
     }
@@ -763,9 +855,15 @@ pub trait View {
             .calc_bounds(owner_size, delta, min_lim, max_lim)
     }
 
-    /// Apply `bounds`. Base just sets them (the repaint after is automatic under
-    /// whole-tree redraw). Groups and windows override to propagate the resize to
-    /// children.
+    /// Apply `bounds` to this view and propagate as needed.
+    ///
+    /// The base implementation sets the bounds fields via
+    /// [`ViewState::set_bounds`] with no redraw (whole-tree redraw is automatic).
+    /// Groups and windows override to call `calc_bounds`/`change_bounds` on each
+    /// child so they track the resize. When you need to resize a view from
+    /// outside the tree (e.g. a capture handler), prefer
+    /// [`Context::request_bounds`](crate::view::Context::request_bounds) (deferred)
+    /// over calling this directly — the tree is `&mut`-borrowed during dispatch.
     fn change_bounds(&mut self, bounds: Rect) {
         self.state_mut().set_bounds(bounds);
     }
@@ -967,11 +1065,16 @@ pub trait View {
     /// exactly like [`update_menu_commands`](View::update_menu_commands).
     fn set_menu_current(&mut self, _current: Option<usize>) {}
 
-    /// The focused view's help context for status-line switching. Returns
-    /// [`HelpCtx::DRAGGING`] while dragging, else the view's own
-    /// [`ViewState::help_ctx`]. Delegating types forward automatically via the
-    /// macro; override only if the type aggregates children's contexts (like a
-    /// group).
+    /// The effective help context for status-line switching. Returns
+    /// [`HelpCtx::DRAGGING`] while the view is being dragged, otherwise the
+    /// view's own [`ViewState::help_ctx`].
+    ///
+    /// The status-line widget calls this on the currently focused view each pump
+    /// to decide which help topic to display. Leaf views need not override —
+    /// the default delegates to [`ViewState::get_help_ctx`] and the `#[delegate]`
+    /// macro forwards it automatically through wrapper types. Override only when
+    /// the type aggregates children's contexts (like `Group`, which descends into
+    /// its current child).
     fn get_help_ctx(&self) -> HelpCtx {
         self.state().get_help_ctx()
     }

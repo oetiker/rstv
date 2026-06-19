@@ -637,7 +637,15 @@ impl<'a> DrawCtx<'a> {
         }
     }
 
-    /// The [`Style`] for `role` from the active theme.
+    /// Look up the [`Style`] (foreground + background + modifiers) for `role`
+    /// from the active theme.
+    ///
+    /// Call this inside [`View::draw`](crate::view::View::draw) to obtain the
+    /// correct color pair for a semantic role (`Role::Background`,
+    /// `Role::MenuSelected`, etc.) and pass the result to
+    /// [`put_char`](Self::put_char) / [`put_str`](Self::put_str) / [`fill`](Self::fill).
+    /// Using roles rather than hard-coded colors lets the whole application
+    /// switch themes without touching widget code.
     pub fn style(&self, role: Role) -> Style {
         self.theme.style(role)
     }
@@ -647,7 +655,15 @@ impl<'a> DrawCtx<'a> {
         self.theme.glyphs()
     }
 
-    /// The absolute clip rect (already intersected with the buffer bounds).
+    /// The absolute clip rect for this draw pass (already intersected with the
+    /// buffer bounds at construction).
+    ///
+    /// Use this inside [`View::draw`](crate::view::View::draw) when a widget
+    /// wants to skip drawing rows or columns that are entirely outside the
+    /// clip — for example, to avoid iterating over a large list's invisible
+    /// rows. All [`DrawCtx`] write methods already clip automatically, so
+    /// querying this rect is an optimization, not a correctness requirement.
+    /// The rect is in **absolute** screen coordinates, not view-local.
     pub fn clip(&self) -> Rect {
         self.clip
     }
@@ -1116,12 +1132,26 @@ impl<'a> Context<'a> {
     /// Request `cmd` be enabled in the program's command set — **deferred**
     /// ([`Deferred::EnableCommand`]). Lets a view enable a command without an
     /// up-pointer to the program.
+    ///
+    /// The change is applied by the loop *after* the current dispatch; a
+    /// subsequent [`command_enabled`](Self::command_enabled) call in the same
+    /// handler still returns the old value. Call this from
+    /// [`View::handle_event`](crate::view::View::handle_event) (e.g. to enable a
+    /// Save command once data is present) or from `update_commands` on a focus
+    /// change. To disable, use [`disable_command`](Self::disable_command). The
+    /// underlying model is a denylist: a command is enabled iff it is not in the
+    /// disabled set.
     pub fn enable_command(&mut self, cmd: Command) {
         self.deferred.push(Deferred::EnableCommand(cmd));
     }
 
-    /// Request `cmd` be disabled — **deferred** ([`Deferred::DisableCommand`]; see
-    /// [`enable_command`](Self::enable_command)).
+    /// Request `cmd` be disabled in the program's command set — **deferred**
+    /// ([`Deferred::DisableCommand`]). The mirror of
+    /// [`enable_command`](Self::enable_command): the change is applied after the
+    /// current dispatch, and the denylist model means disabling an already-disabled
+    /// command is harmless. Call this to gray out menu items or buttons that are
+    /// not applicable in the current context (e.g. Paste when the clipboard is
+    /// empty). Re-enable with `enable_command`.
     pub fn disable_command(&mut self, cmd: Command) {
         self.deferred.push(Deferred::DisableCommand(cmd));
     }
@@ -1503,12 +1533,16 @@ impl<'a> Context<'a> {
         self.deferred.push(Deferred::InputLinePaste(id));
     }
 
-    /// Re-queue a **raw event** into the loop's event queue — the raw-event
-    /// sibling of [`post`](Self::post) (which only ever queues an
-    /// `Event::Command`). The menu session re-posts the triggering event so
-    /// the next pump re-delivers it (e.g. an outside click that should reach the
-    /// view recovering focus, or a mouse event on submenu-open). Lands in
-    /// `out_events`, drained before the backend is polled.
+    /// Re-queue a **raw event** into the loop's event queue.
+    ///
+    /// Unlike [`post`](Self::post) (which queues only `Event::Command`), this
+    /// accepts any `Event` — useful for re-delivering a mouse or key event on
+    /// the next pump. The event lands in `out_events`, which the loop drains
+    /// before polling the backend, so it is processed on the very next pump
+    /// cycle. Typical use: the menu session re-posts the triggering outside
+    /// click so the view that recovers focus sees it; a capture handler
+    /// forwards a deferred key press. Prefer [`post`](Self::post) or
+    /// [`broadcast`](Self::broadcast) for simple command notifications.
     pub fn put_event(&mut self, ev: Event) {
         self.out_events.push_back(ev);
     }
