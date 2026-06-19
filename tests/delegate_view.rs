@@ -2,7 +2,7 @@
 //! currently-known `View` method.
 //!
 //! The empty `impl View for D {}` compiling at all proves every one of the
-//! 27 generated signatures matches the trait exactly. The behavioral assertions
+//! 29 generated signatures matches the trait exactly. The behavioral assertions
 //! prove completeness: no forwarder silently missing.
 
 use std::cell::RefCell;
@@ -146,10 +146,13 @@ impl View for Spy {
     fn set_indicator_value(&mut self, _location: Point, _modified: bool) {
         self.mark("set_indicator_value");
     }
+    fn apply_page_sync(&mut self, _idx: usize, _ctx: &mut Context) {
+        self.mark("apply_page_sync");
+    }
 }
 
 // ---------------------------------------------------------------------------
-// D — pure delegator: empty impl, macro injects ALL 28 forwarders.
+// D — pure delegator: empty impl, macro injects ALL 29 forwarders.
 // ---------------------------------------------------------------------------
 
 struct D {
@@ -306,6 +309,15 @@ fn delegate_forwards_every_known_view_method() {
     // -- set_indicator_value ------------------------------------------------
     d.set_indicator_value(Point::new(0, 0), false);
 
+    // -- apply_page_sync ----------------------------------------------------
+    {
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut deferred = Vec::new();
+        let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+        d.apply_page_sync(0, &mut ctx);
+    }
+
     // -- draw (needs a DrawCtx; use the HeadlessBackend pattern) -----------
     {
         let theme = Theme::classic_blue();
@@ -323,6 +335,7 @@ fn delegate_forwards_every_known_view_method() {
     let seen = d.inner.seen.borrow();
     // MAINTENANCE: keep in sync with trait View's methods and
     // tvision-rs-macros/src/specs.rs (`view()`). See the note in view.rs.
+    // Method count: 29 (28 after Task 5; +1 apply_page_sync from Task 6).
     let expected: &[&str] = &[
         "state",
         "state_mut",
@@ -355,6 +368,7 @@ fn delegate_forwards_every_known_view_method() {
         "as_any_mut",
         "descendant_global_bounds",
         "set_indicator_value",
+        "apply_page_sync",
     ];
     for m in expected {
         assert!(

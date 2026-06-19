@@ -2441,21 +2441,15 @@ impl Program {
                                 page_stack,
                                 tab_bar,
                             } => {
-                                use crate::widgets::PageStack;
+                                // TabBar::value() is always non-negative, so a plain
+                                // `as usize` is safe (no defensive max(0)).
                                 let idx = group
                                     .find_mut(tab_bar)
                                     .and_then(|v| v.value())
                                     .and_then(field_int)
                                     .unwrap_or(0);
-                                if let Some(ps) = group
-                                    .find_mut(page_stack)
-                                    .and_then(|v| v.as_any_mut())
-                                    .and_then(|a| a.downcast_mut::<PageStack>())
-                                {
-                                    // TabBar::value() is always non-negative, so a
-                                    // plain `as usize` matches the ScrollSync
-                                    // reference (no defensive max(0)).
-                                    ps.set_active(idx as usize, &mut ctx);
+                                if let Some(ps) = group.find_mut(page_stack) {
+                                    ps.apply_page_sync(idx as usize, &mut ctx);
                                 }
                             }
                             // -- the async-modal-from-a-view seam (handle_event paths) --

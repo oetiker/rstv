@@ -995,6 +995,14 @@ pub trait View {
     /// the editor (a leaf) cannot reach its indicator sibling inline, so it requests
     /// this and the pump calls the method by id — virtual dispatch, not a downcast.
     fn set_indicator_value(&mut self, _location: Point, _modified: bool) {}
+
+    /// The tab-bar→page-stack switch broker hook. Defaulted no-op;
+    /// [`PageStack`](crate::widgets::PageStack) overrides it to make page `idx`
+    /// active. Driven by
+    /// [`Deferred::PageStackSync`](crate::view::Deferred::PageStackSync): the pump
+    /// reads the bound tab bar's `value` and calls this method by id — virtual
+    /// dispatch, not a downcast.
+    fn apply_page_sync(&mut self, _idx: usize, _ctx: &mut Context) {}
 }
 
 #[cfg(test)]

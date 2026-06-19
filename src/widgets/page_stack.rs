@@ -82,10 +82,16 @@ impl PageStack {
     }
 }
 
-#[crate::delegate(to = group, skip(as_any_mut, handle_event))]
+#[crate::delegate(to = group, skip(as_any_mut, handle_event, apply_page_sync))]
 impl View for PageStack {
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         Some(self)
+    }
+
+    /// Activate page `idx`, hiding all others. Called by the pump's
+    /// `PageStackSync` arm via virtual dispatch (no downcast).
+    fn apply_page_sync(&mut self, idx: usize, ctx: &mut Context) {
+        self.set_active(idx, ctx);
     }
 
     /// React to the bound `TabBar`'s broadcast by queuing a pump sync; then route

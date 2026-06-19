@@ -509,9 +509,15 @@ pub enum Deferred {
     // -- the PageStack↔TabBar read-sync broker --------------------------
     /// **Read-broker for a [`PageStack`](crate::widgets::PageStack)**: on a
     /// `TAB_BAR_CHANGED` broadcast, the pump resolves `tab_bar`, reads its
-    /// `value()` (→ `FieldValue::Int` index), downcasts `page_stack` to
-    /// `PageStack`, and calls `set_active(index, &mut ctx)`. Mirrors
-    /// [`ScrollSync`](Deferred::ScrollSync).
+    /// `value()` (→ `FieldValue::Int` index), and calls
+    /// [`View::apply_page_sync`](crate::View::apply_page_sync) by id —
+    /// virtual dispatch, no downcast. Mirrors [`ScrollSync`](Deferred::ScrollSync).
+    ///
+    /// Stays a separate variant with its own
+    /// [`apply_page_sync`](crate::View::apply_page_sync) hook because it reads a
+    /// single tab-bar `value` and switches the active page — not an `(h, v)` scroll
+    /// delta. Folding it into `apply_scroll_sync` would overload that hook with an
+    /// unrelated single-index semantic (§2.1).
     ///
     /// Touches the **view-tree** family (same as the scroller broker ops), so
     /// the insertion-order drain stays order-equivalent.

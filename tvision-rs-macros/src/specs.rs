@@ -91,5 +91,7 @@ fn view(f: &Ident, k: &TokenStream) -> Vec<(&'static str, TokenStream)> {
          quote! { fn descendant_global_bounds(&self, id: #k::ViewId, acc: #k::Point) -> ::core::option::Option<#k::Rect> { self.#f.descendant_global_bounds(id, acc) } }),
         ("set_indicator_value",
          quote! { fn set_indicator_value(&mut self, location: #k::Point, modified: bool) { self.#f.set_indicator_value(location, modified) } }),
+        ("apply_page_sync",
+         quote! { fn apply_page_sync(&mut self, idx: usize, ctx: &mut #k::Context) { self.#f.apply_page_sync(idx, ctx) } }),
     ]
 }
