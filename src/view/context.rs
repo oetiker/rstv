@@ -172,27 +172,6 @@ pub enum Deferred {
         op: DividerOp,
     },
 
-    // -- the outline-viewer scrollbar read-sync ------------------
-    /// **Read-direction sync for an outline viewer** (on a scrollbar-changed
-    /// broadcast). The pump resolves both bars, reads each `value` (via
-    /// [`View::value`] → [`FieldValue::Int`](crate::data::FieldValue::Int)), and
-    /// writes the resulting `(dx, dy)` into `viewer`'s `delta` (the pump downcasts
-    /// it to `Outline` and calls `apply_delta`). Like [`ScrollSync`](Self::ScrollSync)
-    /// with a read-only scroller target, this is **read-only** — it writes nothing
-    /// back to the bars, so it terminates with no change-guard needed (unlike a
-    /// list-viewer target of `ScrollSync`, which writes back but is change-guarded).
-    ///
-    /// Touches the **view-tree** family (same as the scroller/list broker ops), so
-    /// the insertion-order drain stays order-equivalent.
-    SyncOutlineViewerDelta {
-        /// The outline viewer whose `delta` to update.
-        viewer: ViewId,
-        /// The horizontal scrollbar to read `value` from (`None` = no h bar → 0).
-        h: Option<ViewId>,
-        /// The vertical scrollbar to read `value` from (`None` = no v bar → 0).
-        v: Option<ViewId>,
-    },
-
     // -- the menu command-graying broker -------------------------
     /// **Command-graying broker for a menu view** (triggered by a
     /// command-set-changed broadcast). Resolve the menu view by `id` and call
@@ -1208,25 +1187,6 @@ impl<'a> Context<'a> {
     pub fn splitter_divider(&mut self, splitter: ViewId, op: DividerOp) {
         self.deferred
             .push(Deferred::SplitterDivider { splitter, op });
-    }
-
-    /// Request an outline viewer's `delta` be refreshed from its sibling
-    /// scrollbars' live `value`s — **deferred**
-    /// ([`Deferred::SyncOutlineViewerDelta`]). The viewer (a leaf) cannot read
-    /// its window-frame sibling bars itself; the pump brokers the read and writes
-    /// the resulting `(dx, dy)` into the viewer's `delta` (a downcast to `Outline`,
-    /// like [`ScrollSync`](Deferred::ScrollSync)). `h`/`v` are the bar
-    /// [`ViewId`]s (`None` = no bar → 0). Unlike the list-viewer sync this writes
-    /// nothing back (the outline viewer has no editor cursor / focus write-back), so
-    /// it terminates like the scroller's read-only sync.
-    pub fn request_sync_outline_viewer_delta(
-        &mut self,
-        viewer: ViewId,
-        h: Option<ViewId>,
-        v: Option<ViewId>,
-    ) {
-        self.deferred
-            .push(Deferred::SyncOutlineViewerDelta { viewer, h, v });
     }
 
     /// Queue a [`PageStack`](crate::widgets::PageStack) sync (see

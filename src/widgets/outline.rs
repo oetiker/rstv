@@ -19,10 +19,11 @@
 //! read nor mutate its window-frame sibling scroll bars. The pump is the broker:
 //! on a [`SCROLL_BAR_CHANGED`](crate::command::Command::SCROLL_BAR_CHANGED)
 //! broadcast naming one of its bars as `source`, the viewer requests
-//! [`Deferred::SyncOutlineViewerDelta`](crate::view::Deferred::SyncOutlineViewerDelta);
-//! the pump reads both bars' `value`s and writes the resulting `(dx, dy)` into the
-//! viewer's [`delta`](OutlineViewerState::delta). This read-sync is **read-only**
-//! (no focus write-back), so it terminates without a change-guard.
+//! [`Deferred::ScrollSync`](crate::view::Deferred::ScrollSync);
+//! the pump reads both bars' `value`s and calls `apply_scroll_sync`, which writes
+//! the resulting `(dx, dy)` into the viewer's [`delta`](OutlineViewerState::delta).
+//! This read-sync is **read-only** (no focus write-back), so it terminates without
+//! a change-guard.
 //!
 //! # Mouse press-and-hold
 //!
@@ -842,7 +843,7 @@ pub fn ov_handle_event<L: OutlineViewer + View + ?Sized>(
         && (source == this.ov().h_scroll_bar || source == this.ov().v_scroll_bar)
         && let Some(id) = this.ov().state.id()
     {
-        ctx.request_sync_outline_viewer_delta(id, this.ov().h_scroll_bar, this.ov().v_scroll_bar);
+        ctx.request_scroll_sync(id, this.ov().h_scroll_bar, this.ov().v_scroll_bar);
     }
 
     match *ev {
@@ -1296,6 +1297,13 @@ impl View for Outline {
         self.ov_mut().set_limit(x, y, ctx);
     }
 
+    fn apply_scroll_sync(&mut self, h: Option<i32>, v: Option<i32>, _ctx: &mut Context) {
+        // Read-only, like the scroller: a missing bar is delta 0 (faithful to the
+        // old dedicated pump arm's `.unwrap_or(0)` read).
+        self.ov_mut()
+            .apply_delta(Point::new(h.unwrap_or(0), v.unwrap_or(0)));
+    }
+
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         Some(self)
     }
@@ -1547,7 +1555,7 @@ mod tests {
         let mut timers = crate::timer::TimerQueue::new();
         let mut deferred: Vec<Deferred> = vec![];
 
-        // CHANGED from own h-bar → SyncOutlineViewerDelta queued.
+        // CHANGED from own h-bar → ScrollSync queued.
         let mut ev = Event::Broadcast {
             command: Command::SCROLL_BAR_CHANGED,
             source: Some(h),
@@ -1559,7 +1567,7 @@ mod tests {
         assert_eq!(deferred.len(), 1);
         assert!(matches!(
             deferred[0],
-            Deferred::SyncOutlineViewerDelta { viewer, h: rh, v: rv }
+            Deferred::ScrollSync { target: viewer, h: rh, v: rv }
                 if viewer == id && rh == Some(h) && rv == Some(v)
         ));
 
