@@ -29,7 +29,7 @@ committed on the branch, so it reads correctly whether you start here or in the
 worktree.)
 
 - **Worktree path:** `/scratch/oetiker/claude-worktrees/tvision-rs-consumer-api-coverage`
-- **Branch:** `consumer-api-coverage`  **HEAD:** `8c64e98`  **branched from `main` at** `8caa0a4`
+- **Branch:** `consumer-api-coverage`  **HEAD:** `8019866`  **branched from `main` at** `8caa0a4`
 - **To continue:** use the native `EnterWorktree` tool with that path (or `cd` there).
   Do ALL git/build/test there. Canonical `CARGO_TARGET_DIR=/home/oetiker/scratch/cargo-target`,
   `-j2 --test-threads=2`. **Never `git merge` inside the worktree** (merges the
@@ -76,7 +76,7 @@ integrated-tree gate green: 1279 lib tests, `clippy --all-targets`, `fmt`):**
   + dialog-OPEN pre-fill reads (structural "build UI from known widget state").
   Docs updated (`apps/dialogs.md`, `internals/custom-view.md`, IMPLEMENTATION-LOG).
   Gate: 1277 lib tests, clippy, fmt, examples green; no snapshot changes.
-- **Phase 5 — generic ExecView from a view** (`efb1f2d`..`8c64e98`) — closed
+- **Phase 5 — generic ExecView from a view** (`efb1f2d`..`8019866`) — closed
   consumer-API gap #2. New `Deferred::OpenModal { view, requester, then_command }`
   + `Context::request_exec_view(view, requester, then_command)` — the view-launched
   counterpart of `Program::exec_view_with<R>` (a view holds only `&mut Context`,
@@ -86,6 +86,11 @@ integrated-tree gate green: 1279 lib tests, `clippy --all-targets`, `fmt`):**
   and launched via `request_exec_view`. Data-back `FieldValue` path deliberately
   deferred (result is the close command only; reason recorded on `request_exec_view`
   doc, §3.4/§2.1). Gate: 1279 lib tests, clippy, fmt, examples green.
+  Also in this stack (tcv example polish): the mock catalog was enriched to 72
+  entries for livelier incremental search; a user-directed scrollbar fix
+  (`8c64e98`) wakes the `DirBox` v-bar (publish range+steps post-insert via a
+  one-shot `ensure_inited`, mirroring `ListBox::new_list`); and the Info dialog
+  was widened so long descriptions don't clip the last field. All final-reviewed.
   **This completes the data-movement effort (Phases 1–5).**
 
 **The driving design — spec v5 (read before Phase 3):**
