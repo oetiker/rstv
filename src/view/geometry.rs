@@ -15,15 +15,57 @@
 
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 
-/// A point on the screen.
+/// A screen coordinate pair `(x, y)`.
+///
+/// Use `Point` wherever you need a column/row position: view origins, cursor
+/// positions, mouse hit coordinates, or scroll offsets. Both fields are `i32`
+/// because view origins go negative when a view is scrolled offscreen, and
+/// translation deltas are frequently negative. Conversion to an unsigned buffer
+/// index happens only at the screen boundary.
+///
+/// `Point` supports all four arithmetic operators (`+`, `-`, `+=`, `-=`) so
+/// you can translate positions and compute offsets without converting to tuples:
+///
+/// ```
+/// # use tvision_rs::Point;
+/// let origin = Point::new(5, 3);
+/// let offset = Point::new(-2, 1);
+/// assert_eq!(origin + offset, Point::new(3, 4));
+/// ```
+///
+/// `Default` returns `Point::new(0, 0)`.
+///
+/// # Turbo Vision heritage
+/// Ports `TPoint` from `objects.h`. Field names are lowercase (`x`, `y`)
+/// following Rust conventions; the original used uppercase `X`/`Y`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Point {
+    /// Screen column (horizontal position).
+    ///
+    /// Zero is the leftmost column. Negative values occur when a view's origin
+    /// is scrolled to the left of the visible area. Write this field directly
+    /// when constructing geometry; use `Point::new` to set both axes at once.
     pub x: i32,
+    /// Screen row (vertical position).
+    ///
+    /// Zero is the topmost row. Negative values occur when a view's origin is
+    /// scrolled above the visible area. Write this field directly when
+    /// constructing geometry; use `Point::new` to set both axes at once.
     pub y: i32,
 }
 
 impl Point {
-    /// Construct a point.
+    /// Construct a point from a column `x` and row `y`.
+    ///
+    /// This is a `const fn`, so it can be used in `const` and `static`
+    /// contexts. For the zero point, `Default::default()` (or
+    /// `Point::default()`) is equivalent and more expressive.
+    ///
+    /// ```
+    /// # use tvision_rs::Point;
+    /// const ORIGIN: Point = Point::new(0, 0);
+    /// assert_eq!(ORIGIN, Point::default());
+    /// ```
     pub const fn new(x: i32, y: i32) -> Self {
         Point { x, y }
     }
@@ -31,6 +73,10 @@ impl Point {
 
 impl Add for Point {
     type Output = Point;
+    /// Returns a new `Point` with both axes summed.
+    ///
+    /// Use this to apply an offset to a position without mutating the original:
+    /// `child_origin + scroll_offset`.
     fn add(self, rhs: Point) -> Point {
         Point::new(self.x + rhs.x, self.y + rhs.y)
     }
@@ -38,12 +84,21 @@ impl Add for Point {
 
 impl Sub for Point {
     type Output = Point;
+    /// Returns a new `Point` with both axes subtracted.
+    ///
+    /// Use this to compute the offset between two positions:
+    /// `mouse_pos - view_origin` gives the hit position in view-local
+    /// coordinates.
     fn sub(self, rhs: Point) -> Point {
         Point::new(self.x - rhs.x, self.y - rhs.y)
     }
 }
 
 impl AddAssign for Point {
+    /// Shifts this point in place by adding `rhs`.
+    ///
+    /// Use this to accumulate translation steps without allocating a new
+    /// `Point`: `cursor += delta`.
     fn add_assign(&mut self, rhs: Point) {
         self.x += rhs.x;
         self.y += rhs.y;
@@ -51,6 +106,10 @@ impl AddAssign for Point {
 }
 
 impl SubAssign for Point {
+    /// Shifts this point in place by subtracting `rhs`.
+    ///
+    /// Use this to undo a previously applied offset in place:
+    /// `cursor -= delta`.
     fn sub_assign(&mut self, rhs: Point) {
         self.x -= rhs.x;
         self.y -= rhs.y;
