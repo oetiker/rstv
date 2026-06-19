@@ -735,14 +735,8 @@ pub struct CheckBoxes {
     pub cluster: Cluster,
 }
 
-#[crate::delegate(to = cluster, skip(apply_scroll_sync, focus_descendant, grabs_focus_on_click, set_value, value))]
+#[crate::delegate(to = cluster, skip(apply_scroll_sync, as_any_mut, focus_descendant, grabs_focus_on_click, set_value, value))]
 impl View for CheckBoxes {
-    /// Downcast hook: allows `apply_modal_completion` (FindPick/ReplacePick) to
-    /// read `cluster.value` directly from the in-tree CheckBoxes widget.
-    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
-        Some(self)
-    }
-
     /// This cluster's packed bit word as [`FieldValue::Bits`] (a bitmask). Ports
     /// `TCluster::getData` (copies `value`).
     fn value(&self) -> Option<crate::data::FieldValue> {
