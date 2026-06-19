@@ -156,9 +156,155 @@ time; defaulted ones are not. As a consumer writing your own views you will
 rarely touch the trait, so this is mainly a note for the library's own
 maintainers.
 
+## Local and global coordinates
+
+A view always draws in its own **local coordinate space**: the top-left corner
+of its own extent is `(0, 0)`. When the router delivers a mouse event down the
+tree, it subtracts each child's origin as it descends — so the position you
+receive in `handle_event` is already local. There is no public `make_local` /
+`make_global` helper; the subtraction lives inside `Group::route_event`
+(`src/view/group.rs`):
+
+```text
+// Inside route_event, before delivering to child i:
+ev.offset(-child.origin.x, -child.origin.y);
+```
+
+This means a `MouseDown` arriving at `(35, 7)` in the parent's space arrives as
+`(3, 2)` in a child whose `origin` is `(32, 5)`. Converting a position you
+received in `handle_event` back to the parent's space (e.g. to hit-test against a
+sibling) is just adding your own origin:
+
+```rust
+# use tvision_rs as tv;
+# use tv::{Event, View, ViewState};
+# struct MyView { state: ViewState }
+# impl View for MyView {
+#   fn state(&self) -> &ViewState { &self.state }
+#   fn state_mut(&mut self) -> &mut ViewState { &mut self.state }
+#   fn draw(&mut self, ctx: &mut tv::DrawCtx) {}
+fn handle_event(&mut self, ev: &mut Event, ctx: &mut tv::Context) {
+    if let Event::MouseDown(m) = ev {
+        // m.position is already in this view's local space.
+        let local = m.position;
+        // Convert to parent (owner) space, e.g. to compare with a sibling's bounds:
+        let in_owner = local + self.state.origin;
+        let _ = in_owner;
+    }
+}
+# }
+```
+
+Because `DrawCtx` also clips to the view's own extent, you can safely write to
+any position within `0 .. size` without worrying about neighboring views.
+
+> **Turbo Vision heritage:** `TView::makeLocal` / `makeGlobal` walked the owner
+> chain to convert between coordinate spaces. In tvision-rs the router handles the
+> descent automatically; there is no equivalent pair of methods because views have
+> no up-pointer to walk back up.
+
+## Overriding `set_state`
+
+The framework flips a small set of [`StateFlag`](../api/tvision-rs/view/enum.StateFlag.html)s
+on a view during focus and activation — `Active`, `Selected`, `Focused`,
+`Dragging`, `Visible`. To react when one of these changes, override
+[`View::set_state`](../api/tvision-rs/view/trait.View.html#method.set_state). The
+default implementation sets the flag on `ViewState` and, for `Focused`, broadcasts
+`RECEIVED_FOCUS` / `RELEASED_FOCUS`. Always call through to the inner/default
+behaviour **first** so the flag is set before your side effects run:
+
+```rust
+# use tvision_rs as tv;
+# use tv::{Context, Event, Role, StateFlag, View, ViewState};
+# struct MyView { state: ViewState }
+# impl View for MyView {
+#   fn state(&self) -> &ViewState { &self.state }
+#   fn state_mut(&mut self) -> &mut ViewState { &mut self.state }
+#   fn draw(&mut self, _ctx: &mut tv::DrawCtx) {}
+fn set_state(&mut self, flag: StateFlag, enable: bool, ctx: &mut Context) {
+    // 1. Let the base update the flag and broadcast focus events.
+    self.state.set_flag(flag, enable);
+    if flag == StateFlag::Focused {
+        let source = self.state.id();
+        ctx.broadcast(
+            if enable { tv::Command::RECEIVED_FOCUS } else { tv::Command::RELEASED_FOCUS },
+            source,
+        );
+    }
+    // 2. React to the new state — e.g. enable/disable a command when focus changes.
+    //    The framework's whole-tree redraw picks up the changed state automatically;
+    //    no explicit draw call is needed.
+    if flag == StateFlag::Focused && enable {
+        ctx.enable_command(tv::Command::OK);
+    }
+}
+# }
+```
+
+The same pattern lets you disable a command while unfocused (call
+`ctx.disable_command`) or show/hide sibling views (via
+`ctx.request_set_visible(sibling_id, enable)`). Because you hold only `&mut
+Context` — not a `&mut Group` — effects that reach beyond this view go through
+the deferred channel. See [Deferred effects](deferred.md) for the full list.
+
+Source: `src/view/view.rs` (`View::set_state` default), `src/view/group.rs`
+(`Group::set_state` propagation to children).
+
+## A custom view's colors
+
+Colors come from a **[`Role`](../api/tvision-rs/theme/enum.Role.html)**, never from
+a raw palette index. Ask `DrawCtx` for a role and get back a
+[`Style`](../api/tvision-rs/color/struct.Style.html) — a foreground/background color
+pair with optional modifiers:
+
+```rust
+use tvision_rs::{DrawCtx, Rect, Role, View, ViewState};
+
+# #[allow(dead_code)]
+struct Highlighted { state: ViewState }
+
+impl View for Highlighted {
+    fn state(&self) -> &ViewState { &self.state }
+    fn state_mut(&mut self) -> &mut ViewState { &mut self.state }
+
+    fn draw(&mut self, ctx: &mut DrawCtx) {
+        // Pick a role appropriate to the widget's semantic meaning.
+        let normal = ctx.style(Role::Normal);
+        let focused = ctx.style(Role::Focused);
+        let style = if self.state.state.focused { focused } else { normal };
+        ctx.fill(self.state.get_extent(), ' ', style);
+    }
+}
+```
+
+The [`Role`](../api/tvision-rs/theme/enum.Role.html) enum is closed — all roles are
+first-party. The mapping from role to `Style` lives in the active
+[`Theme`](../api/tvision-rs/theme/struct.Theme.html). Custom views pick the role
+closest to their semantic meaning:
+
+| Widget kind | Good starting role |
+| --- | --- |
+| Background / filler | `Role::Normal` |
+| Focused editable field | `Role::Focused` |
+| Inactive editable field | `Role::Normal` |
+| Caption / label | `Role::StaticText` |
+| Frame (active window) | `Role::FrameActive` |
+| Frame (passive window) | `Role::FramePassive` |
+| Disabled control | `Role::Disabled` |
+
+For more on how roles map to colors and how to swap themes at runtime, see
+[Theming & colors](../apps/theming.md). Source: `src/theme.rs`, `src/color.rs`.
+
+> **Turbo Vision heritage:** C++ views looked up a palette-index entry
+> (`mapColor`) and received a raw terminal attribute byte. tvision-rs replaces every
+> palette lookup with a named `Role` (deviation D7), so swapping the whole theme
+> repaints the UI without any per-widget change.
+
 ## Where to go next
 
 - [The view tree](view-tree.md) — how groups own and lay out their children.
 - [Deferred effects](deferred.md) — how a leaf requests changes to loop state.
 - [Controls](../apps/controls.md) — the ready-made views you will reach for
   before writing your own.
+- [Theming & colors](../apps/theming.md) — the full role catalog and how to build
+  a custom theme.

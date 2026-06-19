@@ -94,3 +94,8 @@ theme-editor dialog
 ([`Program::theme_editor`](../api/tvision-rs/app/struct.Program.html#method.theme_editor)):
 it opens an editor seeded with the current theme and, on **OK**, installs the
 result through `set_theme`.
+
+## See also
+
+- [Writing your own View — colors](../internals/custom-view.md#a-custom-views-colors) —
+  how to pick a `Role` for a custom view and what the role map looks like.

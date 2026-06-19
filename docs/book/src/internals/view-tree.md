@@ -94,4 +94,6 @@ of its controls, and how a leaf view reaches a sibling — see
 - **[The event loop in depth](event-loop.md)** — how an event travels down the
   tree and how the group's three-phase routing picks a receiver.
 - **[Writing your own View](custom-view.md)** — the composition recipe in
-  practice, plus the `#[delegate]` macro for embed-and-forward.
+  practice, plus the `#[delegate]` macro for embed-and-forward, and how to choose
+  a `Role` for a custom view's colors (see
+  [A custom view's colors](custom-view.md#a-custom-views-colors)).
