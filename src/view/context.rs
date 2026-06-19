@@ -303,9 +303,17 @@ pub enum Deferred {
 
     // -- the editor cross-view brokers ---------------------------
     /// **Indicator write**: update an editor's position/modified indicator.
-    /// Resolve `indicator`, downcast to [`Indicator`](crate::widgets::Indicator),
-    /// and call `set_value(location, modified)`. The editor (a leaf) cannot mutate
-    /// its sibling indicator inline. Touches the **view-tree** family.
+    /// Resolve `indicator` and call [`View::set_indicator_value`] — virtual
+    /// dispatch, no downcast. The editor (a leaf) cannot mutate its sibling
+    /// indicator inline. Touches the **view-tree** family.
+    ///
+    /// **§2.1 — kept as a separate variant (not folded into `ScrollSync` /
+    /// `apply_scroll_sync`):** this variant carries `{ location: Point, modified:
+    /// bool }` — an editor→indicator *push*, not a scrollbar `(h, v)` *read*.
+    /// Folding it into `ScrollSync` would force that hook to carry unrelated fields
+    /// and make it murkier than the downcast it removes. It therefore keeps its own
+    /// variant and gets its own defaulted hook
+    /// ([`View::set_indicator_value`](crate::view::View::set_indicator_value)).
     IndicatorSetValue {
         /// The indicator to update.
         indicator: ViewId,

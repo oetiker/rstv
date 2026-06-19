@@ -143,10 +143,13 @@ impl View for Spy {
         self.mark("descendant_global_bounds");
         None
     }
+    fn set_indicator_value(&mut self, _location: Point, _modified: bool) {
+        self.mark("set_indicator_value");
+    }
 }
 
 // ---------------------------------------------------------------------------
-// D — pure delegator: empty impl, macro injects ALL 27 forwarders.
+// D — pure delegator: empty impl, macro injects ALL 28 forwarders.
 // ---------------------------------------------------------------------------
 
 struct D {
@@ -300,6 +303,9 @@ fn delegate_forwards_every_known_view_method() {
     // -- descendant_global_bounds -------------------------------------------
     let _ = d.descendant_global_bounds(id, Point::new(0, 0));
 
+    // -- set_indicator_value ------------------------------------------------
+    d.set_indicator_value(Point::new(0, 0), false);
+
     // -- draw (needs a DrawCtx; use the HeadlessBackend pattern) -----------
     {
         let theme = Theme::classic_blue();
@@ -348,6 +354,7 @@ fn delegate_forwards_every_known_view_method() {
         "get_help_ctx",
         "as_any_mut",
         "descendant_global_bounds",
+        "set_indicator_value",
     ];
     for m in expected {
         assert!(

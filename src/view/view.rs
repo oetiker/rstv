@@ -987,6 +987,14 @@ pub trait View {
     fn descendant_global_bounds(&self, _id: ViewId, _acc: Point) -> Option<Rect> {
         None
     }
+
+    /// The editor→indicator status-push broker hook. Defaulted no-op; the editor's
+    /// status [`Indicator`](crate::widgets::Indicator) overrides it to store the new
+    /// cursor `location` + `modified` flag. Driven by
+    /// [`Deferred::IndicatorSetValue`](crate::view::Deferred::IndicatorSetValue):
+    /// the editor (a leaf) cannot reach its indicator sibling inline, so it requests
+    /// this and the pump calls the method by id — virtual dispatch, not a downcast.
+    fn set_indicator_value(&mut self, _location: Point, _modified: bool) {}
 }
 
 #[cfg(test)]

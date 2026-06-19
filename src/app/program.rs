@@ -2240,20 +2240,16 @@ impl Program {
                             // -- the TEditor cross-view brokers ----
                             //
                             // Indicator write (TEditor::doUpdate →
-                            // indicator->setValue): resolve the indicator,
-                            // downcast, set_value.
+                            // indicator->setValue): resolve the indicator and
+                            // call the View trait hook — virtual dispatch, no
+                            // downcast.
                             Deferred::IndicatorSetValue {
                                 indicator,
                                 location,
                                 modified,
                             } => {
-                                use crate::widgets::Indicator;
-                                if let Some(ind) = group
-                                    .find_mut(indicator)
-                                    .and_then(|view| view.as_any_mut())
-                                    .and_then(|a| a.downcast_mut::<Indicator>())
-                                {
-                                    ind.set_value(location, modified);
+                                if let Some(ind) = group.find_mut(indicator) {
+                                    ind.set_indicator_value(location, modified);
                                 }
                             }
                             // Clipboard copy (TEditor::clipCopy → setText):

@@ -89,5 +89,7 @@ fn view(f: &Ident, k: &TokenStream) -> Vec<(&'static str, TokenStream)> {
          quote! { fn as_any_mut(&mut self) -> ::core::option::Option<&mut dyn ::core::any::Any> { self.#f.as_any_mut() } }),
         ("descendant_global_bounds",
          quote! { fn descendant_global_bounds(&self, id: #k::ViewId, acc: #k::Point) -> ::core::option::Option<#k::Rect> { self.#f.descendant_global_bounds(id, acc) } }),
+        ("set_indicator_value",
+         quote! { fn set_indicator_value(&mut self, location: #k::Point, modified: bool) { self.#f.set_indicator_value(location, modified) } }),
     ]
 }

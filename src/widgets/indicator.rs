@@ -97,11 +97,19 @@ impl View for Indicator {
         &mut self.state
     }
 
-    /// Concrete-reach hatch (the sanctioned downcast): the pump downcasts to
-    /// `&mut Indicator` to call [`set_value`](Self::set_value) when applying a
+    /// Delivers an editor→indicator status push: stores the new cursor `location`
+    /// and `modified` flag. Called by the pump when applying a
     /// [`Deferred::IndicatorSetValue`](crate::view::Deferred::IndicatorSetValue)
-    /// from an editor's `doUpdate`. Without this the broker's downcast yields
-    /// `None` and the indicator never updates (stuck at its `(0,0)` → "1:1").
+    /// from an editor's `doUpdate`. Virtual dispatch via the `View` trait — no
+    /// downcast needed.
+    fn set_indicator_value(&mut self, location: Point, modified: bool) {
+        self.set_value(location, modified);
+    }
+
+    /// Concrete-reach hatch retained for test inspection (reading `location` from
+    /// an integration test requires the concrete type). No longer used by the
+    /// `IndicatorSetValue` pump arm, which now calls
+    /// [`set_indicator_value`](View::set_indicator_value) via virtual dispatch.
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
         Some(self)
     }
