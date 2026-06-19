@@ -190,15 +190,22 @@ pub enum Role {
     InfoPane,
 
     // -- Outline viewer ------------------------------------------------------
-    /// An outline viewer's normal item (the graph plus an expanded item's text).
+    /// Style for a normal (non-focused, non-selected) outline row: applied to
+    /// the graph prefix and the text of an expanded node. Used by
+    /// [`ov_draw`](crate::widgets::outline::ov_draw) for every row that is
+    /// neither focused nor selected.
     OutlineNormal,
-    /// An outline viewer's focused item (the focused row when the viewer is
-    /// focused).
+    /// Style for the focused row of an outline viewer when the viewer has
+    /// keyboard focus. Applied to both the graph prefix and the node text,
+    /// regardless of whether the node is expanded or collapsed.
     OutlineFocused,
-    /// An outline viewer's selected item.
+    /// Style for a selected (highlighted) outline row that does not currently
+    /// hold focus. Used by outline subclasses that implement multi-selection
+    /// by overriding [`OutlineViewer::is_selected`](crate::widgets::OutlineViewer::is_selected).
     OutlineSelected,
-    /// An outline viewer's collapsed (not-expanded) item — the dimmer text shown
-    /// for a collapsed node.
+    /// Style for the text of a collapsed (not-expanded) node on a normal row.
+    /// Applies only when the row is neither focused nor selected, making
+    /// collapsed nodes visually dimmer than expanded ones.
     OutlineNotExpanded,
 
     /// Window/menu drop shadows — dark gray on black, applied by the shadow pass

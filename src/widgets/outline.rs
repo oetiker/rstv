@@ -1150,24 +1150,47 @@ fn clear_and_adjust<L: OutlineViewer + ?Sized>(
 // Outline — the concrete outline over an owned tree
 // ---------------------------------------------------------------------------
 
-/// The concrete outline viewer over an owned [`Node`] tree.
+/// A collapsible tree widget backed by an owned [`Node`] tree.
+///
+/// `Outline` is the ready-to-use concrete outline viewer. Build a [`Node`]
+/// tree with [`Node::new`] and the builder methods, pass it to [`Outline::new`],
+/// insert the widget into a group, and call [`ov_update`] once to publish the
+/// scrollbar parameters. After that, the widget handles keyboard and mouse
+/// navigation on its own.
+///
+/// To replace the displayed tree at runtime, assign a new value to
+/// [`Outline::root`] and call [`ov_update`] again so the scrollbar limits
+/// reflect the new content.
 ///
 /// # Turbo Vision heritage
 ///
-/// Ports `TOutline` (`toutline.cpp`).
+/// Ports `TOutline` (`toutline.cpp`). The C++ pointer-based tree becomes owned
+/// `Box<Node>` links whose recursive drop replaces the explicit `disposeNode`
+/// destructor.
 pub struct Outline {
     ov: OutlineViewerState,
-    /// The owned tree root (`None` = empty).
+    /// The owned root node of the displayed tree, or `None` for an empty outline.
+    ///
+    /// Siblings chain through [`Node::next`] and children through
+    /// [`Node::child_list`]; the recursive `Box<Node>` drop frees the entire
+    /// subtree when this field is replaced or the `Outline` is dropped.
+    ///
+    /// To swap the tree at runtime, replace this field and call [`ov_update`]
+    /// so the scrollbar limits stay consistent with the new content.
     pub root: Option<Box<Node>>,
 }
 
 impl Outline {
-    /// Build an outline over `bounds`, the two scrollbars, and `root`.
+    /// Create an `Outline` over `bounds`, with optional horizontal (`h`) and
+    /// vertical (`v`) scrollbar ids and an initial tree `root`.
     ///
-    /// **NOTE:** publishing the scroll-bar limits needs a `Context` we do not
-    /// have at construction. The consumer must call [`ov_update`] once after
-    /// inserting this outline into a group (the same constraint the scroller /
-    /// list-viewer constructors hit).
+    /// After calling `new`, insert the widget into a group and then call
+    /// [`ov_update`] with the resulting [`Context`]. That second step is
+    /// mandatory: publishing the scrollbar range and page parameters requires a
+    /// `Context`, which is unavailable at construction time (the same constraint
+    /// that [`crate::widgets::Scroller`] and [`crate::widgets::ListViewer`] face).
+    /// Skipping `ov_update` leaves the scrollbars at their zero defaults and the
+    /// focus unclamped.
     pub fn new(
         bounds: Rect,
         h: Option<ViewId>,
@@ -1223,12 +1246,19 @@ impl OutlineViewer for Outline {
         &mut self.ov
     }
 
+    /// Returns `self.root.as_deref()` — the root of the owned node tree.
     fn get_root(&self) -> Option<&Node> {
         self.root.as_deref()
     }
+
+    /// Returns the next sibling of `node` by following [`Node::next`].
     fn get_next<'a>(&'a self, node: &'a Node) -> Option<&'a Node> {
         node.next.as_deref()
     }
+
+    /// Returns the `i`-th child of `node` (0-based) by walking the
+    /// [`Node::child_list`] → [`Node::next`] sibling chain `i` steps.
+    /// Returns `None` if `i` is out of range.
     fn get_child<'a>(&'a self, node: &'a Node, i: i32) -> Option<&'a Node> {
         // C++ getChild walks childList->next i times.
         let mut p = node.child_list.as_deref();
@@ -1242,6 +1272,9 @@ impl OutlineViewer for Outline {
         }
         p
     }
+
+    /// Counts `node`'s direct children by walking the sibling chain starting
+    /// at [`Node::child_list`].
     fn get_num_children(&self, node: &Node) -> i32 {
         let mut i = 0;
         let mut p = node.child_list.as_deref();
@@ -1251,16 +1284,30 @@ impl OutlineViewer for Outline {
         }
         i
     }
+
+    /// Returns `node.text` as a `&str`.
     fn get_text<'a>(&'a self, node: &'a Node) -> &'a str {
         &node.text
     }
+
+    /// Returns `node.expanded`.
     fn is_expanded(&self, node: &Node) -> bool {
         node.expanded
     }
+
+    /// Returns `true` when [`Node::child_list`] is `Some`.
     fn has_children(&self, node: &Node) -> bool {
         node.child_list.is_some()
     }
 
+    /// Set the expanded state of the node at DFS position `pos` in the
+    /// currently visible tree.
+    ///
+    /// Unlike the C++ `TOutline::adjust`, which takes a raw node pointer,
+    /// this implementation takes a DFS position index. It walks the owned tree
+    /// with [`set_expanded_at_pos`] to find and mutate the node — making the
+    /// shared traversal code position-keyed throughout rather than mixing
+    /// positions and pointers.
     fn adjust(&mut self, pos: i32, expand: bool) {
         if pos < 0 {
             return;
