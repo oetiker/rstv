@@ -45,40 +45,53 @@ read or write as a [deferred effect](deferred.md), and the
 deferred-apply time, when the entire tree is reachable through the root group.
 The pump is the broker.
 
-The pattern (established by the scroller, reused by the list viewer and outline
-viewer) is always the same: resolve each participant in its **own**
-`find_mut`, so only one `&mut` is live at a time, then downcast to the concrete
-type via `as_any_mut()` to call its real method:
+The pattern is always the same: resolve each participant in its **own**
+`find_mut`, so only one `&mut` is live at a time, then either call through the
+`View` trait (virtual dispatch) or downcast to the concrete type via
+`as_any_mut()` depending on what the effect needs.
 
 ```rust,ignore
 // Illustrative sketch — not a standalone program.
 // At deferred-apply, inside the pump, `group` is the whole tree:
-let dx = h_bar_id
+let hv = h_bar_id
     .and_then(|id| group.find_mut(id))   // resolve one bar
-    .and_then(|view| view.value())       // read its value
-    .and_then(field_int)
-    .unwrap_or(0);
-// ...read the v-bar the same way, then write the scroller:
-if let Some(s) = group
-    .find_mut(scroller)
-    .and_then(|view| view.as_any_mut())  // dyn View -> Any
-    .and_then(|a| a.downcast_mut::<Scroller>())
-{
-    s.apply_delta(Point::new(dx, dy));
+    .and_then(|view| view.value())       // read its value via the value protocol
+    .and_then(field_int);                // -> Option<i32>
+// ...read the v-bar the same way, then call the target through the View trait:
+if let Some(view) = group.find_mut(target) {
+    view.apply_scroll_sync(hv, vv, &mut ctx);  // virtual dispatch — no downcast
 }
 ```
 
 Reads cross the seam through the value protocol (`View::value()` →
 `FieldValue::Int`), so the broker never needs to know the sibling's concrete
-type just to read a number. Writes that *do* need the concrete type use
-`as_any_mut()` + `downcast_mut`. When the base is a trait rather than a struct
-(the list viewer family), the broker instead calls back through a defaulted
-`View` trait method — `apply_list_scroll` — since `dyn View` cannot be
-downcast to a trait.
+type to read a number. Writes use a **defaulted `View` trait method** when the
+effect can be expressed generically — the callee overrides exactly what it needs
+without the pump knowing the concrete type.
 
-Each cross-view interaction is its own deferred variant — `SyncScrollerDelta`,
-`ScrollBarSetParams`, `SyncListViewer`, and so on — so adding a new brokered
-relationship means [adding a variant](deferred.md), not threading a new pointer.
+The **scroll-family read-syncs** — Scroller, all list-viewer variants, Outline
+viewer, and Editor — share a single hook `View::apply_scroll_sync(h, v, ctx)`
+and a single deferred variant `Deferred::ScrollSync { target, h, v }`. Each
+widget overrides `apply_scroll_sync` to interpret the `Option<i32>` deltas per
+its own semantics (Scroller and Outline use `unwrap_or(0)`; Editor preserves
+`None` to skip an axis). For composite widgets such as the text editor, the
+`#[delegate(to = field)]` macro forwards `apply_scroll_sync` to the inner
+view automatically, so the pump calls it without knowing the wrapper.
+
+Two further syncs — `Deferred::IndicatorSetValue` and `Deferred::PageStackSync`
+— are also downcast-free but keep their own hooks (`View::set_indicator_value`
+and `View::apply_page_sync`) because their payloads are not scroll deltas and
+the shared `(h, v)` hook would not fit (§2.1).
+
+A downcast (`as_any_mut()` + `downcast_mut`) is now used only where the effect
+genuinely requires the concrete struct and no trait hook fits — `ScrollBarSetParams`
+(the *write* direction, scroller → `ScrollBar`) and `SplitterDivider`
+(`Splitter`'s divider-move op). These remain as downcast sites by design.
+
+Each cross-view interaction is its own deferred variant — `ScrollSync`,
+`ScrollBarSetParams`, `IndicatorSetValue`, `PageStackSync`, and so on — so
+adding a new brokered relationship means [adding a variant](deferred.md), not
+threading a new pointer.
 
 ## Avoiding feedback loops
 

@@ -5,6 +5,44 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Phase 3 — sync signals to trait methods (consumer-API coverage, 2026-06-19)
+
+Eliminated all downcast calls from the pump's deferred-drain sync arms by routing
+each cross-view *read-sync* through a defaulted `View` trait method. Implemented
+on branch `consumer-api-coverage`, 7 commits (`22e054c`–`d693d8c`), base `6ccbce1`.
+
+**Four scroll-family read-syncs collapsed into one** (`22e054c`, `79fddda`,
+`38f5f4e`, `bbfedbb`): `apply_list_scroll` was renamed and generalized to
+`View::apply_scroll_sync(&mut self, h: Option<i32>, v: Option<i32>, ctx: &mut Context)`.
+The four separate deferred variants (`SyncScrollerDelta`, the list-viewer sync,
+`SyncOutlineViewerDelta`, and the editor sync) were collapsed into a single
+`Deferred::ScrollSync { target: ViewId, h: Option<ViewId>, v: Option<ViewId> }`.
+The pump arm reads each bar's `value()` into `Option<i32>` and calls
+`target.apply_scroll_sync(hv, vv, ctx)` via virtual dispatch — no
+`as_any_mut()`/`downcast_mut`. Each widget overrides the hook to interpret `None`
+per its own semantics (Scroller/Outline use `unwrap_or(0)`; Editor preserves `None`
+to skip an axis). For the `EditorView` composite wrapper the `#[delegate(to = editor)]`
+macro auto-forwards `apply_scroll_sync` to the inner `Editor` — the pump calls it
+without knowing the wrapper type.
+
+**Two de-downcast-in-place syncs** (`8182108`, `cfba725`): `Deferred::IndicatorSetValue`
+and `Deferred::PageStackSync` were also de-downcast, each gaining its own hook —
+`View::set_indicator_value(location: Point, modified: bool)` and
+`View::apply_page_sync(idx: usize, ctx: &mut Context)`. These were kept separate
+(rather than merged into `apply_scroll_sync`) because their payloads are not
+`(h, v)` scroll deltas; forcing them into the shared hook would produce a semantically
+wrong signature (§2.1).
+
+**Macro forwarders + spy entries**: each new `View` method (`apply_scroll_sync`
+as rename, `set_indicator_value`, `apply_page_sync`) received a matching forwarder
+in `tvision-rs-macros/src/specs.rs` and a spy entry in `tests/delegate_view.rs`
+(total forwarder count: 29 methods).
+
+**Deliberately left downcasting** (out of scope, recorded): `Deferred::ScrollBarSetParams`
+(the *write* direction scroller → `ScrollBar`) and `Deferred::SplitterDivider`
+(divider-move op on `Splitter`). These are the two non-scroll-read-sync broker arms
+and were explicitly excluded from Phase 3's specification.
+
 ## Dialog layout guide + `TabBar` + `PageStack` + color-picker rebuild (2026-06-15)
 
 Codified rstv's dialog layout language and added two composable rstv-original
