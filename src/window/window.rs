@@ -319,6 +319,20 @@ impl Window {
         self.group.child_mut(id)
     }
 
+    /// Gather the embedded group's whole record as one ordered
+    /// [`FieldValue::List`](crate::data::FieldValue). Forwards to
+    /// [`Group::gather_list`](crate::view::Group::gather_list).
+    pub fn gather_list(&self) -> crate::data::FieldValue {
+        self.group.gather_list()
+    }
+
+    /// Scatter an ordered [`FieldValue::List`](crate::data::FieldValue) record
+    /// back into the embedded group. Forwards to
+    /// [`Group::scatter_list`](crate::view::Group::scatter_list).
+    pub fn scatter_list(&mut self, record: &crate::data::FieldValue, ctx: &mut Context) {
+        self.group.scatter_list(record, ctx);
+    }
+
     /// The first non-frame child that downcasts to a [`Splitter`](crate::widgets::Splitter),
     /// or `None`. Used by the auto-brokering `draw` to read divider abutments.
     fn interior_splitter_mut(&mut self) -> Option<&mut crate::widgets::Splitter> {

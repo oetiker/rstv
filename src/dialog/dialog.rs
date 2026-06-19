@@ -71,6 +71,19 @@ impl Dialog {
         self.window.child_mut(id)
     }
 
+    /// Gather the dialog's whole record as one ordered
+    /// [`FieldValue::List`](crate::data::FieldValue). Forwards to
+    /// [`Window::gather_list`].
+    pub fn gather_list(&self) -> crate::data::FieldValue {
+        self.window.gather_list()
+    }
+
+    /// Scatter an ordered [`FieldValue::List`](crate::data::FieldValue) record
+    /// back into the dialog. Forwards to [`Window::scatter_list`].
+    pub fn scatter_list(&mut self, record: &crate::data::FieldValue, ctx: &mut Context) {
+        self.window.scatter_list(record, ctx);
+    }
+
     /// Insert a conventional button row: standard 10×2 buttons,
     /// [`BUTTON_GAP`](crate::dialog::BUTTON_GAP) apart, top edge at
     /// `height - BUTTON_ROW_FROM_BOTTOM`. `align` centers or right-groups the row.
@@ -532,6 +545,48 @@ mod tests {
         assert_eq!((b0.a.x, b0.a.y), (9, 9), "centered, row top = h-3");
         assert_eq!(b1.a.x, 9 + 10 + 2, "after gap");
         assert_eq!((b0.b.x - b0.a.x, b0.b.y - b0.a.y), (10, 2));
+    }
+
+    // -- 8. gather_list / scatter_list forwarders ----------------------------
+
+    #[test]
+    fn dialog_gather_scatter_list_round_trips() {
+        use crate::data::FieldValue;
+        use crate::widgets::{InputLine, LimitMode};
+        let mut d = Dialog::new(Rect::new(0, 0, 40, 12), Some("t".to_string()));
+        d.insert_child(Box::new(InputLine::new(
+            Rect::new(2, 2, 20, 3),
+            20,
+            None,
+            LimitMode::MaxBytes,
+        )));
+        d.insert_child(Box::new(InputLine::new(
+            Rect::new(2, 4, 20, 5),
+            20,
+            None,
+            LimitMode::MaxBytes,
+        )));
+
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+        let mut deferred: Vec<Deferred> = Vec::new();
+        with_ctx(&mut out, &mut timers, &mut deferred, |ctx| {
+            d.scatter_list(
+                &FieldValue::List(vec![
+                    FieldValue::Text("a".into()),
+                    FieldValue::Text("b".into()),
+                ]),
+                ctx,
+            );
+        });
+        assert_eq!(
+            d.gather_list(),
+            FieldValue::List(vec![
+                FieldValue::Text("a".into()),
+                FieldValue::Text("b".into()),
+            ]),
+            "Dialog forwards gather/scatter_list to its embedded Group"
+        );
     }
 
     #[test]
