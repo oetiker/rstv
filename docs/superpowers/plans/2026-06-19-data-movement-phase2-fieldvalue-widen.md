@@ -692,6 +692,104 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ---
 
+### Task 5: `Window`/`Dialog` forward `gather_list`/`scatter_list` (added after final review)
+
+**Why this task exists:** the final whole-phase review found that the `dialogs.md` example (and the spec §3.1 promise "a *Dialog*/Group gathers its children into an ordered `List`") is uncallable — `gather_list`/`scatter_list` live only on `Group`, and `Dialog`/`Window` neither forward them nor `Deref` to `Group`. Owner chose to close the API gap (Option B) rather than rewrite the example to use a bare `Group`. This makes the advertised dialog-level record real.
+
+**Files:**
+- Modify: `src/window/window.rs` — add two forwarders to `impl Window`, next to `insert_child`/`child_mut` (~309–319).
+- Modify: `src/dialog/dialog.rs` — add two forwarders to `impl Dialog`, next to `insert_child`/`child_mut` (~61–72).
+- Test: a focused round-trip test on `Dialog` (in whichever of the two files already has a `Context`-building test helper; model it on the existing dialog/window tests).
+
+**Interfaces:**
+- Consumes: `Group::gather_list(&self) -> FieldValue` and `Group::scatter_list(&mut self, &FieldValue, &mut Context)` (Task 3); the existing `Window { group: Group }` / `Dialog { window: Window }` embedding and its `insert_child` delegation idiom.
+- Produces: `Window::gather_list`/`scatter_list` and `Dialog::gather_list`/`scatter_list` (thin forwarders). Scope: ONLY the `List`-record pair (the docs-advertised surface) — do **not** also forward `gather_data`/`scatter_data` (no consumer; avoid speculative surface).
+
+- [ ] **Step 1: Write the failing test**
+
+A `Dialog` round-trip (place it in `src/dialog/dialog.rs`'s `#[cfg(test)] mod tests`; reuse whatever `Context`-building helper the existing dialog tests use — if dialog tests lack one, put the test in `src/window/window.rs` against a `Window` instead and model it on that file's existing tests):
+
+```rust
+#[test]
+fn dialog_gather_scatter_list_round_trips() {
+    use crate::data::FieldValue;
+    use crate::widgets::{InputLine, LimitMode};
+    // Build a dialog with two input lines.
+    let mut d = Dialog::new(Rect::new(0, 0, 40, 12), Some("t".to_string()));
+    d.insert_child(Box::new(InputLine::new(Rect::new(2, 2, 20, 3), 20, None, LimitMode::MaxBytes)));
+    d.insert_child(Box::new(InputLine::new(Rect::new(2, 4, 20, 5), 20, None, LimitMode::MaxBytes)));
+
+    // Scatter a record, then gather it back (needs a &mut Context — build it the
+    // way the surrounding tests in this file do).
+    <build ctx per local helper>;
+    d.scatter_list(
+        &FieldValue::List(vec![FieldValue::Text("a".into()), FieldValue::Text("b".into())]),
+        ctx,
+    );
+    assert_eq!(
+        d.gather_list(),
+        FieldValue::List(vec![FieldValue::Text("a".into()), FieldValue::Text("b".into())]),
+        "Dialog forwards gather/scatter_list to its embedded Group"
+    );
+}
+```
+
+- [ ] **Step 2: Run to verify it fails** — `cargo test -p tvision-rs --lib -j2 -- --test-threads=2 dialog_gather_scatter_list_round_trips`. Expected: FAIL to compile — `no method named gather_list`/`scatter_list` on `Dialog`.
+
+- [ ] **Step 3: Add the `Window` forwarders** (in `impl Window`, after `child_mut`):
+
+```rust
+    /// Gather the embedded group's whole record as one ordered
+    /// [`FieldValue::List`](crate::data::FieldValue). Forwards to
+    /// [`Group::gather_list`](crate::view::Group::gather_list).
+    pub fn gather_list(&self) -> crate::data::FieldValue {
+        self.group.gather_list()
+    }
+
+    /// Scatter an ordered [`FieldValue::List`](crate::data::FieldValue) record
+    /// back into the embedded group. Forwards to
+    /// [`Group::scatter_list`](crate::view::Group::scatter_list).
+    pub fn scatter_list(&mut self, record: &crate::data::FieldValue, ctx: &mut Context) {
+        self.group.scatter_list(record, ctx);
+    }
+```
+
+- [ ] **Step 4: Add the `Dialog` forwarders** (in `impl Dialog`, after `child_mut`):
+
+```rust
+    /// Gather the dialog's whole record as one ordered
+    /// [`FieldValue::List`](crate::data::FieldValue). Forwards to
+    /// [`Window::gather_list`].
+    pub fn gather_list(&self) -> crate::data::FieldValue {
+        self.window.gather_list()
+    }
+
+    /// Scatter an ordered [`FieldValue::List`](crate::data::FieldValue) record
+    /// back into the dialog. Forwards to [`Window::scatter_list`].
+    pub fn scatter_list(&mut self, record: &crate::data::FieldValue, ctx: &mut Context) {
+        self.window.scatter_list(record, ctx);
+    }
+```
+
+(Match the existing `Context` import in each file — `insert_child`/`child_mut` and the surrounding methods show the in-scope path.)
+
+- [ ] **Step 5: Run the test + clippy** — `cargo test -p tvision-rs --lib -j2 -- --test-threads=2 dialog_gather_scatter_list_round_trips` (PASS); `cargo clippy -p tvision-rs --all-targets -j2 -- -D warnings` (clean).
+
+- [ ] **Step 6: Commit** (stage `src/window/window.rs` + `src/dialog/dialog.rs`):
+
+```bash
+git commit -m "feat(window,dialog): forward gather_list/scatter_list to the embedded Group
+
+Window and Dialog gain thin gather_list/scatter_list forwarders (the established
+insert_child delegation idiom), so a dialog's whole record is reachable as one
+ordered FieldValue::List — the surface the spec (§3.1) and the dialogs guide
+already advertise. Scope: the List-record pair only.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+```
+
+---
+
 ## Final verification (whole-phase, before the broad review)
 
 ```bash
