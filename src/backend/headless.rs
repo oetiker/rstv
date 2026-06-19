@@ -45,6 +45,7 @@ pub struct HeadlessHandle {
     cursor: Rc<StdCell<Option<(u16, u16)>>>,
     events: Rc<RefCell<VecDeque<Event>>>,
     clipboard: Rc<RefCell<String>>,
+    size: Rc<StdCell<(u16, u16)>>,
 }
 
 impl HeadlessHandle {
@@ -104,6 +105,21 @@ impl HeadlessHandle {
     pub fn set_clipboard(&self, text: &str) {
         *self.clipboard.borrow_mut() = text.to_string();
     }
+
+    /// Simulate a terminal resize.
+    ///
+    /// Updates the shared size cell and pre-resizes the shared screen buffer so
+    /// that the next `pump_once` resize check (`backend.size()` ≠ current group
+    /// bounds) detects the change and calls `group.change_bounds` /
+    /// `renderer.resize`, relaying the resize to all child views through their
+    /// grow-modes.
+    ///
+    /// The shared buffer is cleared to blank cells at the new size so
+    /// `backend.draw()` can safely write any cell within the new bounds.
+    pub fn resize(&self, width: u16, height: u16) {
+        self.size.set((width, height));
+        self.buffer.borrow_mut().resize(width, height);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -117,24 +133,26 @@ impl HeadlessHandle {
 /// [`HeadlessHandle`] to observe and drive it.
 pub struct HeadlessBackend {
     shared: HeadlessHandle,
-    size: (u16, u16),
 }
 
 impl HeadlessBackend {
     /// Create a `width × height` headless backend.
     ///
     /// Returns `(backend, handle)`: move `backend` into a `Renderer` and retain
-    /// `handle` to inspect the screen and inject input.
+    /// `handle` to inspect the screen and inject input.  Call
+    /// [`HeadlessHandle::resize`] on the handle to simulate a terminal resize;
+    /// the next `pump_once` will detect the change and relay it through the view
+    /// tree via each child's grow-mode.
     pub fn new(width: u16, height: u16) -> (Self, HeadlessHandle) {
         let shared = HeadlessHandle {
             buffer: Rc::new(RefCell::new(Buffer::new(width, height))),
             cursor: Rc::new(StdCell::new(None)),
             events: Rc::new(RefCell::new(VecDeque::new())),
             clipboard: Rc::new(RefCell::new(String::new())),
+            size: Rc::new(StdCell::new((width, height))),
         };
         let backend = HeadlessBackend {
             shared: shared.clone(),
-            size: (width, height),
         };
         (backend, shared)
     }
@@ -142,7 +160,7 @@ impl HeadlessBackend {
 
 impl Backend for HeadlessBackend {
     fn size(&self) -> (u16, u16) {
-        self.size
+        self.shared.size.get()
     }
 
     /// Write each changed cell into the internal buffer.

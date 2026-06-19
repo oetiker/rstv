@@ -1086,8 +1086,13 @@ impl View for DirBox {
 //
 // The original TCV.PAS set `Window^.Flags := $00; GrowMode := $00` to make
 // this a fixed, icon-less panel (no close/zoom icons, not movable). This is
-// now faithful via the public `with_flags`/`with_grow_mode` API (landed as
-// part of the consumer-API coverage axis).
+// now faithful via `with_flags(WindowFlags::default())` for the flags.
+//
+// DEVIATION: The original GrowMode := $00 was faithful to DOS's fixed 80×25
+// screen where resizing was impossible. We deliberately deviate here by
+// assigning grow-modes so the catalog and all its children follow modern
+// terminal resizes: the window tracks both hi edges, children scale their
+// respective edges to fill the new geometry.
 // ---------------------------------------------------------------------------
 
 struct DataWindow {
@@ -1098,7 +1103,13 @@ impl DataWindow {
     fn new(bounds: Rect) -> Self {
         let mut dialog = Dialog::new(bounds, Some("Tobis Catalog Vision Version 2.2".to_string()))
             .with_flags(WindowFlags::default()) // TCV: Flags := $00 (fixed, no icons)
-            .with_grow_mode(GrowMode::default()); // TCV: GrowMode := $00
+            // DEVIATION from TCV.PAS GrowMode := $00: track both hi edges so
+            // the window stretches to fill the terminal on resize.
+            .with_grow_mode(GrowMode {
+                hi_x: true,
+                hi_y: true,
+                ..Default::default()
+            });
 
         let inner = bounds; // dialog-local coords start at (0,0)
         let w = inner.b.x - inner.a.x;
@@ -1106,7 +1117,7 @@ impl DataWindow {
 
         // Buttons along the bottom row, mirroring the original layout.
         let btn_y = h - 3;
-        dialog.insert_child(Box::new(Button::new(
+        let mut btn_info = Button::new(
             Rect::new(w - 45, btn_y, w - 33, btn_y + 2),
             "~I~nfo",
             CMD_INFO,
@@ -1114,8 +1125,11 @@ impl DataWindow {
                 broadcast: true,
                 ..ButtonFlags::new()
             },
-        )));
-        dialog.insert_child(Box::new(Button::new(
+        );
+        btn_info.state_mut().grow_mode = GrowMode::grow_all();
+        dialog.insert_child(Box::new(btn_info));
+
+        let mut btn_about = Button::new(
             Rect::new(w - 30, btn_y, w - 18, btn_y + 2),
             "~A~bout",
             CMD_ABOUT,
@@ -1123,28 +1137,49 @@ impl DataWindow {
                 broadcast: true,
                 ..ButtonFlags::new()
             },
-        )));
-        dialog.insert_child(Box::new(Button::new(
+        );
+        btn_about.state_mut().grow_mode = GrowMode::grow_all();
+        dialog.insert_child(Box::new(btn_about));
+
+        let mut btn_exit = Button::new(
             Rect::new(w - 15, btn_y, w - 3, btn_y + 2),
             "E~x~it",
             Command::QUIT,
             ButtonFlags::new(),
-        )));
+        );
+        btn_exit.state_mut().grow_mode = GrowMode::grow_all();
+        dialog.insert_child(Box::new(btn_exit));
 
         // The scrollbar lives on the right edge of the list area.
         let list_rect = Rect::new(2, 2, w - 2, h - 4);
-        let sb = ScrollBar::new(Rect::new(w - 2, 2, w - 1, h - 4));
+        let mut sb = ScrollBar::new(Rect::new(w - 2, 2, w - 1, h - 4));
+        sb.state_mut().grow_mode = GrowMode {
+            lo_x: true,
+            hi_x: true,
+            hi_y: true,
+            ..Default::default()
+        };
         let sb_id = dialog.insert_child(Box::new(sb));
 
-        let list = DirBox::new(list_rect, None, Some(sb_id));
+        let mut list = DirBox::new(list_rect, None, Some(sb_id));
+        list.state_mut().grow_mode = GrowMode {
+            hi_x: true,
+            hi_y: true,
+            ..Default::default()
+        };
         let list_id = dialog.insert_child(Box::new(list));
 
         // Header label, linked to the list (Alt-D focuses it).
-        dialog.insert_child(Box::new(Label::new(
+        let mut label = Label::new(
             Rect::new(3, 1, w - 2, 2),
             "~D~isk          File Name      Comment",
             Some(list_id),
-        )));
+        );
+        label.state_mut().grow_mode = GrowMode {
+            hi_x: true,
+            ..Default::default()
+        };
+        dialog.insert_child(Box::new(label));
 
         DataWindow { dialog }
     }
@@ -1629,5 +1664,67 @@ mod tests {
             frame.contains("Tobis Catalog Vision"),
             "catalog window should still be visible after modal closes; got:\n{frame}"
         );
+    }
+
+    /// End-to-end resize test: after `HeadlessHandle::resize` + `pump_once` the
+    /// catalog window and all its children grow to fill the new terminal size.
+    ///
+    /// Verifies:
+    /// - Before resize: right frame border (`║`) at column 79 (last column of
+    ///   80-wide terminal), NOT at column 99.
+    /// - After resize to 100×30: right frame border at column 99, and the old
+    ///   right-border column (79) is no longer `║` (it is interior content now).
+    #[test]
+    fn window_grows_on_terminal_resize() {
+        let (backend, screen) = HeadlessBackend::new(80, 25);
+        let mut app = TcvApp::new(Box::new(backend));
+
+        // Initial layout pass.
+        app.program.pump_once();
+
+        // Box-drawing right-border glyph used by the Dialog/Window frame.
+        let right_border = "\u{2551}"; // ║
+
+        // At 80 wide: the dialog fills the desktop (0..80). The right edge of
+        // the frame is at column 79 (0-indexed). Row 5 is well within the
+        // interior rows so should be the `║` side border.
+        let before_frame = screen.snapshot();
+        {
+            let buf = screen.buffer();
+            let cell_at_79 = buf.get(79, 5).symbol();
+            assert_eq!(
+                cell_at_79, right_border,
+                "before resize: expected '║' at col 79, row 5; got {:?}\nframe:\n{before_frame}",
+                cell_at_79
+            );
+            // Column 99 doesn't exist on the 80-wide screen — we just verify
+            // the right border is at 79, not wider.
+        }
+
+        // Simulate a terminal resize to 100×30.
+        screen.resize(100, 30);
+        app.program.pump_once();
+
+        // After resize: the dialog should have grown to fill 100 columns ×
+        // 29 desktop rows (status line still takes 1 row). Right border moves
+        // to column 99, and column 79 is now interior (not `║`).
+        let after_frame = screen.snapshot();
+        {
+            let buf = screen.buffer();
+
+            let cell_at_99 = buf.get(99, 5).symbol();
+            assert_eq!(
+                cell_at_99, right_border,
+                "after resize: expected '║' at col 99, row 5; got {:?}\nframe:\n{after_frame}",
+                cell_at_99
+            );
+
+            let cell_at_79 = buf.get(79, 5).symbol();
+            assert_ne!(
+                cell_at_79, right_border,
+                "after resize: col 79 should be interior (not '║'); got {:?}\nframe:\n{after_frame}",
+                cell_at_79
+            );
+        }
     }
 }
