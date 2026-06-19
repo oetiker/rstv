@@ -1,7 +1,7 @@
 # The event loop in depth
 
 tvision-rs runs the entire application on **one** non-recursive event loop in
-[`Program`](../api/tvision-rs/app/struct.Program.html). Every event — keystrokes,
+[`Program`](../api/tvision_rs/app/struct.Program.html). Every event — keystrokes,
 mouse motion, modal dialogs, window drags, mouse hold-tracking — routes through a
 single pass called `pump_once`. Modality and press-and-hold are not separate
 blocking loops; they are *capture handlers* stacked on a LIFO capture stack (see
@@ -18,7 +18,7 @@ loop enforces this structurally.
 
 ## `run` is the only outer loop
 
-[`Program::run`](../api/tvision-rs/app/struct.Program.html#method.run) is the whole
+[`Program::run`](../api/tvision_rs/app/struct.Program.html#method.run) is the whole
 application loop. It pumps until something sets an end command, then asks the
 *tree* to validate that command; if it validates, return, otherwise clear it and
 keep pumping:
@@ -40,8 +40,8 @@ loop {
 > **Turbo Vision heritage:** this mirrors `TGroup::execute`'s
 > `while (!valid(endState))` pattern.
 
-[`run_app`](../api/tvision-rs/app/struct.Program.html#method.run_app) is the same
-loop with one addition: any [`Command`](../api/tvision-rs/command/struct.Command.html)
+[`run_app`](../api/tvision_rs/app/struct.Program.html#method.run_app) is the same
+loop with one addition: any [`Command`](../api/tvision_rs/command/struct.Command.html)
 that survives all view routing is handed to your callback. That is where menu
 commands like "open the color picker" get serviced. You almost always call one of
 these two and never touch the machinery below.
@@ -56,7 +56,7 @@ phases, in order:
 | **Resize** | Query the terminal size; if it changed, relayout the whole tree. There is no `Event::Resize` — the backend is polled live. |
 | **Settle currency** | Apply any pending insert-time focus cascades so the event about to be dispatched sees a fully settled focus state. |
 | **Pick an event** | Drain the internal queue first, else poll the backend with the frame-tick timeout; an idle pick may synthesize a mouse auto-repeat. |
-| **Idle** | No event: fire expired timers as [`Event::Timer`](../api/tvision-rs/event/enum.Event.html), refresh the status line's help context. |
+| **Idle** | No event: fire expired timers as [`Event::Timer`](../api/tvision_rs/event/enum.Event.html), refresh the status line's help context. |
 | **Pre-route** | A `KeyDown` (always) or a `MouseDown` on the status line is offered to the status line first, so accelerators like F10/Alt-X fire even under a modal. |
 | **The dispatch gate** | Drop the event if it is a disabled command; otherwise offer it to the capture stack, then to normal view routing. |
 | **Deferred drain** | Apply every queued effect once, in insertion order. |
@@ -75,12 +75,12 @@ event *is* the modal loop.
 ### The deferred drain
 
 A view is borrowed *downward* during dispatch as `&mut dyn View` plus a
-[`Context`](../api/tvision-rs/view/struct.Context.html); it cannot reach back up to
+[`Context`](../api/tvision_rs/view/struct.Context.html); it cannot reach back up to
 the loop-owned capture stack, command set, or sibling views. So instead of acting
 inline it **queues** the effect, and the pump applies the whole queue in one pass
 *after* dispatch — capture pushes, command enable/disable, bounds changes, modal
 close, focus moves, and the cross-view broker syncs. This is the
-[`Deferred`](../api/tvision-rs/view/enum.Deferred.html) channel; it has its own page,
+[`Deferred`](../api/tvision_rs/view/enum.Deferred.html) channel; it has its own page,
 [Deferred effects](./deferred.md). Two rules matter here: the drain runs even when
 the pre-route consumed the event, and it runs **once** — anything an effect
 re-queues waits for the next pump (a loop-until-empty would risk spinning).
@@ -91,12 +91,12 @@ always separated by at least one pump boundary.
 
 ## The capture stack
 
-The [`CaptureStack`](../api/tvision-rs/capture/struct.CaptureStack.html) is the LIFO
-list of [`CaptureHandler`](../api/tvision-rs/capture/trait.CaptureHandler.html)s that
+The [`CaptureStack`](../api/tvision_rs/capture/struct.CaptureStack.html) is the LIFO
+list of [`CaptureHandler`](../api/tvision_rs/capture/trait.CaptureHandler.html)s that
 implements modality, dragging, press-and-hold, and menu sessions — anything that
 needs to intercept events globally before normal routing. Each handler is offered
 every event and returns a
-[`CaptureFlow`](../api/tvision-rs/capture/enum.CaptureFlow.html):
+[`CaptureFlow`](../api/tvision_rs/capture/enum.CaptureFlow.html):
 
 - `Pass` — not mine; offer it to the next lower handler, then to the view tree.
 - `Consumed` — handled; stop routing, stay on the stack.
@@ -117,7 +117,7 @@ view tree in order: the **pre-process** children, the **focused** child, then
 the **post-process** children. A view that participates in more than one leg —
 or that simply needs to know which leg it is on — reads `ctx.phase()`.
 
-The three values of [`Phase`](../api/tvision-rs/view/enum.Phase.html):
+The three values of [`Phase`](../api/tvision_rs/view/enum.Phase.html):
 
 | Phase | Which views | Typical use |
 | ----- | ----------- | ----------- |
@@ -125,7 +125,7 @@ The three values of [`Phase`](../api/tvision-rs/view/enum.Phase.html):
 | `Focused` | The current child only (no option gate) | Ordinary key handling, text input |
 | `PostProcess` | Children with `options.post_process = true` | Plain-letter hot-keys on buttons, check-boxes, labels |
 
-The group sets the phase on the shared [`Context`](../api/tvision-rs/view/struct.Context.html)
+The group sets the phase on the shared [`Context`](../api/tvision_rs/view/struct.Context.html)
 before each leg and restores the previous value after it, so a nested group
 that re-enters the three-phase router always sees its *own* legs, not the
 outer group's:
@@ -177,8 +177,8 @@ fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
 # }
 ```
 
-**Sources:** [`Phase`](../api/tvision-rs/view/enum.Phase.html) in `src/view/view.rs`;
-[`Context::phase`](../api/tvision-rs/view/struct.Context.html#method.phase) /
+**Sources:** [`Phase`](../api/tvision_rs/view/enum.Phase.html) in `src/view/view.rs`;
+[`Context::phase`](../api/tvision_rs/view/struct.Context.html#method.phase) /
 `set_phase` in `src/view/context.rs`; the router body in `src/view/group.rs`.
 
 > **Turbo Vision heritage:** ports `phaseType` (`views.h`). In the C++ code the
@@ -188,11 +188,11 @@ fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
 ## Cursor shape: insert vs overwrite
 
 When a view wants to show a hardware cursor it sets
-[`State::cursor_vis`](../api/tvision-rs/view/struct.State.html) (via
-[`ViewState::show_cursor`](../api/tvision-rs/view/struct.ViewState.html#method.show_cursor))
+[`State::cursor_vis`](../api/tvision_rs/view/struct.State.html) (via
+[`ViewState::show_cursor`](../api/tvision_rs/view/struct.ViewState.html#method.show_cursor))
 and also sets the cursor *shape*: underline for the normal insertion point
 (`normal_cursor`, the default) or block for overwrite mode (`block_cursor`),
-controlled by [`State::cursor_ins`](../api/tvision-rs/view/struct.State.html).
+controlled by [`State::cursor_ins`](../api/tvision_rs/view/struct.State.html).
 
 ```rust
 # use tvision_rs as tv;
@@ -249,9 +249,9 @@ hidden automatically until the view is focused again.
 ## Marking an event handled
 
 A handler signals "I consumed this event — stop routing" by calling
-[`ev.clear()`](../api/tvision-rs/event/enum.Event.html#method.clear) on the
+[`ev.clear()`](../api/tvision_rs/event/enum.Event.html#method.clear) on the
 `&mut Event` it received. `clear()` sets the event to
-[`Event::Nothing`](../api/tvision-rs/event/enum.Event.html), the consumed-event
+[`Event::Nothing`](../api/tvision_rs/event/enum.Event.html), the consumed-event
 sentinel. Every subsequent routing step first tests `ev.is_nothing()` and skips
 the delivery if true, so no further handler sees it.
 
@@ -303,7 +303,7 @@ redraw:
    broadcast is queued so buttons and menu items can re-gray themselves.
 2. **Drains expired timers.** Each timer whose deadline has passed is collected
    and queued as a typed
-   [`Event::Timer(id)`](../api/tvision-rs/event/enum.Event.html) — a view matches
+   [`Event::Timer(id)`](../api/tvision_rs/event/enum.Event.html) — a view matches
    the id against its own timer handles to know which timer fired.
 3. **Refreshes the status line.** The help context of the topmost modal view
    (or `NO_CONTEXT` if none) is handed to the status line so it can display
@@ -311,7 +311,7 @@ redraw:
 
 After `pump_once` returns, the outer `pump_and_drive` fires the optional
 **idle hook** registered with
-[`Program::set_on_idle`](../api/tvision-rs/app/struct.Program.html#method.set_on_idle):
+[`Program::set_on_idle`](../api/tvision_rs/app/struct.Program.html#method.set_on_idle):
 
 ```rust
 # use tvision_rs as tv;
@@ -331,7 +331,7 @@ loops.
 
 For **exact timing** — actions that must fire at a specific wall-clock instant —
 register a timer with
-[`Context::set_timer`](../api/tvision-rs/view/struct.Context.html#method.set_timer)
+[`Context::set_timer`](../api/tvision_rs/view/struct.Context.html#method.set_timer)
 instead. The timer expires at the exact deadline and arrives as `Event::Timer`
 on an idle pass.
 
@@ -376,7 +376,7 @@ There is no app-level override of this path. Instead:
 - **Inject an event programmatically** → push to the internal queue
   (`out_events.push_back(ev)`) from a deferred effect or from top-level code.
 - **Deterministic test events** → push events to the
-  [`HeadlessBackend`](../api/tvision-rs/backend/struct.HeadlessBackend.html)'s
+  [`HeadlessBackend`](../api/tvision_rs/backend/struct.HeadlessBackend.html)'s
   queue; `poll_event` pops them without blocking.
 
 **Sources:** `pump_once` (the event-pick and mouse-auto steps) in

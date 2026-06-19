@@ -2,8 +2,8 @@
 
 A **dialog** is a modal window: it appears on top of everything, captures input
 until the user dismisses it, and returns a single answer — which button closed
-it. [`Dialog`](../api/tvision-rs/dialog/struct.Dialog.html) embeds a
-[`Window`](../api/tvision-rs/window/struct.Window.html) and delegates to it, with
+it. [`Dialog`](../api/tvision_rs/dialog/struct.Dialog.html) embeds a
+[`Window`](../api/tvision_rs/window/struct.Window.html) and delegates to it, with
 dialog-specific behaviour layered on: `Esc` cancels, `Enter` accepts the default
 button, and the frame carries only the move and close affordances — no grow, no
 zoom *(the tvision-rs equivalent of C++ `TDialog`)*.
@@ -12,7 +12,7 @@ zoom *(the tvision-rs equivalent of C++ `TDialog`)*.
 
 Construct the dialog with a rectangle and an optional title, then populate it
 with child views — buttons, input lines, checkboxes, labels — via
-[`insert_child`](../api/tvision-rs/dialog/struct.Dialog.html#method.insert_child):
+[`insert_child`](../api/tvision_rs/dialog/struct.Dialog.html#method.insert_child):
 
 ```rust
 # use tvision_rs as tv;
@@ -34,8 +34,8 @@ dialog.insert_child(Box::new(Button::new(
 # let _ = name;
 ```
 
-`InputLine::new` takes a validator and a [`LimitMode`](../api/tvision-rs/widgets/enum.LimitMode.html)
-too; [`with_limit`](../api/tvision-rs/widgets/struct.InputLine.html#method.with_limit) is
+`InputLine::new` takes a validator and a [`LimitMode`](../api/tvision_rs/widgets/enum.LimitMode.html)
+too; [`with_limit`](../api/tvision_rs/widgets/struct.InputLine.html#method.with_limit) is
 the no-validator, byte-limit shortcut. `ButtonFlags` is a struct of named bools,
 so the default button is `ButtonFlags { default: true, .. }`.
 
@@ -53,7 +53,7 @@ The runnable source is the `dialog` entry in the [widget gallery](../gallery.md)
 ## Running it modally
 
 You do not insert a dialog into the view tree yourself. You hand it to
-[`Program::exec_view`](../api/tvision-rs/app/struct.Program.html#method.exec_view).
+[`Program::exec_view`](../api/tvision_rs/app/struct.Program.html#method.exec_view).
 It inserts the dialog at the top of the tree, marks it modal, gives it focus,
 and spins the **same** event loop until the dialog ends itself — then removes it
 and hands back the closing command:
@@ -88,18 +88,18 @@ keeps the single loop sound.
 > If you build a bare modal with neither, nothing will end it.
 
 The framework ships ready-made modals built on this path —
-[`message_box`](../api/tvision-rs/app/struct.Program.html#method.message_box) for a
+[`message_box`](../api/tvision_rs/app/struct.Program.html#method.message_box) for a
 titled alert with Yes/No/OK/Cancel buttons, and
-[`input_box`](../api/tvision-rs/app/struct.Program.html#method.input_box) for a
+[`input_box`](../api/tvision_rs/app/struct.Program.html#method.input_box) for a
 single labelled text field. Both build a `Dialog`, run it through `exec_view`,
 and return the user's answer.
 
 ## Moving data in and out
 
 Dialog data flows through a **typed value currency** —
-[`FieldValue`](../api/tvision-rs/data/enum.FieldValue.html) — passed through the
+[`FieldValue`](../api/tvision_rs/data/enum.FieldValue.html) — passed through the
 `value` / `set_value` pair on the
-[`View`](../api/tvision-rs/view/trait.View.html) trait. A text field reads and
+[`View`](../api/tvision_rs/view/trait.View.html) trait. A text field reads and
 writes `FieldValue::Text`; an integer control uses `FieldValue::Int`. The enum
 **grows as controls need it** *(this replaces the C++ `getData`/`setData` pair,
 which moved data through an untyped `memcpy` record)*.
@@ -114,7 +114,7 @@ Two operations bracket a dialog:
 For a single-field dialog you call `set_value`/`value` on that one field
 directly — which is exactly what `input_box` does internally to seed and read
 its lone input line. For a multi-field dialog, the
-[`Group`](../api/tvision-rs/view/struct.Group.html) behind the dialog walks its
+[`Group`](../api/tvision_rs/view/struct.Group.html) behind the dialog walks its
 children in order: `gather_data` collects a `Vec<Option<FieldValue>>` (one slot
 per child, `None` where a child has no transferable value), and `scatter_data`
 distributes a matching vector back in the same child order. Seed before
@@ -178,10 +178,10 @@ Source: `src/view/group.rs` (`Group::gather_data`, `Group::scatter_data`,
 
 ## The change-directory dialog
 
-[`ChDirDialog`](../api/tvision-rs/dialog/struct.ChDirDialog.html) is a ready-made
+[`ChDirDialog`](../api/tvision_rs/dialog/struct.ChDirDialog.html) is a ready-made
 directory chooser: a path input line with a history recall icon, a collapsible
 directory tree (`DirListBox`), and action buttons. Build it with
-[`ChDirDialog::new`](../api/tvision-rs/dialog/struct.ChDirDialog.html#method.new):
+[`ChDirDialog::new`](../api/tvision_rs/dialog/struct.ChDirDialog.html#method.new):
 
 ```rust
 # use tvision_rs as tv;

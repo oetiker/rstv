@@ -9,7 +9,7 @@ drive them. The names follow the `tv::` house style with no `T` prefix
 
 ## Buttons
 
-A [`Button`](../api/tvision-rs/widgets/struct.Button.html) is a clickable command
+A [`Button`](../api/tvision_rs/widgets/struct.Button.html) is a clickable command
 button — a boxed, shadowed title with an optional `~`-marked hotkey. Pressing it
 (mouse, `Alt`+hotkey, or focused `Space`) fires its command, either posted as a
 normal command event or, when the button is flagged broadcast, sent as a
@@ -36,16 +36,16 @@ boxes, radio buttons, input lines, and more — is in the
 ## Check boxes & radio buttons
 
 These share one engine, the
-[`Cluster`](../api/tvision-rs/widgets/struct.Cluster.html): a single type that
+[`Cluster`](../api/tvision_rs/widgets/struct.Cluster.html): a single type that
 branches on a
-[`ClusterKind`](../api/tvision-rs/widgets/enum.ClusterKind.html), wrapped by three
+[`ClusterKind`](../api/tvision_rs/widgets/enum.ClusterKind.html), wrapped by three
 named types:
 
-- [`CheckBoxes`](../api/tvision-rs/widgets/struct.CheckBoxes.html) — independent
+- [`CheckBoxes`](../api/tvision_rs/widgets/struct.CheckBoxes.html) — independent
   on/off boxes (` [X] `); any combination may be set.
-- [`RadioButtons`](../api/tvision-rs/widgets/struct.RadioButtons.html) — mutually
+- [`RadioButtons`](../api/tvision_rs/widgets/struct.RadioButtons.html) — mutually
   exclusive options (` (•) `); exactly one is selected.
-- [`MultiCheckBoxes`](../api/tvision-rs/widgets/struct.MultiCheckBoxes.html) —
+- [`MultiCheckBoxes`](../api/tvision_rs/widgets/struct.MultiCheckBoxes.html) —
   multi-state boxes that cycle through more than two values.
 
 A cluster lays its items out top-to-bottom and wraps into a new column when the
@@ -55,35 +55,35 @@ other control, so a dialog gathers and scatters cluster state automatically.
 
 ## Input lines
 
-An [`InputLine`](../api/tvision-rs/widgets/struct.InputLine.html) is a single-line
+An [`InputLine`](../api/tvision_rs/widgets/struct.InputLine.html) is a single-line
 text field with selection, horizontal scrolling, clipboard cut/copy/paste, and
-an optional [`Validator`](../api/tvision-rs/validate/trait.Validator.html). Its
+an optional [`Validator`](../api/tvision_rs/validate/trait.Validator.html). Its
 cursor and selection track byte offsets into a real Rust `String`, so multi-byte
 and wide text behave correctly.
 
 ## Labels & static text
 
-- [`StaticText`](../api/tvision-rs/widgets/struct.StaticText.html) — a read-only,
+- [`StaticText`](../api/tvision_rs/widgets/struct.StaticText.html) — a read-only,
   word-wrapped block of text. Not selectable; it just paints.
-- [`ParamText`](../api/tvision-rs/widgets/struct.ParamText.html) — a `StaticText`
+- [`ParamText`](../api/tvision_rs/widgets/struct.ParamText.html) — a `StaticText`
   variant whose content you set at runtime.
-- [`Label`](../api/tvision-rs/widgets/struct.Label.html) — a single-line caption
+- [`Label`](../api/tvision_rs/widgets/struct.Label.html) — a single-line caption
   **linked** to another control. Clicking the label, or pressing its `~`-marked
   hotkey, focuses the linked control, and the label highlights while that control
   holds focus. The link is a view handle, not a pointer.
 
 ## List boxes, scrollers & scroll bars
 
-- [`ListBox`](../api/tvision-rs/widgets/struct.ListBox.html) — a scrollable list of
+- [`ListBox`](../api/tvision_rs/widgets/struct.ListBox.html) — a scrollable list of
   string items. Populate it after inserting it into a group (a `Context` is
   needed to publish the scroll range to its bars), then it handles selection and
-  navigation for you. [`SortedListBox`](../api/tvision-rs/widgets/struct.SortedListBox.html)
+  navigation for you. [`SortedListBox`](../api/tvision_rs/widgets/struct.SortedListBox.html)
   keeps the items ordered.
-- [`ScrollBar`](../api/tvision-rs/widgets/struct.ScrollBar.html) — a vertical or
+- [`ScrollBar`](../api/tvision_rs/widgets/struct.ScrollBar.html) — a vertical or
   horizontal bar (orientation inferred from its 1×N or N×1 bounds). It broadcasts
   a *changed* message when its value moves, naming itself as the source so a
   two-bar owner can tell which bar fired.
-- [`Scroller`](../api/tvision-rs/widgets/struct.Scroller.html) — the base for
+- [`Scroller`](../api/tvision_rs/widgets/struct.Scroller.html) — the base for
   scrollable content. It references two sibling scroll bars on the window frame,
   mirrors their value into its own scroll offset, and pushes range changes back
   to them. The wiring between a scroller and its bars is brokered by the event
@@ -92,7 +92,7 @@ and wide text behave correctly.
 ## Validators
 
 A validator gates what an input line accepts.
-[`Validator`](../api/tvision-rs/validate/trait.Validator.html) is a trait — an
+[`Validator`](../api/tvision_rs/validate/trait.Validator.html) is a trait — an
 input line holds one as a boxed trait object *(the Rust-idiomatic successor to
 C++ `TValidator`'s abstract base class)*. With no validator,
 every keystroke is accepted. The trait has two checkpoints: `is_valid_input`
@@ -105,21 +105,21 @@ addition:
 
 | Validator | Accepts |
 | --- | --- |
-| [`FilterValidator`](../api/tvision-rs/validate/struct.FilterValidator.html) | only characters from a given set |
-| [`RangeValidator`](../api/tvision-rs/validate/struct.RangeValidator.html) | an integer within `[min, max]` |
-| [`PXPictureValidator`](../api/tvision-rs/validate/struct.PXPictureValidator.html) | text matching a Paradox picture mask |
-| [`LookupValidator`](../api/tvision-rs/validate/struct.LookupValidator.html) / [`StringLookupValidator`](../api/tvision-rs/validate/struct.StringLookupValidator.html) | a value from a fixed list |
-| [`RegexValidator`](../api/tvision-rs/validate/struct.RegexValidator.html) | text matching a regular expression (a modern extension) |
+| [`FilterValidator`](../api/tvision_rs/validate/struct.FilterValidator.html) | only characters from a given set |
+| [`RangeValidator`](../api/tvision_rs/validate/struct.RangeValidator.html) | an integer within `[min, max]` |
+| [`PXPictureValidator`](../api/tvision_rs/validate/struct.PXPictureValidator.html) | text matching a Paradox picture mask |
+| [`LookupValidator`](../api/tvision_rs/validate/struct.LookupValidator.html) / [`StringLookupValidator`](../api/tvision_rs/validate/struct.StringLookupValidator.html) | a value from a fixed list |
+| [`RegexValidator`](../api/tvision_rs/validate/struct.RegexValidator.html) | text matching a regular expression (a modern extension) |
 
 When a final-form check fails, the validator can pop an informational error
 message box explaining what is wrong, then return focus to the field.
 
 ## Validating a field
 
-Setting [`Options::validate`](../api/tvision-rs/view/struct.Options.html#structfield.validate)
+Setting [`Options::validate`](../api/tvision_rs/view/struct.Options.html#structfield.validate)
 (`ofValidate`) on a control tells the owning group to ask the control whether it
 is ready to give up focus *before* moving focus away. The check runs through
-[`View::valid`](../api/tvision-rs/view/trait.View.html#method.valid) with the
+[`View::valid`](../api/tvision_rs/view/trait.View.html#method.valid) with the
 command `Command::RELEASED_FOCUS`.
 
 For an `InputLine` with a validator, this is wired automatically: the input line
@@ -175,16 +175,16 @@ Source: `src/view/group.rs` (`Group::valid`), `src/dialog/dialog.rs`
 
 ## When validation fails {#validator-error-dialogs}
 
-When [`Validator::is_valid`](../api/tvision-rs/validate/trait.Validator.html#method.is_valid)
+When [`Validator::is_valid`](../api/tvision_rs/validate/trait.Validator.html#method.is_valid)
 returns `false`, the validator's
-[`error`](../api/tvision-rs/validate/trait.Validator.html#method.error) method is
+[`error`](../api/tvision_rs/validate/trait.Validator.html#method.error) method is
 called. This is where the user sees an informational message box explaining what
 is wrong.
 
 A leaf view cannot run a modal dialog inline — it holds only `&mut Context`, not
 the `Program`. Instead, `error` requests the message box through the async-modal
 seam:
-[`Context::request_message_box`](../api/tvision-rs/view/struct.Context.html#method.request_message_box)
+[`Context::request_message_box`](../api/tvision_rs/view/struct.Context.html#method.request_message_box)
 queues a `Deferred::RequestMessageBox` entry; the event loop builds and runs the
 dialog at the end of the current pump tick. The call parameters include an
 optional `answer_to: Option<ViewId>` and `then_command: Option<Command>` — when
@@ -241,7 +241,7 @@ Source: `src/validate.rs` (`Validator::error`, `FilterValidator::error`),
 
 ## History lists
 
-A [`THistory`](../api/tvision-rs/widgets/struct.THistory.html) dropdown icon lets
+A [`THistory`](../api/tvision_rs/widgets/struct.THistory.html) dropdown icon lets
 users recall previous entries for an input field. It pairs with a `u8`
 **channel id** (the `history_id`) that identifies which history list the icon
 reads and writes.
@@ -269,7 +269,7 @@ let _hist_id = dialog.insert_child(Box::new(
 The channel id `42` (any `u8`) is the key for the global history store. When
 the user confirms an entry in the field (the input's value is saved on dialog
 OK), call
-[`history_add(id, text)`](../api/tvision-rs/widgets/fn.history_add.html) to push
+[`history_add(id, text)`](../api/tvision_rs/widgets/fn.history_add.html) to push
 the string into the store. On the next open, the `↓` button pops a scrollable
 recall list sorted newest-first; picking an entry writes it back into the linked
 input.
@@ -277,8 +277,8 @@ input.
 The store is **process-global** and **byte-budgeted** (default 1024 bytes across
 all channels). The oldest entries across all channels are evicted when the budget
 is exceeded. Access the store directly with
-[`history_str(id, index)`](../api/tvision-rs/widgets/fn.history_str.html) and
-[`history_count(id)`](../api/tvision-rs/widgets/fn.history_count.html) when you
+[`history_str(id, index)`](../api/tvision_rs/widgets/fn.history_str.html) and
+[`history_count(id)`](../api/tvision_rs/widgets/fn.history_count.html) when you
 need to pre-populate or audit entries.
 
 The icon is **not selectable** — clicking it does not steal focus from the linked

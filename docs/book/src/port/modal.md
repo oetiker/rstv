@@ -24,14 +24,14 @@ gate is exactly what "modal" means.
 
 ## `exec_view` steers the one loop
 
-[`Program::exec_view`](../api/tvision-rs/app/struct.Program.html#method.exec_view) is
+[`Program::exec_view`](../api/tvision_rs/app/struct.Program.html#method.exec_view) is
 the blocking wrapper that replaces `execView`. It inserts the view, makes it
 current, pushes a `ModalFrame`, then runs the *same*
-[`pump_once`](../api/tvision-rs/app/struct.Program.html#method.pump_once) loop until
-the view calls [`end_modal`](../api/tvision-rs/view/struct.Context.html#method.end_modal),
+[`pump_once`](../api/tvision_rs/app/struct.Program.html#method.pump_once) loop until
+the view calls [`end_modal`](../api/tvision_rs/view/struct.Context.html#method.end_modal),
 setting the end state. Then it pops the frame, removes the view, restores the
 previous focus and command set, and returns the chosen
-[`Command`](../api/tvision-rs/command/struct.Command.html). No new loop is spun —
+[`Command`](../api/tvision_rs/command/struct.Command.html). No new loop is spun —
 `exec_view` just steers the one loop that was already running.
 
 See [Dialogs & data](../apps/dialogs.md) for the user-facing recipe, [Event
@@ -128,9 +128,9 @@ its own `end_state` snapshot and its own `ModalFrame` on the capture stack.
 ## endModal
 
 A view signals "close this modal and return result `cmd`" by calling
-[`ctx.end_modal(cmd)`](../api/tvision-rs/view/struct.Context.html#method.end_modal)
-on its [`Context`](../api/tvision-rs/view/struct.Context.html). This **queues**
-[`Deferred::EndModal(cmd)`](../api/tvision-rs/view/enum.Deferred.html) rather than
+[`ctx.end_modal(cmd)`](../api/tvision_rs/view/struct.Context.html#method.end_modal)
+on its [`Context`](../api/tvision_rs/view/struct.Context.html). This **queues**
+[`Deferred::EndModal(cmd)`](../api/tvision_rs/view/enum.Deferred.html) rather than
 acting immediately, because a view's `handle_event` runs inside the dispatch
 borrow and cannot reach the loop-owned `end_state` directly:
 
@@ -160,7 +160,7 @@ iteration of `exec_view`'s `while end_state.is_none()` loop, the condition
 becomes false and the loop exits.
 
 From **top-level code** (outside a view, holding `&mut Program`) you can call
-[`Program::end_modal`](../api/tvision-rs/app/struct.Program.html#method.end_modal)
+[`Program::end_modal`](../api/tvision_rs/app/struct.Program.html#method.end_modal)
 directly — it sets `end_state` without the deferred queue, which is useful in
 tests where you want to terminate a headless modal after pre-queuing events.
 

@@ -1,6 +1,6 @@
 # Writing your own View
 
-Everything on the screen is a [`View`](../api/tvision-rs/view/trait.View.html) — a
+Everything on the screen is a [`View`](../api/tvision_rs/view/trait.View.html) — a
 button, a window, the desktop background. This is the capstone of the *How It
 Works* part: once you can write a `View`, the rest of the framework is just
 ready-made views you can use or replace. This page walks the whole path twice —
@@ -11,16 +11,16 @@ and let a macro write the boilerplate.
 
 Every widget in tvision-rs combines two parts: a `View` **trait** that the framework
 calls, and a
-[`ViewState`](../api/tvision-rs/view/struct.ViewState.html) **struct** you embed to
+[`ViewState`](../api/tvision_rs/view/struct.ViewState.html) **struct** you embed to
 carry the per-view data — geometry, the state/option flags, the help context.
 You *embed* a `ViewState` field in your struct and `impl View` for your type.
 See [Inheritance → trait + composition](../port/inheritance.md) for the full
 background.
 
 The trait has exactly three methods you **must** supply —
-[`state`](../api/tvision-rs/view/trait.View.html#tymethod.state),
-[`state_mut`](../api/tvision-rs/view/trait.View.html#tymethod.state_mut), and
-[`draw`](../api/tvision-rs/view/trait.View.html#tymethod.draw). Every other method
+[`state`](../api/tvision_rs/view/trait.View.html#tymethod.state),
+[`state_mut`](../api/tvision_rs/view/trait.View.html#tymethod.state_mut), and
+[`draw`](../api/tvision_rs/view/trait.View.html#tymethod.draw). Every other method
 (`handle_event`, `set_state`, `value`, `calc_bounds`, …) has a sensible default,
 so a static, non-interactive view needs only those three. The first two are pure
 boilerplate — hand back the embedded state — so in practice the only code you
@@ -30,7 +30,7 @@ boilerplate — hand back the embedded state — so in practice the only code yo
 
 Here is a complete view that fills its rectangle and prints a centered label —
 the same pattern the real
-[`StaticText`](../api/tvision-rs/widgets/struct.StaticText.html) widget follows:
+[`StaticText`](../api/tvision_rs/widgets/struct.StaticText.html) widget follows:
 
 ```rust
 use tvision_rs::{DrawCtx, Rect, Role, View, ViewState};
@@ -64,16 +64,16 @@ impl View for Banner {
 
 Three things worth noting:
 
-- **Construct state with [`ViewState::new(bounds)`](../api/tvision-rs/view/struct.ViewState.html#method.new)**,
+- **Construct state with [`ViewState::new(bounds)`](../api/tvision_rs/view/struct.ViewState.html#method.new)**,
   never `ViewState::default()` for a real view — `new` applies the correct initial
   defaults (visible, the `dmLimitLoY` drag limit). An all-zero state would be
   invisible.
 - **Draw in *view-local* coordinates.** `DrawCtx` clips and offsets for you; the
   view's own extent is always `0,0 .. size.x,size.y`
-  ([`get_extent`](../api/tvision-rs/view/struct.ViewState.html#method.get_extent)).
-- **Colors come from a [`Role`](../api/tvision-rs/theme/enum.Role.html), not a
+  ([`get_extent`](../api/tvision_rs/view/struct.ViewState.html#method.get_extent)).
+- **Colors come from a [`Role`](../api/tvision_rs/theme/enum.Role.html), not a
   palette index.** Ask the theme for a role and get a
-  [`Style`](../api/tvision-rs/color/struct.Style.html) back. See
+  [`Style`](../api/tvision_rs/color/struct.Style.html) back. See
   [Theming & colors](../apps/theming.md).
 
 Insert it into a group (a window, the desktop) and the
@@ -84,23 +84,23 @@ not selectable.
 ## Adding behaviour
 
 To react to input, override
-[`handle_event`](../api/tvision-rs/view/trait.View.html#method.handle_event) (the
+[`handle_event`](../api/tvision_rs/view/trait.View.html#method.handle_event) (the
 base is a no-op — the event passes through). A leaf cannot mutate loop-owned
 state directly; it asks for an effect through its `&mut Context`. Closing
 yourself, enabling a command, focusing a sibling — all go through the
 [Deferred channel](deferred.md), and cross-view reads/writes through
 [brokering](brokering.md). Match on the
-[`Event`](../api/tvision-rs/event/enum.Event.html) enum (see
+[`Event`](../api/tvision_rs/event/enum.Event.html) enum (see
 [Events → enum + match](../port/events.md)) and clear the event once you have
 consumed it so it does not route further.
 
 Other commonly overridden hooks:
-[`value`](../api/tvision-rs/view/trait.View.html#method.value) /
-[`set_value`](../api/tvision-rs/view/trait.View.html#method.set_value) to make a
+[`value`](../api/tvision_rs/view/trait.View.html#method.value) /
+[`set_value`](../api/tvision_rs/view/trait.View.html#method.set_value) to make a
 data control that participates in dialog gather/scatter,
-[`size_limits`](../api/tvision-rs/view/trait.View.html#method.size_limits) to impose
+[`size_limits`](../api/tvision_rs/view/trait.View.html#method.size_limits) to impose
 a minimum size, and
-[`set_state`](../api/tvision-rs/view/trait.View.html#method.set_state) to react when
+[`set_state`](../api/tvision_rs/view/trait.View.html#method.set_state) to react when
 you gain or lose focus.
 
 ## Wrapping an existing view: `#[delegate]`
@@ -205,10 +205,10 @@ any position within `0 .. size` without worrying about neighboring views.
 
 ## Overriding `set_state`
 
-The framework flips a small set of [`StateFlag`](../api/tvision-rs/view/enum.StateFlag.html)s
+The framework flips a small set of [`StateFlag`](../api/tvision_rs/view/enum.StateFlag.html)s
 on a view during focus and activation — `Active`, `Selected`, `Focused`,
 `Dragging`, `Visible`. To react when one of these changes, override
-[`View::set_state`](../api/tvision-rs/view/trait.View.html#method.set_state). The
+[`View::set_state`](../api/tvision_rs/view/trait.View.html#method.set_state). The
 default implementation sets the flag on `ViewState` and, for `Focused`, broadcasts
 `RECEIVED_FOCUS` / `RELEASED_FOCUS`. Always call through to the inner/default
 behaviour **first** so the flag is set before your side effects run:
@@ -252,9 +252,9 @@ Source: `src/view/view.rs` (`View::set_state` default), `src/view/group.rs`
 
 ## A custom view's colors
 
-Colors come from a **[`Role`](../api/tvision-rs/theme/enum.Role.html)**, never from
+Colors come from a **[`Role`](../api/tvision_rs/theme/enum.Role.html)**, never from
 a raw palette index. Ask `DrawCtx` for a role and get back a
-[`Style`](../api/tvision-rs/color/struct.Style.html) — a foreground/background color
+[`Style`](../api/tvision_rs/color/struct.Style.html) — a foreground/background color
 pair with optional modifiers:
 
 ```rust
@@ -277,9 +277,9 @@ impl View for Highlighted {
 }
 ```
 
-The [`Role`](../api/tvision-rs/theme/enum.Role.html) enum is closed — all roles are
+The [`Role`](../api/tvision_rs/theme/enum.Role.html) enum is closed — all roles are
 first-party. The mapping from role to `Style` lives in the active
-[`Theme`](../api/tvision-rs/theme/struct.Theme.html). Custom views pick the role
+[`Theme`](../api/tvision_rs/theme/struct.Theme.html). Custom views pick the role
 closest to their semantic meaning:
 
 | Widget kind | Good starting role |

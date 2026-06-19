@@ -16,12 +16,12 @@ different costs.
 ## Two layers
 
 1. **In-memory redraw (cheap).** Every update cycle the whole view tree is
-   painted back-to-front into a [`Buffer`](../api/tvision-rs/screen/struct.Buffer.html),
+   painted back-to-front into a [`Buffer`](../api/tvision_rs/screen/struct.Buffer.html),
    the in-memory screen grid. This is RAM only — microseconds, even for a full
    screen.
 2. **Terminal flush (diff-bounded).** The freshly-painted buffer is compared
    against the previous frame with
-   [`Buffer::diff`](../api/tvision-rs/screen/struct.Buffer.html#method.diff), which
+   [`Buffer::diff`](../api/tvision_rs/screen/struct.Buffer.html#method.diff), which
    returns only the cells that changed. Just those cells are turned into escape
    sequences and sent to the terminal.
 
@@ -48,13 +48,13 @@ unnecessary.
 
 ## How a view paints
 
-Views never touch the [`Buffer`](../api/tvision-rs/screen/struct.Buffer.html)
+Views never touch the [`Buffer`](../api/tvision_rs/screen/struct.Buffer.html)
 directly. They fill a scratch row — a
-[`DrawBuffer`](../api/tvision-rs/screen/struct.DrawBuffer.html), the faithful
+[`DrawBuffer`](../api/tvision_rs/screen/struct.DrawBuffer.html), the faithful
 successor to `TDrawBuffer` — one display line at a time using
-[`Cell`](../api/tvision-rs/screen/struct.Cell.html) values, then blit it into the
+[`Cell`](../api/tvision_rs/screen/struct.Cell.html) values, then blit it into the
 draw context. Each `Cell` carries its grapheme and a typed
-[`Style`](../api/tvision-rs/color/struct.Style.html) (see
+[`Style`](../api/tvision_rs/color/struct.Style.html) (see
 [Palettes & glyphs → Theme/Role](theme.md)) instead of the packed attribute byte
 of the original.
 
@@ -79,7 +79,7 @@ and called `drawView` only for views that actually contributed pixels.
 
 tvision-rs has no `draw_view`. The whole view tree is repainted unconditionally
 on **every pump pass**, back-to-front into the in-memory
-[`Buffer`](../api/tvision-rs/screen/struct.Buffer.html). The tree walk is cheap
+[`Buffer`](../api/tvision_rs/screen/struct.Buffer.html). The tree walk is cheap
 (microseconds of RAM writes). The terminal only pays for cells that changed,
 because `Renderer::render` diffs the newly-painted buffer against the previous
 frame and emits escape sequences only for the diffed cells:

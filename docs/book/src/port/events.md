@@ -7,7 +7,7 @@ then reaching into the right union arm. It is compact, but nothing stops you fro
 reading the wrong arm, and the `void* infoPtr` inside the `message` arm is used
 three unrelated ways.
 
-In tvision-rs the record becomes a real Rust sum type, [`Event`](../api/tvision-rs/event/enum.Event.html),
+In tvision-rs the record becomes a real Rust sum type, [`Event`](../api/tvision_rs/event/enum.Event.html),
 which you **match arm-by-arm** instead of masking. Each `ev*` class maps onto one
 variant, and the variant *carries the payload that class actually uses* — so the
 compiler, not a convention, guarantees you only read fields that exist:
@@ -27,8 +27,8 @@ match event {
 # }
 ```
 
-A handled event is consumed by setting it to [`Event::Nothing`](../api/tvision-rs/event/enum.Event.html) —
-the `clearEvent` equivalent, spelled [`event.clear()`](../api/tvision-rs/event/enum.Event.html#method.clear).
+A handled event is consumed by setting it to [`Event::Nothing`](../api/tvision_rs/event/enum.Event.html) —
+the `clearEvent` equivalent, spelled [`event.clear()`](../api/tvision_rs/event/enum.Event.html#method.clear).
 `evNothing` and a consumed event are the same variant, exactly as in C++.
 
 ## The split that `infoPtr` forced
@@ -38,20 +38,20 @@ C++ `message(receiver, what, command, infoPtr)` did double duty: it both
 `void* infoPtr`. That one pointer field meant three different things across the
 code base, so it splits into typed mechanisms instead of one untyped slot:
 
-- **Targeted command** — [`Event::Command`](../api/tvision-rs/event/enum.Event.html)
-  carries **only** the [`Command`](../api/tvision-rs/command/struct.Command.html). The
+- **Targeted command** — [`Event::Command`](../api/tvision_rs/event/enum.Event.html)
+  carries **only** the [`Command`](../api/tvision_rs/command/struct.Command.html). The
   C++ command-target hint on `infoPtr` is not carried: focused-command routing
   already delivers the command to the active window, so the hint checked nothing.
-- **Broadcast subject** — [`Event::Broadcast { command, source }`](../api/tvision-rs/event/enum.Event.html)
+- **Broadcast subject** — [`Event::Broadcast { command, source }`](../api/tvision_rs/event/enum.Event.html)
   reinstates the broadcast-subject use of `infoPtr` as `source: Option<ViewId>`.
   It names *which view this broadcast is about* — e.g. which scrollbar moved — as
-  a resolvable [`ViewId`](../api/tvision-rs/view/struct.ViewId.html) handle, not a
+  a resolvable [`ViewId`](../api/tvision_rs/view/struct.ViewId.html) handle, not a
   raw pointer (see [Pointers & infoPtr → handles](handles.md)). A receiver's C++
   test `infoPtr == hScrollBar` becomes `source == self.h_scroll_bar`. Broadcasts
   about no particular view pass `None`.
 - **Integer payload** — the timer id that C++ smuggled through `infoPtr` on a
   `cmTimerExpired` broadcast is an integer, not a view, so it gets its own typed
-  variant [`Event::Timer`](../api/tvision-rs/event/enum.Event.html) rather than being
+  variant [`Event::Timer`](../api/tvision_rs/event/enum.Event.html) rather than being
   forced into `source`.
 
 ## The `eventMask` that survived
@@ -59,9 +59,9 @@ code base, so it splits into typed mechanisms instead of one untyped slot:
 `TView::eventMask` was a bit-word gating which classes a view would receive.
 Mouse-down/up, key-down, command and broadcast are always delivered, so the only
 part worth keeping is the opt-in for the *expensive* classes: continuous
-mouse-tracking ([`Event::MouseMove`](../api/tvision-rs/event/enum.Event.html)) and
-auto-repeat ([`Event::MouseAuto`](../api/tvision-rs/event/enum.Event.html)). The
-bit-word therefore collapses to a two-bool [`EventMask`](../api/tvision-rs/event/struct.EventMask.html)
+mouse-tracking ([`Event::MouseMove`](../api/tvision_rs/event/enum.Event.html)) and
+auto-repeat ([`Event::MouseAuto`](../api/tvision_rs/event/enum.Event.html)). The
+bit-word therefore collapses to a two-bool [`EventMask`](../api/tvision_rs/event/struct.EventMask.html)
 (a flag-word → struct-of-bools move; see [Flag words → struct-of-bools](flags.md)).
 
 The *routing* of all this is ported faithfully — positional events to the
