@@ -53,6 +53,17 @@ integrated-tree gate green: 1275 lib tests, `clippy --all-targets`, `fmt`):**
   `Rc::ptr_eq`); cluster `value()`/`set_value()` as `Bits`;
   `Group`/`Window`/`Dialog` `gather_list`/`scatter_list` (whole record as ordered
   `FieldValue::List`). `Color`/`Theme` stay by-value, deliberately NOT `FieldValue`.
+- **Phase 3 — sync signals → trait methods** (`22e054c`..`e2a472e`) — retired every
+  cluster-B *sync* downcast from the pump. The four sibling-scrollbar read-syncs
+  (Scroller / list viewers / Outline / Editor) collapsed into ONE defaulted
+  `View::apply_scroll_sync(h, v, ctx)` + ONE `Deferred::ScrollSync { target, h, v }`
+  (rename+generalization of `apply_list_scroll`); the pump calls it by virtual
+  dispatch (the editor target rides the `#[delegate(to=editor)]` forwarder to the
+  inner `Editor`). The two non-scroll syncs were de-downcast in place (variant kept,
+  own hook, §2.1 reason): Indicator → `set_indicator_value`, PageStack →
+  `apply_page_sync`. `ScrollBarSetParams` (write dir) + `SplitterDivider` deliberately
+  left downcasting (out of the "five scroll-family brokers" scope). Behavior-preserving;
+  no snapshot change. Final whole-branch review (Opus): Ready to merge = YES.
 
 **The driving design — spec v5 (read before Phase 3):**
 `docs/superpowers/specs/2026-06-18-unified-data-movement-design.md` — unify the
@@ -64,18 +75,23 @@ caveat; the `inventory`-`self_check` follow-on rejected-for-now in §6.7) and **
 `docs/superpowers/plans/2026-06-18-data-movement-phase1-exec-view-with.md`,
 `docs/superpowers/plans/2026-06-19-data-movement-phase2-fieldvalue-widen.md`.
 
-**Next: Phase 3 — sync signals → trait methods (spec §3.2/§5).** Retire the
-cluster-B pump `as_any` downcasts widget-by-widget by delivering each sync through a
-defaulted `View` method instead. **Key v5 refinement: collapse the five
-scroll-family brokers (Scroller / Editor / Outline / Indicator / PageStack deltas)
-into ONE shared `apply_scroll_sync` hook** (joining the existing `apply_list_scroll`),
-NOT five parallel methods. Touches the pump, the `View` trait, the delegate macro
-(add a `tvision-rs-macros/src/specs.rs` forwarder + a `tests/delegate_view.rs` spy
-entry per new `View` method), and several widgets. **Write a v5-aware plan first**
-(writing-plans) → user review → subagent-drive. Then **Phase 4** (modal-result reads
-`FindPick`/`ReplacePick`/`ThemeColorPick` via `value()`/`gather_list`) and **Phase 5**
-(generic `ExecView`: `Context::request_exec_view` + `Deferred::OpenModal`, make
-`tcv`'s Info box a real custom dialog).
+**Phase 3 — DONE** (sync signals → trait methods, `22e054c`..`e2a472e`; see the
+stacked-list entry above + `docs/IMPLEMENTATION-LOG.md`). The §2.1 judgment call the
+spec deferred to Phase 3 was settled: only the three genuine sibling-scrollbar reads
+(+ the existing list-viewer sync) fold into `apply_scroll_sync`; Indicator/PageStack
+keep their own hooks (their payloads aren't a scrollbar `(h,v)` delta — reasons
+recorded on the variant docs). Plan:
+`docs/superpowers/plans/2026-06-19-data-movement-phase3-sync-trait-methods.md`.
+
+**Next: Phase 4 — modal-result reads via `FieldValue` (spec §3.3/§5).** Convert
+`FindPick`/`ReplacePick`/`ThemeColorPick` to read the finished modal via
+`value()`/`gather_list` (ordered `List`) + deliver by id, dropping the multi-child
+downcasts — the *routing* (which editor to write) stays, only the *reads* go
+downcast-free. `ThemeColorPick` is the recorded exception (its payload is a `Color`,
+read from the editor's own embedded picker via `color()` — never crosses a
+`FieldValue` boundary). **Write a plan first** (writing-plans) → user review →
+subagent-drive. Then **Phase 5** (generic `ExecView`: `Context::request_exec_view` +
+`Deferred::OpenModal`, make `tcv`'s Info box a real custom dialog).
 
 **Deferred follow-ons (recorded, not dropped):** `inventory`-collected
 `Program::self_check()` + per-component `data_self_check` (needs a dependency
