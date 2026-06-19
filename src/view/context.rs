@@ -435,6 +435,29 @@ pub enum Deferred {
         editor_id: ViewId,
     },
 
+    // -- generic view-launched modal (ExecView) ------------------------------
+    /// **Generic view-launched modal (ExecView).** A view (holding only
+    /// `&mut Context`, never `&mut Program`) requests an arbitrary custom modal
+    /// be run. The pump moves `view` into the loop-owned `pending_modal` slot with
+    /// a `RouteModalAnswer` completion; the outer `pump_and_drive` runs it via the
+    /// existing single-loop `exec_view` machinery, then delivers the modal's close
+    /// command to `requester` (via
+    /// [`View::set_modal_answer`](crate::view::View::set_modal_answer)) and
+    /// re-injects `then_command`. The view-launched sibling of
+    /// [`Program::exec_view_with`](crate::app::Program::exec_view_with).
+    ///
+    /// Queued by [`Context::request_exec_view`]. The boxed view is owned by the
+    /// variant and moved out at drain (the deferred queue is drained by value, so a
+    /// `Box<dyn View>` field needs no `Clone`).
+    OpenModal {
+        /// The custom modal to run.
+        view: Box<dyn crate::view::View>,
+        /// The view to deliver the modal's close command to (by id).
+        requester: ViewId,
+        /// Command to re-inject after the modal closes (`None` = nothing to re-post).
+        then_command: Option<Command>,
+    },
+
     // -- find/replace dialogs (the find/replace editor seam) --------------
     /// Request the pump to open the Find dialog
     /// ([`Command::FIND`](crate::command::Command::FIND)) for the given editor.
@@ -1287,6 +1310,31 @@ impl<'a> Context<'a> {
             kind,
             buttons,
             answer_to,
+            then_command,
+        });
+    }
+
+    /// Request a generic view-launched modal (ExecView): run `view` as a modal,
+    /// then deliver its close command to `requester` (via
+    /// [`View::set_modal_answer`](crate::view::View::set_modal_answer)) and
+    /// re-inject `then_command`. The view-launched counterpart of
+    /// [`Program::exec_view_with`](crate::app::Program::exec_view_with)
+    /// (which a view cannot call — a view holds only `&mut Context`, never
+    /// `&mut Program`). Queues [`Deferred::OpenModal`].
+    ///
+    /// `then_command` is `None` for a fire-and-forget modal (e.g. a read-only info
+    /// dialog). To act on the result, the `requester` overrides
+    /// [`View::set_modal_answer`](crate::view::View::set_modal_answer) to cache the close command and acts on
+    /// `then_command` when it is re-posted.
+    pub fn request_exec_view(
+        &mut self,
+        view: Box<dyn crate::view::View>,
+        requester: ViewId,
+        then_command: Option<Command>,
+    ) {
+        self.deferred.push(Deferred::OpenModal {
+            view,
+            requester,
             then_command,
         });
     }

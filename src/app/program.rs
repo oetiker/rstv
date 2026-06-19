@@ -2548,6 +2548,29 @@ impl Program {
                                 ));
                             }
 
+                            // Generic view-launched modal (ExecView): move the
+                            // caller-built modal into pending_modal with a
+                            // RouteModalAnswer completion (deliver the close command
+                            // to `requester` by id + re-inject `then_command`). The
+                            // outer pump_and_drive execs it via the existing single
+                            // loop. Reuses the Open*Dialog → pending_modal pattern;
+                            // no new ModalCompletion variant, no downcast. `None`
+                            // initial focus = the modal focuses its own first view.
+                            Deferred::OpenModal {
+                                view,
+                                requester,
+                                then_command,
+                            } => {
+                                *pending_modal = Some((
+                                    view,
+                                    ModalCompletion::RouteModalAnswer {
+                                        answer_to: requester,
+                                        then_command,
+                                    },
+                                    None,
+                                ));
+                            }
+
                             // -- find dialog (edFind) seam -------------------
                             //
                             // An Editor requested cmFind. Build a 38×12 "Find"
@@ -4155,6 +4178,178 @@ mod tests {
                 .and_then(|a| a.downcast_mut::<crate::dialog::FileDialog>())
                 .is_some(),
             "the stashed modal is a FileDialog"
+        );
+    }
+
+    /// `Context::request_exec_view` queues a `Deferred::OpenModal`; the pump's
+    /// deferred-drain arm moves the boxed modal into `pending_modal` with a
+    /// `RouteModalAnswer { answer_to, then_command }` completion and `None` initial
+    /// focus (the modal focuses its own first view). Driven through `pump_once`
+    /// (NOT `pump_and_drive`, which would launch the modal loop and hang headless —
+    /// see the warning above `open_save_as_dialog_deferred_stashes_pending_modal`).
+    #[test]
+    fn request_exec_view_deferred_stashes_pending_modal() {
+        use crate::dialog::Dialog;
+
+        let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+        // Any inserted view's id serves as the requester (here: a plain child).
+        let requester = program
+            .group_mut()
+            .insert(Box::new(Dialog::new(Rect::new(0, 0, 20, 8), None)));
+        program.out_events.clear();
+
+        let then_cmd = Command::custom("test.exec_view.then");
+        // Reach `request_exec_view` through a throwaway Context (the view-facing
+        // entry point), exactly as a leaf view would from `handle_event`.
+        program.with_ctx(|_g, ctx| {
+            ctx.request_exec_view(
+                Box::new(Dialog::new(
+                    Rect::new(5, 5, 35, 15),
+                    Some("Modal".to_string()),
+                )),
+                requester,
+                Some(then_cmd),
+            );
+        });
+        // A benign broadcast so the pump picks a Some(ev) and reaches its deferred
+        // drain (mirrors the save-as seam test).
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.pump_once();
+
+        let stashed = program.pending_modal.take().expect("pending_modal set");
+        let (view, completion, focus) = stashed;
+        assert!(
+            matches!(
+                completion,
+                ModalCompletion::RouteModalAnswer { answer_to, then_command }
+                    if answer_to == requester && then_command == Some(then_cmd)
+            ),
+            "RouteModalAnswer routes to the requester + carries then_command"
+        );
+        assert!(focus.is_none(), "the modal focuses its own first view");
+        // The caller-built modal box was moved verbatim into pending_modal (Dialog
+        // does not override `as_any_mut`, so identity is established by the move —
+        // the completion routing above is the load-bearing assertion).
+        let _ = view;
+    }
+
+    /// A test-only requester view whose [`View::set_modal_answer`] records the
+    /// command the pump routed to it (the modal's close command). Non-selectable so
+    /// it never steals focus from the modal.
+    struct ModalAnswerRecorder {
+        st: ViewState,
+        answer: Rc<RefCell<Option<Command>>>,
+    }
+    impl ModalAnswerRecorder {
+        fn new(bounds: Rect, answer: Rc<RefCell<Option<Command>>>) -> Self {
+            ModalAnswerRecorder {
+                st: ViewState::new(bounds),
+                answer,
+            }
+        }
+    }
+    impl View for ModalAnswerRecorder {
+        fn state(&self) -> &ViewState {
+            &self.st
+        }
+        fn state_mut(&mut self) -> &mut ViewState {
+            &mut self.st
+        }
+        fn draw(&mut self, _ctx: &mut DrawCtx) {}
+        fn set_modal_answer(&mut self, cmd: Command) {
+            *self.answer.borrow_mut() = Some(cmd);
+        }
+    }
+
+    /// End-to-end round-trip: a `request_exec_view` modal opens, the user closes it
+    /// (Enter → OK button → `end_modal(Command::OK)`), and the completion routes the
+    /// close command to the `requester` via `set_modal_answer` AND re-injects
+    /// `then_command` into `out_events`. Drives the real `pump_and_drive` loop to
+    /// completion (Enter is pre-queued so the modal closes — never an unbounded
+    /// headless spin).
+    #[test]
+    fn request_exec_view_round_trip_routes_answer_and_reinjects() {
+        let (mut program, _handle, _clock) = program_with_desktop(80, 25);
+
+        let answer = Rc::new(RefCell::new(None));
+        let recorder_id = program
+            .group_mut()
+            .insert(Box::new(ModalAnswerRecorder::new(
+                Rect::new(0, 0, 10, 3),
+                answer.clone(),
+            )));
+        program.out_events.clear();
+
+        let then_cmd = Command::custom("test.exec_view.reinject");
+        // Build an OK-only message box (Command::OK ends its modal) and request it
+        // as a view-launched modal.
+        program.with_ctx(|_g, ctx| {
+            let r = Rect::new(20, 8, 60, 16);
+            let (boxd, _first) = crate::dialog::build_message_box(
+                r,
+                "exec view",
+                crate::dialog::MessageBoxKind::Information,
+                crate::dialog::MessageBoxButtons::ok(),
+            );
+            ctx.request_exec_view(Box::new(boxd), recorder_id, Some(then_cmd));
+        });
+
+        // Sequence the re-inject queue (events are popped before the backend poll,
+        // by both pump_once and the inner modal loop):
+        //   1. a benign broadcast so the FIRST pump_once picks a Some(ev) and
+        //      reaches its deferred drain (which stashes pending_modal),
+        //   2. Command::OK so the modal loop (run by the same pump_and_drive)
+        //      closes the box with OK — mirrors message_box_direct_ok_returns_ok.
+        // Without (2) the headless modal loop would spin (it never blocks).
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.out_events.push_back(Event::Command(Command::OK));
+
+        // Drive: first pump stashes pending_modal, the next executes the modal
+        // (which closes on the queued Command::OK). The RouteModalAnswer completion pushes
+        // `then_cmd` into out_events right after the modal closes; a later pump pops
+        // it. Scan out_events each iteration so the re-injection is observed before
+        // it is consumed. Bounded — never unbounded.
+        let mut reinjected_seen = false;
+        for _ in 0..12 {
+            if program
+                .out_events
+                .iter()
+                .any(|e| matches!(e, Event::Command(c) if *c == then_cmd))
+            {
+                reinjected_seen = true;
+            }
+            program.pump_and_drive();
+        }
+        // Final scan (catch a re-injection queued by the last drive).
+        if program
+            .out_events
+            .iter()
+            .any(|e| matches!(e, Event::Command(c) if *c == then_cmd))
+        {
+            reinjected_seen = true;
+        }
+
+        // The pump routed the modal's close command (Command::OK) to the recorder.
+        assert_eq!(
+            *answer.borrow(),
+            Some(Command::OK),
+            "the modal's close command is delivered to the requester via set_modal_answer"
+        );
+        // The modal is gone.
+        assert!(
+            program.pending_modal.is_none(),
+            "pending_modal is cleared after the modal closes"
+        );
+        // The then_command was re-injected by the RouteModalAnswer completion.
+        assert!(
+            reinjected_seen,
+            "then_command was re-injected into out_events after the modal closed"
         );
     }
 
