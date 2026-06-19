@@ -1,107 +1,109 @@
-# HANDOVER — Audit documentation-backlog closure (resume here)
+# HANDOVER — Audit doc-backlog closure: **ALMOST DONE, finish + merge** (resume here)
 
-**Date:** 2026-06-19  **Author of this run:** Opus 4.8 orchestrator session
-**Effort:** close the documentation backlog the TV2 coverage audit produced
-(`docs/audit/`). This file is the forward-looking resume point for a **new
-session**. Read it, then the spec + 3 plans, then the ledger.
+**Date:** 2026-06-19 (cont.)  **Author:** Opus 4.8 orchestrator session
+**State:** the entire sweep is **content-complete and green**. Only the final
+review verdict, the merge to `main`, and deleting this file remain. This is a
+**short** finish — do NOT re-run the sweep.
 
 ---
 
-## 1. What this effort is
+## 0. TL;DR — what's left (≈3 steps)
+1. **Get the final-branch-review verdict** (a Sonnet honesty/quality reviewer was
+   dispatched at session end; see §3). If clean → proceed. If it has Important
+   findings → fix them (orchestrator one-line fixes or a fix subagent), re-verify
+   the affected gate, then proceed.
+2. **Merge** `docs/audit-backlog-closure` → `main` (**fast-forward is possible** —
+   main is still at `bc15704`, the branch point). Use
+   `superpowers:finishing-a-development-branch`.
+3. **Delete `HANDOVER-doc.md`** (this file) and commit, as the last step.
 
-The audit (`docs/audit/`) found **0 code gaps** (0 missing, 0 suspect) but a large
-**documentation** backlog. Spec + plans:
+## 1. Branch & state
+- **Branch:** `docs/audit-backlog-closure`. **HEAD:** `383dfb1`. **55 commits** since
+  `main` (@ `bc15704`). **`main` untouched — FF-mergeable.**
+- **Durable ledger:** `cat "$(git rev-parse --git-path sdd)/progress.md"` — every
+  landed section + lessons. Trust ledger + `git log` over recollection.
+- **Outcome:** below-bar public symbols **644 → 3**. The 3 remaining are
+  structurally blocked (no rustdoc-only fix), and are CORRECT to leave:
+  - `TIndicator` **SetState** — no `set_state` override exists (code change).
+  - `TWindow` **Close** — no public `close()`; logic in `handle_event` (code change).
+  - `TTextDevice` **GetPalette** — `→concept` row, no public Rust symbol.
 
-- **Spec (umbrella):** `docs/superpowers/specs/2026-06-19-audit-doc-backlog-closure-design.md`
-- **Plan C** (gate): `docs/superpowers/plans/2026-06-19-c-observation-triage.md`
-- **Plan B** (mdBook concept chapters): `docs/superpowers/plans/2026-06-19-b-concept-chapters.md`
-- **Plan A** (rustdoc score-3 sweep — a playbook applied per section): `docs/superpowers/plans/2026-06-19-a-rustdoc-sweep.md`
+## 2. ALL gates GREEN (verified at HEAD `383dfb1`, fresh-ish target dir `/home/oetiker/scratch/cargo-target-finalgate`)
+- `cargo test --workspace -j2 -- --test-threads=2` → **1323 passed, 0 failed**
+- `cargo clippy --workspace --all-targets -j2 -- -D warnings` → clean
+- `cargo fmt --all --check` → clean
+- `cargo build --examples -j2` → clean
+- `cargo xtask test` → **OK guide doctests (35 chapters)**
+- `cargo xtask docs` → **OK: integrated site** (book↔api link check passes; exit 0)
 
-Order is **C → B → A**, but B and A run mostly in parallel (B edits `docs/book/src/*.md`,
-A edits rustdoc in `src/*.rs`). The C gate is the only hard prerequisite and **it is DONE**.
+The later commits after the last full run are doc/md only — if you want belt-and-
+braces, re-run `cargo test --workspace` + `cargo xtask docs` once on a FRESH target
+dir before merging.
 
-## 2. Durable progress ledger (READ THIS FIRST on resume)
+## 3. The final review (the one pending item)
+A Sonnet "final branch honesty review" agent (id `afee19025dd5a83cf`) was dispatched
+right before this handover. It does a sampled honesty+quality+link+no-code-change
+audit of `git diff main..HEAD`. **It does not survive into a new session.** Options:
+- Read its transcript if present:
+  `/home/oetiker/.claude/projects/-home-oetiker-checkouts-rstv/4acbf6d2-*/subagents/agent-afee19025dd5a83cf.jsonl`
+  (look for the final VERDICT message), **or**
+- **Just re-dispatch it** (cheap, ~3-5 min). Prompt: independent honesty audit of
+  `git diff main..HEAD` — sample ~8 sections' `score 3` rows and confirm the cited
+  src/ rustdoc genuinely has what+how/when (not one-liners); confirm `N/A` rows are
+  genuinely `pub(crate)`/private; spot-check ~15 intra-doc links are pub+exist;
+  confirm the ONLY non-doc code in `src/**/*.rs` is the C-gate (`set_on_idle`/
+  `pump_and_drive`/`IdleHook` in program.rs, `set_validator` in input_line.rs);
+  confirm the 3 remaining below-bar rows are code-change/concept-blocked.
+- Everything else this reviewer would check has ALREADY been verified by the
+  orchestrator per-section + the gates above; this is the final independent pass.
 
-`.git/sdd/progress.md` — open it with:
+## 4. What was done (so you don't redo it)
+- **C gate (code):** `InputLine::set_validator` + `Program::set_on_idle` (idle seam,
+  `pump_and_drive`) — the ONLY behaviour changes; both reviewed. Plus 7 deliberate-
+  absence notes.
+- **A sweep (37 `docs(rustdoc)` commits):** every audit section raised to score-3 or
+  honest N/A; consolidated `src/theme.rs` Role pass (~75 variants + WindowPalette→Role
+  table); reconciliation pass closed TCommandSet (genuine gap) + colorpick + cross-refs.
+- **B (9 `docs(guide)` commits):** all 10 concept-chapter tasks; the **6 `→concept`
+  anchors exist** and A links to them (`#the-phase-field`, `#ending-a-modal-execview`,
+  `#the-modal-loop-execute`, `#endmodal`, `#draw-on-demand-vs-whole-tree`,
+  `#validator-error-dialogs`).
+- **Scorecard + coverage-matrix reconciled** (`67c17e3`): headline 644→3, matrix
+  `doc<3` column regenerated from per-section rollups.
+- **IMPLEMENTATION-LOG** entry written (`383dfb1`).
+
+## 5. Non-obvious gotchas / decisions (don't be surprised)
+1. **Pre-existing book-link bug fixed (`2ac7a70`):** the `rstv→tvision-rs` rename left
+   **806 site-wide book links** at `api/tvision-rs/` (hyphen); rustdoc emits
+   `api/tvision_rs/` (underscore). `main` failed `xtask docs` identically. Fixed across
+   33 chapters. This is the reason `xtask docs` now passes.
+2. **`docs/HANDOVER.md` has a STRAY uncommitted modification** (from the *other*
+   `consumer-api-coverage` effort, present since before this session). It is **NOT
+   mine** — leave it uncommitted/untouched; do not `git add` it into the merge, do not
+   revert it. The IMPLEMENTATION-LOG (not docs/HANDOVER.md) is this effort's record.
+3. **Pre-existing base-tree debt (out of scope, noted in the LOG):** a handful of
+   `(deviation Dx)` porting labels still live in module/struct heritage docs
+   (color.rs, theme.rs, view.rs, un-rewritten parts of event/menu/window). A future
+   site-wide bookkeeping-strip pass should remove them. Do NOT block the merge on this.
+4. **`<new-diagnostics>` blocks = stale-macro phantom noise** (IDE runs vs stale
+   `tvision-rs-macros`). Trust cargo. (Matches `diagnostics-trust-cargo` memory.)
+5. **The recurring sweep defect was bad intra-doc links** (public→`pub(crate)`, non-
+   existent symbols like `Group::insert_child`/`Context::make_local`, private
+   `FileList::search`) and leaked `deviation Dx` labels — all caught + fixed before
+   merge by grepping every link target's visibility. If you add anything, do the same.
+6. All worktrees/branches from the sweep are **removed**. Merge/cherry-pick only in
+   `/home/oetiker/checkouts/rstv`.
+
+## 6. Finish recipe (the actual commands)
 ```
-cat "$(git rev-parse --git-path sdd)/progress.md"
+cd /home/oetiker/checkouts/rstv
+# (optional belt-and-braces re-verify on a fresh dir)
+CARGO_TARGET_DIR=/home/oetiker/scratch/cargo-target-verify cargo test --workspace -j2 -- --test-threads=2
+CARGO_TARGET_DIR=/home/oetiker/scratch/cargo-target-verify cargo xtask docs
+# get/redo the final review (see §3); then:
+git rm HANDOVER-doc.md && git commit -m "docs: remove finished-effort resume file"
+# fast-forward merge (main untouched):
+git checkout main && git merge --ff-only docs/audit-backlog-closure
+# (then per finishing-a-development-branch: optionally delete the branch)
 ```
-It lists every landed section, the verified checkpoint, and the hard-won lessons.
-**Trust the ledger + `git log` over any recollection.** Do not re-do a section it marks complete.
-
-## 3. Branch & current state
-
-- **Integration branch:** `docs/audit-backlog-closure` (off `main` @ `bc15704`). **`main` is untouched.**
-- **HEAD:** `b105cf3` (TEditor). 12+ commits.
-- **Verified checkpoint:** commit `e2d23f1` was clean-build verified (**fresh** target dir): 1273 tests pass, fmt clean. Everything after `e2d23f1` is doc-only rustdoc + the C-gate code (already verified) — low risk, but **re-verify on a fresh target dir** (see §6) before declaring done.
-
-### C gate — COMPLETE (the code-bearing part)
-- `InputLine::set_validator` (extension) — `daee212`
-- `Program::set_on_idle` (foundation idle seam, borrow-safe, fires through modal loops) — `fc3313b`+`0a61794`+doc `399e187`
-- 7 deliberate-absence doc notes + all 8 audit §2b dispositions — `83cf5d0`
-
-### A sweep — 10 sections landed (each implement → spec-review → quality-review → cherry-pick)
-TRect, TPoint, TScrollBar, TButton, TListViewer, TEvent, TOutline, TInputLine, TWindow, TEditor.
-(~110 public symbols raised to score-3.)
-
-### IN-FLIGHT loose ends to reconcile FIRST on resume
-1. **TMenuItem** — implemented, **NOT reviewed, NOT cherry-picked.** Branch `a/a-menuitem` @ `1bd6bf3`, worktree `/scratch/oetiker/claude-worktrees/rstv-a-menuitem`. Report: `.git/sdd/a-menuitem-report.md` (12 rows → 3, 5 doctests, fmt clean). **Action:** run the quality+spec review (use the review template in §5), then cherry-pick onto the integration branch and `git worktree remove` + `git branch -D`.
-2. **TDialog** — implemented, **NOT reviewed, NOT cherry-picked.** Branch `a/a-dialog` @ `cb693d8`, worktree `/scratch/oetiker/claude-worktrees/rstv-a-dialog`. Report: `.git/sdd/a-dialog-report.md`. **Action:** review (spec+quality) then cherry-pick + clean up the worktree. (TDialog.md has 1 `→concept` row that should have been left for B — confirm the implementer deferred it.)
-
-## 4. What remains
-
-- **A sweep:** ~63 more reference sections. The **worklist is `docs/audit/rustdoc-scorecard.md`** (per-section `doc<3` counts) and the per-section `docs/audit/reference/<Section>.md` files (each row's Notes say exactly what reaches score-3). Priority queue (score 0/1) in the scorecard front-loads the highest-impact rows.
-- **theme.rs Role pass (one consolidated task):** per-section sweeps **skip `src/theme.rs`** (see §6). One dedicated pass documents ALL remaining `Role::*` variants. Already done inline: ScrollBar(`#Colors`), ListViewer(`ListRoles`), Outline(`Role::Outline*`). Deferred so far: `Role::Button*`, `Role::Input*`, and any others sections flagged.
-- **Multi-file sections deferred for careful SEQUENTIAL handling** (they touch shared `program.rs`/`group.rs`/`context.rs` and would conflict with parallel worktrees): **TView** (7 files, 32 rows, has DrawView `→concept`), **TGroup**, **TProgram**. Do these one at a time, not in parallel worktrees.
-- **Workstream B (10 chapter tasks):** all unblocked now (C gate done — B Task 2's `git grep set_on_idle` precondition is satisfied). B edits `docs/book/src/*.md`; fully parallel with A. The 6 `→concept` anchors B must create are listed in Plan B's Global Constraints; A's `→concept` rows link to them (do those A rows after the matching B chapter).
-
-## 5. The proven loop (subagent-driven; this is what worked)
-
-Per A section: dispatch a **Sonnet** implementer in its own git worktree (own
-`CARGO_TARGET_DIR=/home/oetiker/scratch/cargo-target-<tag>`) with the A-playbook
-prompt (the section's `docs/audit/reference/<Section>.md` IS its task list) →
-on DONE, `scripts/review-package <base> <head>` + dispatch a **Sonnet** task
-reviewer (spec compliance + code quality) → fix Important findings (orchestrator
-applies one-line doc fixes directly in the worktree + `--amend`; bigger → fix
-subagent) → **cherry-pick** the single commit onto the integration branch in the
-**main checkout** → `git worktree remove` + `git branch -D` → append to ledger.
-
-- Skill scripts: `/home/oetiker/.claude/plugins/cache/claude-plugins-official/superpowers/6.0.2/skills/subagent-driven-development/scripts/{task-brief,review-package}`
-- **Main checkout = merge-only tree.** All implementers run in worktrees so the
-  orchestrator can cherry-pick without colliding with an active writer.
-- Cap: **≤2 building agents** (shared 128-core box, 4-core budget; `-j 2` + `--test-threads=2`).
-- C-gate code uses **Opus** for implementer+reviewer; mechanical rustdoc uses **Sonnet**.
-- A-playbook prompt template + the standing policies: see any recent A dispatch in this
-  session's transcript, or reconstruct from Plan A's "Task P" + §6 below.
-
-## 6. CRITICAL GOTCHAS (these will bite you)
-
-1. **Shared target-dir corruption → PHANTOM build errors.** The canonical
-   `/home/oetiker/scratch/cargo-target` gets corrupted by overlapping worktree +
-   verification builds, producing **phantom** errors like `#[delegate]: skip(apply_list_scroll)
-   is not a method of trait View`, `apply_scroll_sync is not a member of trait View`,
-   `Window/Desktop/Dialog: View is not satisfied`. These are NOT real. For any
-   **authoritative integrated verification, use a FRESH target dir** (e.g.
-   `CARGO_TARGET_DIR=/home/oetiker/scratch/cargo-target-verify cargo test --workspace`).
-   Worktree agents already use own per-tag dirs (reliable).
-2. **`<new-diagnostics>` blocks are the SAME stale-macro noise.** The IDE/diagnostic
-   engine runs against a stale `tvision-rs-macros`. **Trust cargo, not diagnostics.**
-   (Matches the `diagnostics-trust-cargo` / `trust-cargo-not-diagnostics` memories.)
-3. **theme.rs policy:** per-section A sweeps **must skip `src/theme.rs`** Role rows
-   (leave them below-bar, note "deferred to theme pass"). Otherwise parallel worktrees
-   conflict on `theme.rs`. One consolidated theme-Role pass at the end.
-4. **`→concept` rows:** leave them; they link into B chapters (a separate workstream).
-5. **Multi-file sections (TView/TGroup/TProgram):** run SEQUENTIALLY, not in parallel
-   worktrees (shared `program.rs`/`group.rs`/`context.rs`).
-6. Some audit rows can only reach 3 via a **code change** (e.g. TWindow `Close`,
-   no public `close()`); those correctly stay below-bar — note, don't force.
-7. **Worktrees** live under `/scratch/oetiker/claude-worktrees/rstv-<tag>`; run
-   `git merge`/`cherry-pick` only in `/home/oetiker/checkouts/rstv`, never inside a worktree.
-
-## 7. Finishing (when the sweep + theme pass + B are done)
-
-- Fresh-target-dir gate: `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all --check`, `cargo build --examples`, `cargo xtask test`, `cargo xtask docs` (book↔api link check — this is where any broken `→concept`/intra-doc link surfaces).
-- Reconcile `docs/audit/rustdoc-scorecard.md` "Total below bar" down to only intentionally-private rows; update `coverage-matrix.md` `doc<3` column; confirm no silent skips.
-- Final whole-branch review (Opus) per `superpowers:requesting-code-review`, triaging the Minor findings logged in the ledger.
-- Add an `IMPLEMENTATION-LOG.md` section; update `docs/HANDOVER.md`; then merge `docs/audit-backlog-closure` → `main` (fast-forward if possible) via `superpowers:finishing-a-development-branch`.
-- Delete this `HANDOVER-doc.md` once the work lands.
+Leave the stray `docs/HANDOVER.md` working-tree change alone throughout.
