@@ -120,6 +120,57 @@ per child, `None` where a child has no transferable value), and `scatter_data`
 distributes a matching vector back in the same child order. Seed before
 `exec_view`, gather after it returns `Command::OK`.
 
+## The full `FieldValue` currency
+
+`FieldValue` is the **single typed currency** for all data exchange in tvision-rs.
+The well-known shapes are:
+
+| Variant | Produced by |
+| ------- | ----------- |
+| `Text(String)` | `InputLine`, `Editor` |
+| `Int(i64)` | numeric inputs |
+| `Bool(bool)` | single-item toggle controls |
+| `Bits(u32)` | `CheckBoxes` / `RadioButtons` cluster |
+| `List(Vec<FieldValue>)` | `Group::gather_list` / `scatter_list` |
+| `Custom(Rc<dyn CustomValue>)` | your own controls |
+
+`Bool` carries a simple toggle; `Bits` carries a bitmask from a cluster (each
+`CheckBoxes` or `RadioButtons` bit maps to one check or radio item in order).
+
+### Ordered-record gather and scatter
+
+When you want the whole dialog's data as **one value** rather than one field at a
+time, use the ordered-record pair on
+[`Group`](../api/tvision-rs/view/struct.Group.html):
+
+```rust,ignore
+// Seed before exec_view — positional, same child order as insert_child:
+let initial = FieldValue::List(vec![
+    FieldValue::Text("Alice".into()),
+    FieldValue::Bits(0b01),  // first checkbox ticked
+]);
+dialog.scatter_list(&initial);
+
+// Read after exec_view returns Command::OK:
+let record = dialog.gather_list();
+// record == FieldValue::List([FieldValue::Text(...), FieldValue::Bits(...)])
+```
+
+`gather_list` walks the group's children in insertion order and collects each
+child's `value()` into a `FieldValue::List` — the positional equivalent of C++
+`getData`'s `memcpy` record. `scatter_list` distributes the list back in the same
+order via `set_value`. Children with no transferable value (labels, decorative
+views) are skipped in both directions; the list contains only the slots that
+produce a value, so the index order matches the sequence of *data-bearing* children.
+
+### The `Custom` seam and third-party controls
+
+For richer payloads — a date range, a colour swatch, a structured selection — a
+control can return `FieldValue::Custom(...)`. See
+[Third-party components & data interchange](extensibility.md) for the full open
+story: the three exchange paths, `value_as::<T>()` / `as_custom::<T>()`, the
+TypeId caveat, and when to skip `FieldValue` entirely.
+
 ## See also
 
 - [Windows & the desktop](windows.md) — the non-modal sibling of a dialog.
@@ -127,3 +178,5 @@ distributes a matching vector back in the same child order. Seed before
   inside a dialog.
 - [Commands & events](commands.md) — how a button's command travels and how
   `OK`/`Cancel` end the modal.
+- [Third-party components](extensibility.md) — the `Custom` seam and the three
+  open exchange paths for your own controls.

@@ -27,6 +27,7 @@
 
 - [Windows & the desktop](apps/windows.md)
 - [Dialogs & data](apps/dialogs.md)
+- [Third-party components](apps/extensibility.md)
 - [Controls](apps/controls.md)
 - [Menus, status line & help](apps/menus.md)
 - [Commands & events](apps/commands.md)
