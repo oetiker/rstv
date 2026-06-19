@@ -39,24 +39,42 @@ impl DrawBuffer {
         }
     }
 
-    /// The buffer's capacity in columns.
+    /// The buffer's width in columns; all write operations are clipped to this limit.
+    ///
+    /// Equals the `width` passed to [`DrawBuffer::new`]. Use this to cap a fill
+    /// count or guard a manual write loop so it stays within the allocated buffer.
     pub fn capacity(&self) -> usize {
         self.data.len()
     }
 
-    /// The cells written so far.
+    /// A read-only view of all cells in the buffer, from column 0 to
+    /// [`capacity`](DrawBuffer::capacity) − 1.
+    ///
+    /// Call this after filling the buffer to hand the completed row to a
+    /// drawing context (e.g. pass it to `ctx.write_buf`), or to inspect
+    /// individual cells in tests. The slice length always equals `capacity`.
     pub fn cells(&self) -> &[Cell] {
         &self.data
     }
 
-    /// Set the char of a single cell, keeping its style.
+    /// Set the char of a single cell at `indent`, leaving its style untouched.
+    ///
+    /// Prefer this over [`move_char`](DrawBuffer::move_char) when you only want to
+    /// change the glyph of an already-styled cell — for example, placing a border
+    /// corner over a cell whose colour was set by an earlier pass. Out-of-range
+    /// `indent` is a silent no-op.
     pub fn put_char(&mut self, indent: usize, ch: char) {
         if indent < self.data.len() {
             self.data[indent].set_char(ch);
         }
     }
 
-    /// Set the style of a single cell, keeping its char.
+    /// Set the style of a single cell at `indent`, leaving its char untouched.
+    ///
+    /// Prefer this over [`move_char`](DrawBuffer::move_char) when you only want to
+    /// restyle a cell without changing its glyph — for example, applying a
+    /// highlight colour to text that was placed by an earlier pass. Out-of-range
+    /// `indent` is a silent no-op.
     pub fn put_attribute(&mut self, indent: usize, style: Style) {
         if indent < self.data.len() {
             self.data[indent].set_style(style);

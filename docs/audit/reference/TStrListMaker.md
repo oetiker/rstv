@@ -14,7 +14,7 @@ Rust module(s): `src/text.rs` (`tv::text::StringList`)   |   magiblot: `include/
 |---|---|---|---|---|---|---|
 | `Init(AStrSize, AIndexSize: Word)` (constructor) | 550 | NOT-PORTED | — | — | N/A | Allocates a fixed-size in-memory string buffer + index buffer for stream serialization. No analog needed: `StringList::new()` uses a `BTreeMap` with no fixed-size allocation. |
 | `Done` (destructor) | 550 | NOT-PORTED | — | — | N/A | Pascal destructor; Rust `Drop` implicit. |
-| `Put(Key: Word; S: String)` (method) | 550 | EQUIVALENT | OK | `tv::text::StringList::insert(key: u16, value: impl Into<String>)` | 2 | Same observable contract: associate a string with a numeric key, overwriting any prior value. Shape is idiomatic Rust. Doc explains *what*, not *how/when to use* in context. |
+| `Put(Key: Word; S: String)` (method) | 550 | EQUIVALENT | OK | `tv::text::StringList::insert(key: u16, value: impl Into<String>)` | 3 | Same observable contract: associate a string with a numeric key, overwriting any prior value. Shape is idiomatic Rust. Doc now shows build-at-startup usage with key-10 overwrite and `len()` guard; doctest compiles under `cargo test --doc`. |
 | `Store(var S: TStream)` (method) | 550 | NOT-PORTED | — | — | N/A | Serializes the string list to a resource stream using a compressed run-length index + byte-length-prefixed blob. Resource/streamable subsystem dropped (serde if revived). |
 | `streamableName` (private) | — | NOT-PORTED | — | — | N/A | Returns `TStringList::name`; stream registration dropped. |
 | `write` (private) | — | NOT-PORTED | — | — | N/A | Internal stream write implementation; dropped. |
@@ -25,5 +25,5 @@ Rust module(s): `src/text.rs` (`tv::text::StringList`)   |   magiblot: `include/
 ## Summary
 
 - PORTED: 0   EQUIVALENT: 1   NOT-PORTED: 8   MISSING: 0   UNSURE: 0
-- SUSPECT: 0   |   doc<3 (public): 1   |   → concept: 0
-- Notable finding: `Put` is the only user-visible capability and it maps cleanly to `StringList::insert`. All other entries are stream/persistence machinery (resource/streamable subsystem dropped, deviation D12). The maker-vs-reader split is intentionally collapsed.
+- SUSPECT: 0   |   doc<3 (public): 0   |   → concept: 0
+- Notable finding: `insert` raised to 3 (added build-at-startup example with overwrite and `len()` verification; doctest passes). All other entries are stream/persistence machinery (resource/streamable subsystem dropped, deviation D12). The maker-vs-reader split is intentionally collapsed.
