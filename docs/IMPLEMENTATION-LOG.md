@@ -5,6 +5,51 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## snake example: growing tail; synchronized output (DEC 2026); WezTerm artifact run to ground (2026-06-21/22)
+
+**`snake` example — a growing tail.** The frameless `snake` example now leaves a
+tail behind the 🐍 head: it lengthens by a quarter of the distance travelled
+(`tail_len = distance / 4`). Movement records every cell the head sweeps into a
+`path: Vec<Point>`, interpolating each move (including a mouse teleport) with a
+Bresenham line so the body stays continuous with no gaps; the path is trimmed to
+`tail_len + 1` cells each move. The body draws as blanks on the snake's amber
+background — a continuous amber trail flowing out of the head. This is an
+embellishment beyond the C++ `SnakeView` (which had no tail); example-only, no
+framework change. (`README.md` already lists the example.)
+
+Investigation of a reported drawing artifact: on the `snake` example, sweeping
+the mouse left a trail of faint vertical slivers in the moving sprite's wake
+("light gray characters"); moving a window left ghosts at its lower-right corner.
+Reported as a buffer→terminal transfer problem.
+
+**It is not a tvision-rs defect.** Our emitted byte stream was verified correct
+and complete three independent ways: (1) a scratch convergence test drove the
+real `Buffer::diff` over a multi-frame wide-glyph sweep (horizontal-by-1,
+vertical, diagonal, re-pass) and applied each diff to a simulated terminal with
+crossterm's wide-glyph auto-advance semantics — the terminal converged to ground
+truth at every frame, **zero dropped cells**; (2) raw bytes captured from a pty
+showed every vacated cell gets an explicit background rewrite with the correct
+colour; (3) tmux reconstructs a perfectly clean grid (and tmux *keeps* stale
+cells if we fail to write them, so it would reveal a dropped write). The user
+confirmed it reproduces only on one WezTerm build — clean on other terminals and
+other WezTerm versions — i.e. a **transient WezTerm rendering bug**.
+
+Two fix hypotheses were tried and **reverted** as they had no effect (and were
+not faithful to the cause): a magiblot-style wide-glyph spill guard in
+`Buffer::diff` (`handleWideCharSpill`), and — kept, see below — synchronized
+output. The diff is back to its original ratatui-derived form.
+
+**Kept (deliberate modern extension, not a magiblot port):** the crossterm
+backend now brackets each frame with **DEC private mode 2026** —
+`BeginSynchronizedUpdate` queued at the head of `draw`, `EndSynchronizedUpdate`
+at the head of `flush` (the renderer calls `draw` → `set_cursor` → `flush` once
+per frame, so the whole frame incl. the cursor move is one atomic unit). This is
+the standard frame-atomicity protocol modern TUIs (ratatui, notcurses) emit to
+stop GPU terminals presenting torn mid-frame updates; terminals that don't
+support it ignore the unknown private mode, so it's a no-op on VTE terminals
+(mate-terminal, gnome-terminal). magiblot has no 2026 — this is a targeted
+modern extension.
+
 ## Data-movement docs — front-door article + de-framing pass (2026-06-20)
 
 Documentation follow-up to the data-movement unification (Phases 1–5, now on

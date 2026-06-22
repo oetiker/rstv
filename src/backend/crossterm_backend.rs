@@ -73,7 +73,10 @@ use crossterm::{
     },
     execute, queue,
     style::{Attribute, Color as CColor, Colors, Print, ResetColor, SetAttribute, SetColors},
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{
+        BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen,
+        disable_raw_mode, enable_raw_mode,
+    },
 };
 
 use crate::backend::clipboard::ClipboardChain;
@@ -282,6 +285,20 @@ impl Backend for CrosstermBackend {
     }
 
     fn draw(&mut self, content: &[(u16, u16, &Cell)]) {
+        // Begin a synchronized frame (DEC private mode 2026). The renderer
+        // calls `draw` → `set_cursor` → `flush` once per frame, so this brackets
+        // the whole frame with the matching `EndSynchronizedUpdate` in `flush`.
+        //
+        // GPU terminals (kitty/WezTerm/Alacritty) apply our per-cell writes
+        // incrementally and repaint mid-frame, so a fast-moving frame tears: a
+        // partial render leaves a glyph fragment ("ghost") behind a moving
+        // window/sprite, and because the diff treats that cell as unchanged on
+        // the next frame it is never repainted — the ghost persists until
+        // something else happens to overwrite that cell. Mode 2026 makes the
+        // terminal buffer the frame and present it atomically, eliminating the
+        // tear. Terminals that don't support it ignore the unknown private mode
+        // (so it's a no-op on VTE terminals such as mate-terminal, gnome-terminal).
+        let _ = queue!(self.out, BeginSynchronizedUpdate);
         for &(x, y, cell) in content {
             // Skip wide-glyph trail cells — the terminal advances automatically
             // when the lead cell is printed.
@@ -303,6 +320,11 @@ impl Backend for CrosstermBackend {
     }
 
     fn flush(&mut self) {
+        // End the synchronized frame opened in `draw` (DEC mode 2026), then
+        // flush the buffered bytes so the terminal presents the frame atomically.
+        // An unmatched end (if `flush` is ever called without a preceding `draw`)
+        // is harmless — the terminal ignores it.
+        let _ = queue!(self.out, EndSynchronizedUpdate);
         let _ = self.out.flush();
     }
 
