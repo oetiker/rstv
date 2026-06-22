@@ -42,6 +42,7 @@ cargo run --example tvdemo     # the classic Turbo Vision demo (shown above)
 cargo run --example hello      # a minimal app: desktop + menu + dialog
 cargo run --example tvedit     # a multi-window text editor
 cargo run --example gallery -- # list the widget gallery; pass a name to view one
+cargo run --example snake      # a frameless custom view: steer a 🐍 in truecolor
 ```
 
 ## Use it
