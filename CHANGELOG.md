@@ -12,13 +12,20 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.1.0 - 2026-06-22
+
+### New
+
 - Initial public release of `tvision-rs` — an idiomatic Rust port of Turbo Vision
   (magiblot/tvision): the `View` trait + `ViewState` composition, the single
   event loop and deferred-effects channel, the core widget set (windows,
   dialogs, menus, buttons, input lines, list/scroll views, validators, color
   picker, …), the `Theme` palette system, and the `crossterm`-backed terminal
   `Backend` with a `HeadlessBackend` for snapshot testing.
-
 ### Changed
 
 ### Fixed
