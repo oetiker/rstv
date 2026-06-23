@@ -14,6 +14,11 @@ moves it into a dated, versioned section when a release is cut.
 
 ### Changed
 
+- CI: bump `actions/checkout` to v5 and pass the crates.io token via the
+  `CARGO_REGISTRY_TOKEN` env var instead of the deprecated `cargo publish
+  --token` flag, clearing the Node-20 and cargo deprecation warnings in the
+  release workflow.
+
 ### Fixed
 
 ## 0.1.0 - 2026-06-22
