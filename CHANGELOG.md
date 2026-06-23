@@ -12,6 +12,12 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+- `examples/external_state.rs` — demonstrates the canonical pattern for feeding
+  data from a background thread (or any external source) into the TUI: a zero-
+  area `PumpView` drains an `mpsc::Receiver` on each `Event::Timer` tick,
+  updates shared `Rc<RefCell<AppState>>`, and broadcasts `REFRESH` so a
+  `ListBox`-backed `ListPane` repopulates without holding a `RefCell` borrow
+  across the `new_list` / `broadcast` calls.
 - `tvision_rs::Deferred` is now re-exported at the crate root (alongside
   `Context`, `DrawCtx`, etc.), so consumers writing headless tests no longer
   need the two-segment path `tvision_rs::view::Deferred`.
