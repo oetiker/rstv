@@ -14,6 +14,11 @@ moves it into a dated, versioned section when a release is cut.
 
 ### Changed
 
+- `tvision-rs-macros` now ships a `README.md` (and a `readme` manifest field), so
+  its crates.io page renders documentation instead of a blank body. Takes effect
+  on the next version publish — crates.io captures the README at publish time and
+  cannot backfill it onto the already-published 0.1.2.
+
 ### Fixed
 
 ## 0.1.2 - 2026-06-23
