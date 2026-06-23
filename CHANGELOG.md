@@ -20,6 +20,11 @@ moves it into a dated, versioned section when a release is cut.
   is required. Both crates must have a Trusted Publisher configured on crates.io
   (repo `oetiker/tvision-rs`, workflow `release.yml`).
 
+- `tvision-rs-macros` now ships a `README.md` (and a `readme` manifest field), so
+  its crates.io page renders documentation instead of a blank body. Takes effect
+  on the next version publish (crates.io captures the README at publish time and
+  cannot backfill it onto an already-published version).
+
 ### Fixed
 
 - Release: the `tvision-rs` crate now requires Trusted Publishing on crates.io,
