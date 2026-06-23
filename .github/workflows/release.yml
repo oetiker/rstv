@@ -50,10 +50,7 @@ jobs:
             echo "::error::RELEASE_TOKEN secret is not set (needed to push to protected main)"
             exit 1
           fi
-          if [ -z "${{ secrets.CRATES_IO_TOKEN }}" ]; then
-            echo "::error::CRATES_IO_TOKEN secret is not set"
-            exit 1
-          fi
+          # crates.io auth uses Trusted Publishing (OIDC) — no API token secret needed.
 
       - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-edit
@@ -115,8 +112,14 @@ jobs:
     name: Publish to crates.io
     needs: version
     runs-on: ubuntu-latest
-    env:
-      CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+    # Trusted Publishing exchanges this job's GitHub OIDC identity for a
+    # short-lived crates.io token — no long-lived CRATES_IO_TOKEN secret. Both
+    # crates must have a Trusted Publisher configured on crates.io (repo
+    # oetiker/tvision-rs, workflow release.yml) or the exchange yields a token
+    # that can't publish them.
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v5
         with:
@@ -124,10 +127,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
+      - name: Authenticate to crates.io (Trusted Publishing)
+        uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
       - name: Publish tvision-rs-macros
         run: cargo publish -p tvision-rs-macros
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
       - name: Publish tvision-rs (retry while crates.io index propagates)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: |
           # tvision-rs depends on the just-published tvision-rs-macros; cargo publish verifies
           # by building, which needs the new tvision-rs-macros in the index. Propagation
