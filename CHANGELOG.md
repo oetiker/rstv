@@ -14,12 +14,17 @@ moves it into a dated, versioned section when a release is cut.
 
 ### Changed
 
+### Fixed
+
+## 0.1.2 - 2026-06-23
+
+### Changed
+
 - Release: publish to crates.io via **Trusted Publishing** (OIDC,
   `rust-lang/crates-io-auth-action`) instead of a long-lived `CRATES_IO_TOKEN`
   secret. The `publish` job now requests `id-token: write` and no token secret
   is required. Both crates must have a Trusted Publisher configured on crates.io
   (repo `oetiker/tvision-rs`, workflow `release.yml`).
-
 ### Fixed
 
 - Release: the `tvision-rs` crate now requires Trusted Publishing on crates.io,
