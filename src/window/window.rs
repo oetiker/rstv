@@ -177,11 +177,18 @@ pub struct Window {
     /// [`set_bordered`](Self::set_bordered), which also reflows content. Read by
     /// [`client_rect`](Self::client_rect) and the drag-start guard.
     bordered: bool,
-    /// The ids of the scroll bars this window minted via
-    /// [`standard_scroll_bar`](Self::standard_scroll_bar). They are chrome (they
-    /// anchor to an edge), so a border toggle re-derives their rect from the
-    /// `client_rect` formula rather than applying the content transform.
-    scrollbar_ids: Vec<ViewId>,
+    /// The id of the vertical (right-edge) scroll bar minted by
+    /// [`standard_scroll_bar`](Self::standard_scroll_bar), if any. Chrome
+    /// (edge-anchored), so a border toggle re-derives its rect rather than
+    /// applying the content transform. Also used by `client_rect` to exclude
+    /// the bar lane from the content area.
+    vsb_id: Option<ViewId>,
+    /// The id of the horizontal (bottom-edge) scroll bar minted by
+    /// [`standard_scroll_bar`](Self::standard_scroll_bar), if any. Chrome
+    /// (edge-anchored), so a border toggle re-derives its rect rather than
+    /// applying the content transform. Also used by `client_rect` to exclude
+    /// the bar lane from the content area.
+    hsb_id: Option<ViewId>,
     /// The window number.
     number: i16,
     /// The colour scheme. See [`WindowPalette`].
@@ -258,7 +265,8 @@ impl Window {
             flags,
             restore_rect: None,
             bordered: true,
-            scrollbar_ids: Vec::new(),
+            vsb_id: None,
+            hsb_id: None,
             number,
             palette: WindowPalette::Blue,
             title,
@@ -520,22 +528,37 @@ impl Window {
 
     // -- client rect ---------------------------------------------------------
 
-    /// The window's interior content rectangle (view-local). Inset by the frame on
-    /// every side when [`bordered`](Self::bordered); the **full extent** when
-    /// frameless (the vertical scroll bar reaches the top and bottom screen edges;
-    /// the horizontal bar is inset one column from the left and right screen
-    /// edges). Apps placing window content should key off this rather than
-    /// hardcoding the frame inset.
+    /// The window interior inset by the frame only (NOT the scroll-bar lanes) —
+    /// the span a standard scroll bar runs along its edge. Used by
+    /// [`scroll_bar_rect`](Self::scroll_bar_rect) to derive bar placement in
+    /// bordered mode (identical to the old client_rect formula for bordered
+    /// windows).
+    fn frame_interior(&self) -> Rect {
+        let ext = self.group.state().get_extent();
+        let bi = if self.bordered { 1 } else { 0 };
+        Rect::from_points(
+            Point::new(ext.a.x + bi, ext.a.y + bi),
+            Point::new(ext.b.x - bi, ext.b.y - bi),
+        )
+    }
+
+    /// The window's interior content rectangle (view-local). Inset by the frame
+    /// border when [`bordered`](Self::bordered). Scroll-bar lanes are always
+    /// excluded — the right column when a vertical bar is present, the bottom row
+    /// when a horizontal bar is present — so placing content at `client_rect`
+    /// never overlaps the bars regardless of border state. Apps placing window
+    /// content should key off this rather than hardcoding the frame inset.
     pub fn client_rect(&self) -> Rect {
         let ext = self.group.state().get_extent();
-        if self.bordered {
-            Rect::from_points(
-                Point::new(ext.a.x + 1, ext.a.y + 1),
-                Point::new(ext.b.x - 1, ext.b.y - 1),
-            )
-        } else {
-            ext
-        }
+        let bi = if self.bordered { 1 } else { 0 };
+        // The bar occupies the last column/row of the EXTENT; in bordered mode the
+        // frame inset already excludes it, so take the max (no double inset).
+        let right = bi.max(i32::from(self.vsb_id.is_some()));
+        let bottom = bi.max(i32::from(self.hsb_id.is_some()));
+        Rect::from_points(
+            Point::new(ext.a.x + bi, ext.a.y + bi),
+            Point::new(ext.b.x - right, ext.b.y - bottom),
+        )
     }
 
     // -- border (independent primitive) --------------------------------------
@@ -579,20 +602,17 @@ impl Window {
         let size_delta = (new.b - new.a) - (old.b - old.a);
         let origin_delta = new.a - old.a;
         let frame_id = self.frame_id;
-        let scrollbar_ids = self.scrollbar_ids.clone();
+        // Snapshot the bar ids before the mutable loop (borrow-checker: we need
+        // them while `self.group.child_mut` holds a mutable borrow).
+        let vsb = self.vsb_id;
+        let hsb = self.hsb_id;
         for id in self.group.child_ids_in_order() {
             if id == frame_id {
                 continue;
             }
-            if scrollbar_ids.contains(&id) {
+            if Some(id) == vsb || Some(id) == hsb {
                 // Chrome: re-derive the bar's rect for the new bordered state.
-                let vertical = self
-                    .group
-                    .child_mut(id)
-                    .and_then(|v| v.as_any_mut())
-                    .and_then(|a| a.downcast_mut::<ScrollBar>())
-                    .map(|sb| sb.is_vertical())
-                    .unwrap_or(false);
+                let vertical = Some(id) == vsb;
                 let r = self.scroll_bar_rect(vertical);
                 if let Some(v) = self.group.child_mut(id) {
                     v.change_bounds(r);
@@ -673,9 +693,13 @@ impl Window {
             sb
         };
         let id = self.group.insert(Box::new(sb));
-        // Record the minted bar so a border toggle can re-derive (not content-shift)
-        // its rect.
-        self.scrollbar_ids.push(id);
+        // Record the minted bar by orientation so a border toggle can re-derive
+        // (not content-shift) its rect, and so client_rect can exclude the lane.
+        if opts.vertical {
+            self.vsb_id = Some(id);
+        } else {
+            self.hsb_id = Some(id);
+        }
         id
     }
 
@@ -683,20 +707,31 @@ impl Window {
     /// `bordered` state — the single formula shared by
     /// [`standard_scroll_bar`](Self::standard_scroll_bar) (at insert time) and
     /// [`reflow_client`](Self::reflow_client) (on a border toggle).
+    ///
+    /// Bordered: the bar is inset by the frame corners (identical to the
+    /// pre-existing behaviour). Frameless: the bar extends to the window edges,
+    /// stopping just short of the companion bar's lane (if both bars are present).
     fn scroll_bar_rect(&self, vertical: bool) -> Rect {
         let ext = self.group.state().get_extent();
-        let cr = self.client_rect();
+        let fi = self.frame_interior();
         if vertical {
-            // Right column; spans the client height. Bordered: identical to the
-            // previous (ext.b.x-1, ext.a.y+1)..(ext.b.x, ext.b.y-1).
-            Rect::from_points(Point::new(ext.b.x - 1, cr.a.y), Point::new(ext.b.x, cr.b.y))
+            // Right column. Bordered: clears the frame corners (unchanged).
+            // Frameless: full height, stopping one row above the h-bar.
+            let (top, bottom) = if self.bordered {
+                (fi.a.y, fi.b.y)
+            } else {
+                (ext.a.y, ext.b.y - i32::from(self.hsb_id.is_some()))
+            };
+            Rect::from_points(Point::new(ext.b.x - 1, top), Point::new(ext.b.x, bottom))
         } else {
-            // Bottom row; spans the client width inset one. Bordered: identical to
-            // the previous (ext.a.x+2, ext.b.y-1)..(ext.b.x-2, ext.b.y).
-            Rect::from_points(
-                Point::new(cr.a.x + 1, ext.b.y - 1),
-                Point::new(cr.b.x - 1, ext.b.y),
-            )
+            // Bottom row. Bordered: inset to clear the resize-grip corners (unchanged).
+            // Frameless: from the left edge to just before the v-bar.
+            let (left, right) = if self.bordered {
+                (fi.a.x + 1, fi.b.x - 1)
+            } else {
+                (ext.a.x, ext.b.x - i32::from(self.vsb_id.is_some()))
+            };
+            Rect::from_points(Point::new(left, ext.b.y - 1), Point::new(right, ext.b.y))
         }
     }
 
@@ -3211,5 +3246,47 @@ mod tests {
             !w.bordered(),
             "zoom does not re-border: a coherent intentional borderless window"
         );
+    }
+
+    // -- 17. frameless window: client_rect excludes bar lanes ------------------
+
+    /// A frameless 20×10 window with BOTH a vertical and a horizontal bar.
+    /// `client_rect` must exclude the bar lanes; the bars must reach the window
+    /// edges (with the appropriate corner stop for the companion bar).
+    #[test]
+    fn client_rect_excludes_scrollbar_lanes_when_frameless() {
+        let w_sz = 20i32;
+        let h_sz = 10i32;
+        let ext = Rect::new(0, 0, w_sz, h_sz);
+
+        let mut win = Window::new(ext, Some("Test".to_string()), 0);
+        win.bordered = false;
+
+        // Inject fake ids (minted via ViewId::next so they are valid NonZeroU64s
+        // but not inserted into any group; client_rect / scroll_bar_rect only
+        // test `.is_some()`, they never resolve).
+        let fake_vsb = ViewId::next();
+        let fake_hsb = ViewId::next();
+        win.vsb_id = Some(fake_vsb);
+        win.hsb_id = Some(fake_hsb);
+
+        // Content rect: full area minus the scroll-bar lanes.
+        let cr = win.client_rect();
+        assert_eq!(cr.a, Point::new(0, 0), "content starts at top-left");
+        assert_eq!(
+            cr.b,
+            Point::new(w_sz - 1, h_sz - 1),
+            "content excludes bar lanes (right column + bottom row)"
+        );
+
+        // Vertical bar: right column, full height stopping above the h-bar corner.
+        let vr = win.scroll_bar_rect(true);
+        assert_eq!(vr.a, Point::new(w_sz - 1, 0), "v-bar starts at top-right");
+        assert_eq!(vr.b, Point::new(w_sz, h_sz - 1), "v-bar stops above h-bar");
+
+        // Horizontal bar: bottom row, from left edge to just before the v-bar.
+        let hr = win.scroll_bar_rect(false);
+        assert_eq!(hr.a, Point::new(0, h_sz - 1), "h-bar starts at bottom-left");
+        assert_eq!(hr.b, Point::new(w_sz - 1, h_sz), "h-bar stops before v-bar");
     }
 }
