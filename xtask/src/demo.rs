@@ -94,8 +94,8 @@ fn tour() -> Vec<Scene> {
         scene(&["F4"], 170), // Screen: covers the menu, [⋮] kebab top-right
         scene(&["F4"], 120), // restore the framed window
         scene(&["F10", "Right", "Right", "Down", "a"], 170), // cascade (all windows)
-        scene(&["F5"], 140),    // zoom top window
-        scene(&["F5"], 110),    // restore
+        scene(&["F5"], 140), // zoom top window
+        scene(&["F5"], 110), // restore
     ]
 }
 
