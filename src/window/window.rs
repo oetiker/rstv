@@ -199,6 +199,14 @@ pub struct Window {
     /// [`set_fullscreen`](Self::set_fullscreen); read by the `Command::FULLSCREEN`
     /// cycler. Composed of the independent border + maximize primitives.
     fullscreen: Fullscreen,
+    /// Whether a collapsed application menu bar (its `[⋮]` kebab) sits directly
+    /// above this window's top-right corner — true only while the window is in
+    /// `Fullscreen::Screen` *and* the program has a menu bar. Pushed down by the
+    /// pump's fullscreen layout engine (it owns that cross-tree fact) via
+    /// [`set_menu_chrome_above`](Self::set_menu_chrome_above); read by
+    /// [`scroll_bar_rect`](Self::scroll_bar_rect) to inset a right-edge vertical
+    /// scroll bar's **top** one row so its up-arrow clears the kebab.
+    menu_chrome_above: bool,
 }
 
 impl Window {
@@ -271,6 +279,7 @@ impl Window {
             palette: WindowPalette::Blue,
             title,
             fullscreen: Fullscreen::Off,
+            menu_chrome_above: false,
         }
     }
 
@@ -659,6 +668,31 @@ impl Window {
         }
     }
 
+    /// Record whether a collapsed menu bar's kebab sits above this window's
+    /// top-right corner and, if that changed, re-derive the right-edge vertical
+    /// scroll bar so its top clears the kebab row (see
+    /// [`menu_chrome_above`](Self::menu_chrome_above)).
+    ///
+    /// Called by the pump's fullscreen layout engine — the only owner of the
+    /// cross-tree "is there a menu bar" fact — after it re-fits the window. Only
+    /// the vertical bar is touched (the kebab is on the top row; a horizontal bar
+    /// lives on the bottom). The change guard makes repeat calls (e.g. the
+    /// per-resize maintenance pass) cheap; the vertical bar's grow mode keeps its
+    /// top fixed across resizes, so a single inset survives the grow-mode cascade.
+    pub(crate) fn set_menu_chrome_above(&mut self, above: bool, ctx: &mut Context) {
+        if self.menu_chrome_above == above {
+            return;
+        }
+        self.menu_chrome_above = above;
+        if let Some(vsb) = self.vsb_id {
+            let r = self.scroll_bar_rect(true);
+            if let Some(v) = self.group.child_mut(vsb) {
+                v.change_bounds(r);
+                v.on_bounds_changed(ctx);
+            }
+        }
+    }
+
     // -- standard scroll bar -------------------------------------------------
 
     /// Insert a standard scroll bar on the right or bottom edge and return its
@@ -712,17 +746,25 @@ impl Window {
     ///
     /// Bordered: the bar is inset by the frame corners (identical to the
     /// pre-existing behaviour). Frameless: the bar extends to the window edges,
-    /// stopping just short of the companion bar's lane (if both bars are present).
+    /// stopping just short of the companion bar's lane (if both bars are present),
+    /// and — when a collapsed menu bar's kebab sits above the top-right corner
+    /// ([`menu_chrome_above`](Self::menu_chrome_above)) — insets its **top** one
+    /// row so the up-arrow is not occluded by (and does not steal clicks from) the
+    /// kebab.
     fn scroll_bar_rect(&self, vertical: bool) -> Rect {
         let ext = self.group.state().get_extent();
         let fi = self.frame_interior();
         if vertical {
             // Right column. Bordered: clears the frame corners (unchanged).
-            // Frameless: full height, stopping one row above the h-bar.
+            // Frameless: full height, stopping one row above the h-bar; the top is
+            // nudged down one row when a menu kebab covers the top-right corner.
             let (top, bottom) = if self.bordered {
                 (fi.a.y, fi.b.y)
             } else {
-                (ext.a.y, ext.b.y - i32::from(self.hsb_id.is_some()))
+                (
+                    ext.a.y + i32::from(self.menu_chrome_above),
+                    ext.b.y - i32::from(self.hsb_id.is_some()),
+                )
             };
             Rect::from_points(Point::new(ext.b.x - 1, top), Point::new(ext.b.x, bottom))
         } else {
@@ -1660,6 +1702,14 @@ impl View for Window {
         } else {
             None
         }
+    }
+
+    /// Concrete-reach hook so the pump's fullscreen layout engine can push the
+    /// kebab-reservation flag (via the crate-internal `set_menu_chrome_above`).
+    /// Mirrors the menu-bar collapse downcast; without it the engine cannot reach
+    /// a `Window` behind `&mut dyn View`.
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        Some(self)
     }
 }
 

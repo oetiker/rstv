@@ -3382,11 +3382,14 @@ fn centered_msgbox_rect_for(group: &Group, desktop: Option<ViewId>, msg: &str) -
 /// restore via its single `restore_rect` slot, the border toggle, and the content
 /// reflow). This performs only the **cross-tree** work — collapse/restore the menu
 /// bar (+ its bounds) and re-bound the desktop — plus the loop-owned `slot`
-/// tracking. All via the `View` trait (no downcast except the menu-bar collapse
-/// flag). Reused by the deferred drain and the resize/vanish path.
+/// tracking. Almost all via the `View` trait; the only downcasts are two single-
+/// bool cross-tree pushes a leaf cannot self-determine — the menu-bar collapse
+/// flag (step 1) and the window's kebab-reservation flag (step 3b). Reused by the
+/// deferred drain and the resize/vanish path.
 ///
 /// `kebab_w` is the display width of the themed kebab glyph; it sets the
-/// collapsed menu-bar width (column span at the top-right corner).
+/// collapsed menu-bar width (column span at the top-right corner). The kebab's
+/// **height** (one row) is what step 3b reserves against a window scroll bar.
 #[allow(clippy::too_many_arguments)]
 fn apply_fullscreen(
     group: &mut Group,
@@ -3464,6 +3467,22 @@ fn apply_fullscreen(
     {
         v.change_bounds(rect);
         v.on_bounds_changed(ctx);
+    }
+
+    // 3b. Kebab reservation: tell the (now re-fit) window whether a collapsed menu
+    //     bar's [⋮] kebab sits above its top-right corner — true only when Screen
+    //     AND a menu bar is present. The window insets its right vertical scroll
+    //     bar's top one row so the up-arrow clears the kebab. This is the second
+    //     (and last) Window downcast in this engine, symmetric with the menu-bar
+    //     collapse downcast in step 1; both push a single bool of cross-tree state
+    //     the leaf cannot know on its own.
+    let kebab_above = mode == Fullscreen::Screen && menu_present;
+    if let Some(v) = group.find_mut(window)
+        && let Some(win) = v
+            .as_any_mut()
+            .and_then(|a| a.downcast_mut::<crate::window::Window>())
+    {
+        win.set_menu_chrome_above(kebab_above, ctx);
     }
 
     // 4. Slot tracking: set while fullscreen, cleared on exit / vanish.
@@ -4409,6 +4428,105 @@ mod tests {
             .state()
             .get_bounds();
         assert_eq!(dt.a.y, 0);
+    }
+
+    /// A `Screen`-fullscreen window owning a right-edge vertical scroll bar insets
+    /// that bar's **top** one row so its up-arrow clears the collapsed menu bar's
+    /// `[⋮]` kebab (which covers the top-right corner, incl. the bar's column).
+    /// On exit (`Off`) the bar returns to its bordered position.
+    ///
+    /// REGRESSION SIGNAL: if step 3b of `apply_fullscreen` stops pushing the kebab
+    /// flag (or `scroll_bar_rect` stops honouring it), the bar's top snaps back to
+    /// row 0 and the kebab occludes — and steals the click from — the up-arrow.
+    #[test]
+    fn screen_fullscreen_insets_vertical_scrollbar_below_kebab() {
+        use crate::menu::MenuBar;
+        use crate::window::{Fullscreen, ScrollBarOptions, Window};
+
+        let (w, h) = (40u16, 12u16);
+        let (backend, _handle) = HeadlessBackend::new(w, h);
+        let theme = Theme::classic_blue();
+        let clock = Rc::new(ManualClock::new(0));
+        let win_id: Rc<RefCell<Option<crate::view::ViewId>>> = Rc::new(RefCell::new(None));
+        let vsb_id: Rc<RefCell<Option<crate::view::ViewId>>> = Rc::new(RefCell::new(None));
+        let win_cap = win_id.clone();
+        let vsb_cap = vsb_id.clone();
+        let w_i32 = w as i32;
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            theme,
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                let mut win = Window::new(Rect::new(2, 2, 20, 8), Some("Test".into()), 1);
+                *vsb_cap.borrow_mut() = Some(win.standard_scroll_bar(ScrollBarOptions {
+                    vertical: true,
+                    handle_keyboard: false,
+                }));
+                *win_cap.borrow_mut() = Some(desktop.insert_view(Box::new(win)));
+                Some(Box::new(desktop))
+            },
+            |_r| None, // no status line
+            move |_r| {
+                Some(Box::new(MenuBar::new(
+                    Rect::new(0, 0, w_i32, 1),
+                    modal_menu(),
+                )))
+            },
+        );
+        program.out_events.clear();
+        let vsb = vsb_id.borrow().unwrap();
+
+        // Select the window so FULLSCREEN routes to it, then cycle Off->Desktop->Screen.
+        program.out_events.push_back(alt_digit('1'));
+        program.pump_once();
+        program.out_events.clear();
+        program
+            .out_events
+            .push_back(Event::Command(Command::FULLSCREEN));
+        program.pump_once();
+        program
+            .out_events
+            .push_back(Event::Command(Command::FULLSCREEN));
+        program.pump_once();
+
+        assert_eq!(
+            program.fullscreen.as_ref().expect("fullscreen slot").mode,
+            Fullscreen::Screen
+        );
+
+        // The bar runs the right column (x = w-1 = 39) but its top is row 1, not 0,
+        // so the up-arrow sits just below the kebab at (37..40, 0).
+        let sb = program
+            .group_mut()
+            .find_mut(vsb)
+            .expect("vsb resolvable")
+            .state()
+            .get_bounds();
+        assert_eq!(
+            (sb.a.x, sb.a.y),
+            (39, 1),
+            "vertical scroll bar top is inset one row below the kebab"
+        );
+
+        // Screen -> Off: the bar returns to its bordered inset (window restored to
+        // (2,2,20,8); local bar column 17, top row 1 = inside the frame).
+        program
+            .out_events
+            .push_back(Event::Command(Command::FULLSCREEN));
+        program.pump_once();
+        assert!(program.fullscreen.is_none(), "fullscreen cleared on Off");
+        let sb_off = program
+            .group_mut()
+            .find_mut(vsb)
+            .expect("vsb resolvable")
+            .state()
+            .get_bounds();
+        assert_eq!(
+            (sb_off.a.x, sb_off.a.y),
+            (17, 1),
+            "vertical scroll bar restored to its bordered position after Off"
+        );
     }
 
     /// A scaffold variant that also returns the [`HeadlessHandle`] so tests can

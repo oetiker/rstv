@@ -12,6 +12,10 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+- The collapsed application menu bar's `[⋮]` kebab is now a themable glyph
+  (`Glyphs::menu_kebab`, default `"[⋮]"`) instead of a string literal; the
+  collapsed bar's width is derived from the glyph's display width, so a theme may
+  use a different-width kebab.
 - `Deferred::SetFullscreen { window, mode }` variant + `Context::set_fullscreen`
   helper: a window requests fullscreen-mode changes via the deferred queue; the
   pump applies the cross-tree layout (menu bar collapse/restore + bounds, desktop
@@ -49,6 +53,10 @@ moves it into a dated, versioned section when a release is cut.
   lanes so content fills up to the bars without overlapping them. The tvdemo
   example (F4 cycles the active window through Off/Desktop/Screen) demonstrates
   the reflow.
+- A `Screen`-fullscreen window's right-edge vertical scroll bar no longer collides
+  with the collapsed menu bar's `[⋮]` kebab: its top is inset one row so the
+  up-arrow clears the kebab (which previously occluded it and stole its click).
+  The pump pushes the one-row reservation when a kebab sits above the window.
 
 ## 0.2.0 - 2026-06-25
 
