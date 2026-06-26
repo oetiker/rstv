@@ -1,6 +1,8 @@
 # Design note — frameless fullscreen windows (a chrome-less "app body" mode)
 
-> Status: **DESIGN** (not yet landed; two independent expert reviews folded in). A
+> Status: **DESIGN** (not yet landed; three independent expert reviews folded in —
+> all load-bearing seams verified against source, the menubar-activation seam
+> resolved to a corner `popup_menu`). A
 > modern-TUI extension *alongside* the faithful port (precedent: `RegexValidator`
 > next to the picture-mask port). It reuses existing seams — `Window::zoom`'s
 > saved-geometry model, the Frame push-down setters, and the post-dispatch
@@ -73,15 +75,19 @@ menubar/desktop from its own ids (see below).
 
 ```rust
 fullscreen: Option<FullscreenSlot>,
-struct FullscreenSlot { window: ViewId, mode: Fullscreen, restore: Rect }
+struct FullscreenSlot { window: ViewId, mode: Fullscreen, restore: Rect, shadow: bool }
 ```
 
 Putting `restore` **here, not on `Window`**, is deliberate: the pump captures the
-window's pre-fullscreen bounds via `find_mut(window).get_bounds()` (a `View`
-method — no downcast) on the `Off → !Off` edge, and re-applies it via
-`change_bounds` on the `!Off → Off` edge. So **`Window` needs no `restore_bounds`
-field at all** — only `fullscreen: Fullscreen` so the cycler can read current
-state. (`zoom_rect` at `window.rs:139` is untouched and independent.)
+window's pre-fullscreen bounds via `find_mut(window).state().get_bounds()` on the
+`Off → !Off` edge, and re-applies it via `change_bounds` on the `!Off → Off` edge.
+(`get_bounds` is a `ViewState` method, `view.rs:508` — hence `.state().get_bounds()`;
+`change_bounds` *is* a `View` trait method, `view.rs:996`, so neither needs a
+downcast.) The slot also captures the window's `shadow` flag verbatim (apps may
+have cleared the `window.rs:185` default) so it is restored to its real prior value,
+not hardcoded. So **`Window` needs no `restore_bounds` field at all** — only
+`fullscreen: Fullscreen` so the cycler can read current state. (`zoom_rect` at
+`window.rs:139` is untouched and independent.)
 
 ## Pump apply: `SetFullscreen { window, mode }`
 
@@ -93,9 +99,10 @@ Sequential `find_mut` borrows in one arm are an established pattern
 (`ClipboardEditorPaste`, `program.rs:2619–2633`). Steps:
 
 1. **Edge bookkeeping:** if entering (`slot` was `None`/`Off`, `mode != Off`),
-   capture `restore = find_mut(window).get_bounds()` into the slot. If exiting,
-   read `restore` from the slot for step 4. Re-apply while already fullscreen
-   (resize) must **not** recapture `restore`.
+   capture `restore = find_mut(window).state().get_bounds()` and the window's
+   `shadow` into the slot, and clear the window's shadow. If exiting, read
+   `restore`/`shadow` from the slot for step 4 and restore the shadow. Re-apply
+   while already fullscreen (resize) must **not** recapture `restore`/`shadow`.
 2. **Menubar:** `set_collapsed(mode == Screen)` **and** `change_bounds` it — full
    top row when not collapsed, the single `⋮` cell (`Rect::new(w-1, 0, w, 1)`) when
    collapsed. The bounds change is what makes hit-testing work (see MenuBar below).
@@ -121,9 +128,11 @@ fullscreen: Fullscreen,
 ```
 
 `set_fullscreen(mode)`: toggle frame `border_visible` (inline downcast), set
-`self.fullscreen = mode`, **clear/restore the shadow flag** (see below), emit
-`SetFullscreen { window: self.id(), mode }`. The `Command::FULLSCREEN` arm reads
-`self.fullscreen`, computes the next state, and calls `set_fullscreen`.
+`self.fullscreen = mode`, emit `SetFullscreen { window: self.id(), mode }`. (The
+shadow flag is captured/cleared/restored by the pump via the slot — see above — so
+the prior value is preserved; `set_fullscreen` does not touch it.) The
+`Command::FULLSCREEN` arm reads `self.fullscreen`, computes the next state, and
+calls `set_fullscreen`.
 
 **Window drag guard:** the row-0 / bottom-row drag-start in `handle_event`
 (`window.rs:1275–1298`) must be **suppressed when `fullscreen != Off`** — otherwise
@@ -136,12 +145,17 @@ border_visible: bool,           // default true; pushed down like set_zoomed
 fn set_border_visible(&mut self, v: bool)
 ```
 
-- **`draw`** guards the box-drawing + title + icons block (`frame.rs` ~335–432) on
-  `border_visible`. **Interior fill stays unconditional and in its existing role**
-  (`frame.rs:352–355`): that `border` role *is* the window-body background for
-  Blue/Cyan/Gray windows in both bordered and frameless states — no new `Role` is
-  needed (verified against the palette resolution; an earlier "swap to a content
-  role" idea was a false alarm).
+- **`draw`** keeps the **interior space-fill unconditional** but guards the
+  **border edges + top/bottom rows + title + icons** on `border_visible`. This is
+  **not** a single `if` wrapper: the middle-row loop (`frame.rs:351–360`)
+  *interleaves* the interior fill with the left/right edge `put_char`s in one pass,
+  so it must be **split** — an unconditional `for y { for x in 1..w-1 { fill } }`,
+  and a `border_visible`-guarded pass for the `(0,y)`/`(w-1,y)` edges, top/bottom
+  rows, and title/icons. The fill stays in its **existing role** (`frame.rs:352–355`):
+  that `border` role *is* the window-body background for Blue/Cyan/Gray windows in
+  both states — no new `Role` is needed (an earlier "swap to a content role" idea
+  was a false alarm). (Whole-window content via `client_rect()` overdraws the fill;
+  the fill just guarantees no desktop-background bleed-through in sparse windows.)
 - **`handle_event`** (`frame.rs:458–514`) must guard its entire `MouseDown` arm on
   `border_visible`: when frameless, return immediately, arming **no** close/zoom
   capture. Otherwise the invisible close zone (cols 2–4, row 0) and zoom zone (cols
@@ -169,13 +183,27 @@ routes the rest of row 0 to the (expanded) desktop, and thus to the fullscreen
 window, with no special passthrough logic.
 
 - **Draw:** when collapsed, paint only `⋮` at `(w-1, 0)`.
-- **Activation:** a click on the `⋮` cell, or F10 / a menu hotkey (keyboard events
-  reach the menubar regardless of its width — they aren't positional), activates
-  the bar. **While active it temporarily reclaims full-width bounds** (a deferred
-  `change_bounds` driven off its active-state edge) so existing menu rendering +
-  dropdowns work unchanged, then shrinks back to the `⋮` cell on close. Menu
-  *navigation* logic is untouched; only the bar's bounds track collapsed/active
-  state. This active-bounds toggle is the trickiest seam — call it out in the plan.
+- **Activation = a corner popup, NOT a width-reclaim.** The collapsed bar stays
+  `⋮`-cell-sized *even while active*. `MenuBar` already hand-writes `handle_event`
+  (`menu_bar.rs:151–153`), so it adds a `collapsed` guard at the top that, on
+  activation (a `MouseDown` on the `⋮` cell, or the same `cmMenu`/alt-shortcut
+  triggers the normal bar honors — keyboard events reach the bar regardless of
+  width), calls the existing **`pub menu::popup_menu`** (re-exported at
+  `menu/mod.rs:46`) anchored at `(w-1, 0)`. `auto_place_popup` (`menu_session.rs:1179`)
+  right-aligns the box at the corner starting row 1 — a **vertical kebab menu** —
+  and the session handles navigation/submenus/close normally. The non-collapsed
+  path delegates to `menu_view::handle_event` as today.
+
+  **Why not reclaim width** (the trickiest seam, now resolved): the menu session
+  *freezes* the bar's bounds into `MenuLevel.bounds` at activation
+  (`menu_session.rs:1065`) and derives dropdown origins from it
+  (`menu_session.rs:823`); a deferred `change_bounds` updates `ViewState` but never
+  the live session, so a "reclaim width" bar would compute a **zero-width** dropdown
+  origin and silently render nothing. The popup path sidesteps this entirely and
+  reuses existing machinery. One behaviour to document: `popup_menu` sets
+  `put_click_event_on_exit = false` (`menu_session.rs:1163`) — a click outside the
+  kebab closes it without re-posting, which is the right behaviour for a corner
+  affordance.
 
 If there is **no menubar**, `Screen` mode simply covers the top row with no `⋮`.
 
@@ -184,8 +212,12 @@ If there is **no menubar**, `Screen` mode simply covers the top row with no `⋮
 - **Resize:** the terminal-resize arm (`program.rs:1995–2003`, which already
   applies layout **inline** via `change_bounds`) calls `apply_fullscreen(window,
   slot.mode)` for the tracked slot — the same function the drain uses (DRY).
-  Tracking `mode` in the slot is required (the desktop top differs by mode). The
-  re-apply does **not** recapture `restore`.
+  Tracking `mode` in the slot is required (the desktop top differs by mode).
+  **Hard sequencing requirement:** `apply_fullscreen` must run **after** the root
+  `group.change_bounds` cascade (`program.rs:2002`), because that cascade re-stretches
+  the collapsed menubar back to full width via its `grow_mode.hi_x`
+  (`menu_bar.rs:66`) — `apply_fullscreen` then re-shrinks it to the `⋮` cell. The
+  re-apply does **not** recapture `restore`/`shadow`.
 - **Close / removal:** the `Command::CLOSE` arm (`window.rs:1180–1195`) calls
   `set_fullscreen(Off)` before `request_close`, restoring chrome. **But** a
   programmatic `group.remove_descendant(window_id, …)` bypasses the `CLOSE`
@@ -193,9 +225,10 @@ If there is **no menubar**, `Screen` mode simply covers the top row with no `⋮
   `find_mut(slot.window)` no longer resolves, the pump auto-restores chrome
   (un-collapse + re-bound the menubar, restore desktop bounds) and clears the slot.
   Robust against every removal path.
-- **Shadow:** `Window::new` sets `shadow = true` (`window.rs:185`); a fullscreen
-  window's shadow is clipped to invisibility but should be cleared for cleanliness.
-  `set_fullscreen` clears it on `Off → !Off` and restores it on `!Off → Off`.
+- **Shadow:** `Window::new` defaults `shadow = true` (`window.rs:185`), but an app
+  may have cleared it. The pump **captures the actual value** into the slot and
+  clears it on `Off → !Off`, then restores that captured value verbatim on
+  `!Off → Off` — never hardcoding `true`.
 - **Other windows / modal dialogs** float on top of a fullscreen window normally —
   it is just a non-modal background window. Mode (a) gives the "frameless app body
   with dialogs over it" look with no app-level mode.
@@ -211,9 +244,10 @@ resize cases (per the snapshot-at-origin lesson):
    background shows, content reaches edges; a normal dialog floats on top framed.
 2. **Mode b** — a `Screen` window covering row 0, `⋮` at top-right, status line
    intact.
-3. **Collapsed-menubar hit routing** — a `MouseDown` off the `⋮` cell reaches the
-   fullscreen window (because the menubar bounds are the `⋮` cell only); a click on
-   `⋮` (and F10) activates the bar, which reclaims width then re-collapses.
+3. **Collapsed-menubar hit routing + corner popup** — a `MouseDown` off the `⋮`
+   cell reaches the fullscreen window (because the menubar bounds are the `⋮` cell
+   only); a click on `⋮` (and F10) opens a **kebab popup right-aligned at the
+   corner** (the bar stays `⋮`-sized), and a click outside it closes it.
 4. **Frameless hotspots are dead** — a click at the old close/zoom/title-drag
    coordinates does nothing (no `CLOSE`/`ZOOM`/drag).
 5. **Round-trip** — `Off → Screen → Off` returns to the exact captured `restore`
