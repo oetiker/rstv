@@ -1108,6 +1108,36 @@ impl Program {
             .0
     }
 
+    /// Like [`exec_view`](Self::exec_view), but focuses `initial_focus` (a child of
+    /// `view`) when the modal opens, overriding the default open-time currency.
+    ///
+    /// Without an explicit focus, a freshly-opened modal selects the **last**
+    /// inserted selectable child (the `first_match_visible_selectable` order — bottom
+    /// child, then top-down). For an OK/Cancel [`Dialog`](crate::dialog::Dialog)
+    /// whose buttons are inserted OK-then-Cancel, that lands focus on **Cancel**;
+    /// since a focused button acts as the dialog's default (Enter target), pressing
+    /// Enter would then fire Cancel. Pass the OK/default button's
+    /// [`ViewId`](crate::view::ViewId) here so it opens focused and Enter triggers it.
+    ///
+    /// This is the same `initial_focus` override the built-in
+    /// [`message_box`](Self::message_box) uses internally (it focuses its first
+    /// button); this method exposes it for hand-built dialogs run through the public
+    /// API. `initial_focus` is resolved within `view`'s group via
+    /// [`View::focus_descendant`]; an id that names no child is a silent no-op (the
+    /// default currency stands).
+    ///
+    /// # Turbo Vision heritage
+    /// A tvision-rs-original convenience (C++ `execView` takes no focus argument).
+    /// It bundles `execView` with the pre-`execView` focus seed a C++ caller would
+    /// apply by hand — e.g. `msgbox.cpp`'s `selectNext(False)` to land the first
+    /// button — here generalized to focus any descendant by [`ViewId`](crate::view::ViewId)
+    /// via [`View::focus_descendant`], closer to `setCurrent(p, …)` than to
+    /// `selectNext`.
+    pub fn exec_view_focused(&mut self, view: Box<dyn View>, initial_focus: ViewId) -> Command {
+        self.exec_view_with_completion(view, None, Some(initial_focus), None, false)
+            .0
+    }
+
     // -- message box ---------------------------------------------------------
 
     /// Build and run a message-box dialog at an explicit `Rect`. Construction and
@@ -6447,6 +6477,141 @@ mod tests {
 
         assert_eq!(result, Command::CANCEL, "Esc -> cmCancel ends the modal");
         assert_eq!(program.capture_len(), 0, "ModalFrame popped");
+    }
+
+    /// `exec_view_focused` runs the modal and returns its end command. Driven by a
+    /// pre-queued `cmOK` so the loop terminates without the (clock-gated) button
+    /// animation — this pins that the new public entry point forwards through
+    /// `exec_view_with_completion` and cleans up the modal frame.
+    ///
+    /// COVERAGE NOTE: this does NOT discriminate the `initial_focus` argument (the
+    /// queued `cmOK` ends the modal regardless of which button is focused). The
+    /// focus *outcome* can't be observed end-to-end through the blocking public
+    /// loop headlessly — Enter arms a 100 ms button animation timer
+    /// (`Button::start_animation`) and the `ManualClock` can't be advanced mid-loop.
+    /// So the focus behaviour is pinned one layer down by
+    /// `initial_focus_targets_ok_button_not_firstmatch_cancel` (the exact
+    /// `focus_descendant` seam this method forwards `Some(id)` into); the forwarding
+    /// itself is structurally identical to [`exec_view`] bar the focus argument.
+    #[test]
+    fn exec_view_focused_runs_and_returns_end_command() {
+        use crate::dialog::{ButtonRowAlign, Dialog};
+        use crate::widgets::ButtonFlags;
+
+        let (mut program, _screen, _clock) = program_with_desktop(40, 12);
+        let mut dialog = Dialog::new(Rect::new(4, 2, 36, 10), Some("Setup".into()));
+        let ids = dialog.button_row(
+            &[
+                (
+                    "~O~K",
+                    Command::OK,
+                    ButtonFlags {
+                        default: true,
+                        ..ButtonFlags::new()
+                    },
+                ),
+                ("~C~ancel", Command::CANCEL, ButtonFlags::new()),
+            ],
+            ButtonRowAlign::Right,
+        );
+        let ok_id = ids[0];
+
+        // Pre-queue cmOK so the modal ends on the first pump (no animation timer).
+        program.out_events.push_back(Event::Command(Command::OK));
+        let result = program.exec_view_focused(Box::new(dialog), ok_id);
+
+        assert_eq!(
+            result,
+            Command::OK,
+            "exec_view_focused returns the end command"
+        );
+        assert_eq!(program.capture_len(), 0, "ModalFrame popped after the loop");
+    }
+
+    /// DISCRIMINATING (the focus guard for `exec_view_focused`): pins the bug it
+    /// fixes, at the `focus_descendant` seam the method forwards `Some(id)` into. In
+    /// a hand-built OK/Cancel dialog with buttons inserted OK-then-Cancel, the
+    /// default open-time currency (`first_match_visible_selectable`) focuses the
+    /// LAST-inserted selectable — **Cancel** — so Enter (which fires the
+    /// focused/acting-default button) would fire Cancel. Applying `initial_focus`
+    /// via `focus_descendant(ok)` — exactly what `exec_view_focused` does — moves
+    /// focus to the OK button, so Enter fires OK.
+    ///
+    /// LAYER NOTE: this drives the open steps directly (not through the public
+    /// method) and asserts focus state, because the blocking public loop can't
+    /// interleave a `ManualClock` advance for the 100 ms button animation — see the
+    /// coverage note on `exec_view_focused_runs_and_returns_end_command`. It uses a
+    /// hand-built OK-then-Cancel `Dialog` (the motivating consumer shape) rather
+    /// than `build_message_box`, complementing
+    /// `focused_space_fires_focused_button_discriminating`.
+    #[test]
+    fn initial_focus_targets_ok_button_not_firstmatch_cancel() {
+        use crate::dialog::{ButtonRowAlign, Dialog};
+        use crate::view::SelectMode;
+        use crate::widgets::ButtonFlags;
+
+        let (mut program, _screen, _clock) = program_with_desktop(40, 12);
+        let mut dialog = Dialog::new(Rect::new(4, 2, 36, 10), Some("Setup".into()));
+        let ids = dialog.button_row(
+            &[
+                (
+                    "~O~K",
+                    Command::OK,
+                    ButtonFlags {
+                        default: true,
+                        ..ButtonFlags::new()
+                    },
+                ),
+                ("~C~ancel", Command::CANCEL, ButtonFlags::new()),
+            ],
+            ButtonRowAlign::Right,
+        );
+        let (ok_id, cancel_id) = (ids[0], ids[1]);
+
+        // Replicate exec_view's open steps 3-5a (insert, clear selectable + set
+        // modal, reset_current, set_current(Enter)).
+        let id = program.group_mut().insert(Box::new(dialog));
+        if let Some(v) = program.group.find_mut(id) {
+            v.state_mut().options.selectable = false;
+            v.state_mut().state.modal = true;
+        }
+        program.with_ctx(|g, ctx| {
+            if let Some(v) = g.find_mut(id) {
+                v.reset_current(ctx);
+            }
+            g.set_current(Some(id), SelectMode::Enter, ctx);
+        });
+
+        let focused = |p: &mut Program, bid| {
+            p.group_mut()
+                .find_mut(bid)
+                .map(|v| v.state().state.focused)
+                .expect("button id resolves")
+        };
+
+        // The bug: default open currency focuses the last-inserted selectable (Cancel).
+        assert!(
+            focused(&mut program, cancel_id),
+            "default open focuses last-inserted Cancel — Enter would fire Cancel"
+        );
+        assert!(!focused(&mut program, ok_id));
+
+        // The fix: initial_focus (what exec_view_focused passes through) moves focus
+        // to the OK button.
+        program.with_ctx(|g, ctx| {
+            if let Some(v) = g.find_mut(id) {
+                v.focus_descendant(ok_id, ctx);
+            }
+        });
+        assert!(
+            focused(&mut program, ok_id),
+            "initial_focus moved focus to the OK button — Enter now fires OK"
+        );
+        assert!(!focused(&mut program, cancel_id));
+
+        program.with_ctx(|g, ctx| {
+            g.remove(id, ctx);
+        });
     }
 
     /// Integration SMOKE test for the initial-currency seam: `exec_view` on a plain
