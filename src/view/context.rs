@@ -1226,7 +1226,6 @@ impl<'a> Context<'a> {
     /// Request a fullscreen-mode change for `window`. The pump applies the
     /// cross-tree layout (menu bar, desktop, window re-fit). See
     /// [`Deferred::SetFullscreen`].
-    ///
     pub fn set_fullscreen(&mut self, window: ViewId, mode: crate::window::Fullscreen) {
         self.deferred.push(Deferred::SetFullscreen { window, mode });
     }

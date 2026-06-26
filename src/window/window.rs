@@ -497,9 +497,10 @@ impl Window {
     // -- client rect ---------------------------------------------------------
 
     /// The window's interior content rectangle (view-local). Inset by the frame on
-    /// every side when bordered; the **full extent** when frameless-fullscreen, so
-    /// content and scroll bars reach the screen edge. Apps placing window content
-    /// should key off this rather than hardcoding the frame inset.
+    /// every side when bordered; the **full extent** when frameless-fullscreen (the
+    /// vertical scroll bar reaches the top and bottom screen edges; the horizontal
+    /// bar is inset one column from the left and right screen edges). Apps placing
+    /// window content should key off this rather than hardcoding the frame inset.
     pub fn client_rect(&self) -> Rect {
         let ext = self.group.state().get_extent();
         if self.fullscreen == Fullscreen::Off {
@@ -545,7 +546,7 @@ impl Window {
     ///   Frameless: reaches the top and bottom screen edges.
     /// - **Horizontal** (bottom edge): one cell tall, spanning the client width
     ///   inset by one. Bordered: `(2, height−1) .. (width−2, height)`. Frameless:
-    ///   reaches the left and right screen edges.
+    ///   inset one column from the left and right screen edges.
     ///
     /// Call this method after construction and before the window is shown. The
     /// returned [`ViewId`] can be passed to a scroller or list viewer as its
@@ -1252,6 +1253,12 @@ impl View for Window {
             self.zoom(ctx);
             ev.clear();
         }
+        if let Event::Command(c) = *ev
+            && c == Command::FULLSCREEN
+        {
+            self.set_fullscreen(self.fullscreen.next(), ctx);
+            ev.clear();
+        }
         // Close command. **No target guard** is needed: it is provably vacuous —
         // the frame emits close only while active, and focused command events are
         // routed to the desktop's current (= active) window, so a close always
@@ -1259,12 +1266,6 @@ impl View for Window {
         // above; revisit only if a future emitter targets a non-active window via a
         // command). The modal-cancel branch is wired here; the dialog layer owns
         // the broader machinery.
-        if let Event::Command(c) = *ev
-            && c == Command::FULLSCREEN
-        {
-            self.set_fullscreen(self.fullscreen.next(), ctx);
-            ev.clear();
-        }
         if let Event::Command(c) = *ev
             && c == Command::CLOSE
             && self.flags.close
