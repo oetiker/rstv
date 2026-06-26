@@ -1552,7 +1552,7 @@ impl TVDemo {
         dlg.state_mut().options.center_y = true;
         dlg.insert_child(Box::new(StaticText::new(
             Rect::new(9, 2, 30, 9),
-            "\x03Turbo Vision Demo\n\n\x03Rust Version\n\n\x03Copyright (c) 2025\n\n\x03Faithfully Ported".to_string(),
+            "\x03Turbo Vision Demo\n\n\x03tvision-rs\n\n\x03Copyright (c) 2026\n\n\x03Faithfully Ported".to_string(),
         )));
         dlg.insert_child(Box::new(Button::new(
             Rect::new(14, 10, 26, 12),
