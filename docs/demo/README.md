@@ -19,8 +19,8 @@ agg, vhs, ffmpeg) required. It:
    screenshots), sending the choreographed keystrokes in `xtask/src/demo.rs`;
 2. captures one coloured frame per scene with `tmux capture-pane -e -p -N`;
 3. parses the ANSI into a cell grid (`xtask/src/ansi_html.rs::parse_grid`) and
-   rasterizes each frame with a bundled DejaVu Sans Mono font
-   (`xtask/src/raster.rs`);
+   rasterizes each frame with a bundled JetBrains Mono font
+   (`xtask/src/raster.rs`; see `xtask/assets/JetBrainsMono-LICENSE.txt`);
 4. encodes an animated WebP with the `webp` crate.
 
 Per-scene PNGs are written to `target/demo-frames/` for inspection. To change the
