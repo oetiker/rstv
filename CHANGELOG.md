@@ -12,9 +12,51 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+- The collapsed application menu bar's `[⋮]` kebab is now a themable glyph
+  (`Glyphs::menu_kebab`, default `"[⋮]"`) instead of a string literal; the
+  collapsed bar's width is derived from the glyph's display width, so a theme may
+  use a different-width kebab.
+- `Deferred::SetFullscreen { window, mode }` variant + `Context::set_fullscreen`
+  helper: a window requests fullscreen-mode changes via the deferred queue; the
+  pump applies the cross-tree layout (menu bar collapse/restore + bounds, desktop
+  re-bound, window re-fit) through the `View` trait with no downcast. The loop
+  also re-fits on resize and auto-restores chrome if the fullscreen window is
+  removed. Backed by the loop-owned `FullscreenSlot { window, mode }` and the
+  `Program.fullscreen` field.
+- Frameless fullscreen windows: `Window::set_fullscreen(Fullscreen::{Off,Desktop,Screen})` and a cycling `Command::FULLSCREEN`. `Desktop` hides the frame and fills the desktop; `Screen` also covers the menu row, collapsing the menu bar to a `[⋮]` kebab that opens a corner popup. `Window::client_rect()` exposes the frameless content area.
+- Fullscreen decomposed into independent primitives (`set_fullscreen` now
+  composes them): `Window::set_bordered(bool, ctx)` toggles the frame border
+  independently of fullscreen/zoom and reflows content to the new client area (a
+  grow-mode resize + a `(∓1,∓1)` origin shift; owned scroll bars re-derived from
+  the `client_rect` formula); `Window::maximize`/`restore`/`is_maximized` are one
+  unified maximize through a single `restore_rect` slot shared by the `ZOOM`
+  command and fullscreen-Desktop (so they cannot desync). `Window::bordered()`
+  reads the border state.
+
 ### Changed
 
+- `Window`'s `client_rect()` and title-drag guard now key off the independent
+  `bordered` primitive (not the fullscreen mode); the `ZOOM` command routes
+  through `maximize`/`restore`. The pre-release `Window::zoom_rect()` accessor is
+  replaced by `restore_rect()`/`is_maximized()`.
+
 ### Fixed
+
+- Zooming a frameless fullscreen window no longer leaves it small-but-frameless
+  with a stale restore slot, and frameless window content now reflows to fill the
+  enlarged client area instead of keeping a 1-cell margin (the two coupling bugs
+  removed by the orthogonal-primitive rework).
+- Frameless windows now keep their scroll bars at the window edges: the vertical
+  bar spans from the top screen edge to the bottom (stopping above the horizontal
+  bar's row when both are present), and the horizontal bar starts at the left
+  screen edge (no left inset). `Window::client_rect()` excludes the scroll-bar
+  lanes so content fills up to the bars without overlapping them. The tvdemo
+  example (F4 cycles the active window through Off/Desktop/Screen) demonstrates
+  the reflow.
+- A `Screen`-fullscreen window's right-edge vertical scroll bar no longer collides
+  with the collapsed menu bar's `[⋮]` kebab: its top is inset one row so the
+  up-arrow clears the kebab (which previously occluded it and stole its click).
+  The pump pushes the one-row reservation when a kebab sits above the window.
 
 ## 0.2.0 - 2026-06-25
 

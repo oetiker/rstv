@@ -26,7 +26,7 @@
 
 use crate::event::Event;
 use crate::menu::menu_view::{self, MenuColors, MenuView, MenuViewState};
-use crate::view::{Context, DrawCtx, Rect, View, ViewState};
+use crate::view::{Context, DrawCtx, Point, Rect, View, ViewState};
 
 /// Display width of a `~`-marked label, **ignoring** the `~` markers (which are
 /// not printed columns). A per-module copy mirroring `button.rs` / `cluster.rs`
@@ -39,6 +39,11 @@ fn cstrlen(s: &str) -> i32 {
         .sum()
 }
 
+/// Display width of the kebab string (no `~` markers — plain display columns).
+fn kebab_width(s: &str) -> i32 {
+    unicode_width::UnicodeWidthStr::width(s) as i32
+}
+
 /// The horizontal menu bar. Holds the shared [`MenuViewState`]; the bar-specific
 /// layout lives in [`draw`](MenuBar::draw) /
 /// [`get_item_rect`](MenuView::get_item_rect).
@@ -47,6 +52,11 @@ fn cstrlen(s: &str) -> i32 {
 /// Ports `TMenuBar` (`tmenubar.cpp`/`menus.h`).
 pub struct MenuBar {
     mv: MenuViewState,
+    /// When true the bar is rendered as the themed `menu_kebab` glyph
+    /// (top-right, width derived from the glyph) and activation opens a corner
+    /// popup instead of the in-bar session. Driven by the pump when a
+    /// `Fullscreen::Screen` window covers the menu row.
+    collapsed: bool,
 }
 
 impl MenuBar {
@@ -67,6 +77,7 @@ impl MenuBar {
         state.options.pre_process = true; // see accelerators before focused view
         MenuBar {
             mv: MenuViewState::new(state, menu),
+            collapsed: false,
         }
     }
 }
@@ -120,6 +131,17 @@ impl View for MenuBar {
     fn draw(&mut self, ctx: &mut DrawCtx) {
         let colors = MenuColors::resolve(ctx);
 
+        if self.collapsed {
+            // Render the themed kebab at the top-right; width derived from the
+            // glyph so the rest of the row stays transparent (fullscreen window
+            // shows through).
+            let size = self.mv.state.size;
+            let kebab = ctx.glyphs().menu_kebab;
+            let kw = kebab_width(kebab);
+            ctx.put_str(size.x - kw, 0, kebab, colors.normal.0);
+            return;
+        }
+
         let size = self.mv.state.size;
         // b.moveChar(0, ' ', cNormal, size.x) — fill the whole bar.
         ctx.fill(Rect::new(0, 0, size.x, 1), ' ', colors.normal.0);
@@ -146,9 +168,36 @@ impl View for MenuBar {
     }
 
     /// Delegates to the shared passive [`menu_view::handle_event`]
-    /// (command-graying broadcast, accelerator post, and bar hotkey activation);
-    /// the bar adds no event logic of its own.
+    /// (command-graying broadcast, accelerator post, and bar hotkey activation).
+    /// When collapsed, activation (mouse click, F10/`Command::MENU`, or any
+    /// Alt-shortcut) opens a corner popup anchored at the top-right cell instead
+    /// of the in-bar session — the session freezes the bar's bounds at activation,
+    /// so reclaiming width for an in-bar drop is impossible.
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
+        if self.collapsed {
+            // Activation (click the kebab, F10/cmMenu, or any Alt-shortcut) opens a
+            // vertical popup anchored at the top-right corner — the session freezes
+            // the bar's bounds at activation, so reclaiming width is impossible
+            // (see docs/design/fullscreen-window.md). Other events (graying
+            // broadcast, accelerator posts) still delegate.
+            let activate = match *ev {
+                Event::MouseDown(_) => true,
+                Event::Command(c) => c == crate::command::Command::MENU,
+                Event::KeyDown(k) => k.modifiers.alt,
+                _ => false,
+            };
+            if activate {
+                let owner = ctx.owner_size();
+                crate::menu::popup_menu(
+                    Point::new(owner.x - 1, 0),
+                    self.mv.menu.clone(),
+                    owner,
+                    ctx,
+                );
+                ev.clear();
+                return;
+            }
+        }
         menu_view::handle_event(&self.mv, ev, ctx);
     }
 
@@ -180,6 +229,17 @@ impl View for MenuBar {
 }
 
 impl MenuBar {
+    /// Collapse the bar to a `[⋮]` bracketed kebab (or restore the full bar).
+    /// The pump drives this together with a bounds change to the 3-cell kebab rect.
+    pub fn set_collapsed(&mut self, v: bool) {
+        self.collapsed = v;
+    }
+
+    /// Whether the bar is currently collapsed to a `[⋮]` bracketed kebab.
+    pub fn collapsed(&self) -> bool {
+        self.collapsed
+    }
+
     /// Read the bar's current highlight index (test/inspection hook for the
     /// session-driven highlight cache).
     pub fn current(&self) -> Option<usize> {
@@ -358,5 +418,20 @@ mod tests {
         // Cheapest guard against an index/iter edge case.
         let mut bar = MenuBar::new(Rect::new(0, 0, 12, 1), Menu::builder().build());
         let _ = render(&mut bar, 12, 1); // completes without panic.
+    }
+
+    #[test]
+    fn collapsed_bar_draws_only_kebab() {
+        // A collapsed bar paints the [⋮] kebab at the top-right 3 cells and nothing
+        // else; the rest of the row is left transparent.
+        let mut bar = sample_bar(Rect::new(0, 0, 24, 1));
+        bar.set_collapsed(true);
+        assert!(bar.collapsed());
+        let snap = render(&mut bar, 24, 1);
+        assert!(snap.contains("[⋮]"), "bracketed kebab drawn");
+        assert!(
+            !snap.contains("File"),
+            "top-level items NOT drawn when collapsed"
+        );
     }
 }

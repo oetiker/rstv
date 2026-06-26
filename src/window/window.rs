@@ -95,6 +95,39 @@ pub enum WindowPalette {
 }
 
 // ---------------------------------------------------------------------------
+// Fullscreen
+// ---------------------------------------------------------------------------
+
+/// Whether (and how) a window fills the screen with no frame border.
+///
+/// `Off` is a normal framed window; `Desktop` hides the border and fills the
+/// desktop area; `Screen` additionally covers the menu row (the menu bar
+/// collapses to a `[⋮]` kebab at the top-right). Per-window property, driven by
+/// `set_fullscreen`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Fullscreen {
+    /// Normal framed window.
+    #[default]
+    Off,
+    /// Frameless, fills the desktop; menu bar and status line unchanged.
+    Desktop,
+    /// Frameless, also covers the menu row; the menu bar collapses to `[⋮]`.
+    Screen,
+}
+
+impl Fullscreen {
+    /// The next state in the `Off → Desktop → Screen → Off` cycle (the
+    /// `Command::FULLSCREEN` convenience cycler).
+    pub fn next(self) -> Self {
+        match self {
+            Fullscreen::Off => Fullscreen::Desktop,
+            Fullscreen::Desktop => Fullscreen::Screen,
+            Fullscreen::Screen => Fullscreen::Off,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ScrollBarOptions — placement + keyboard options for standard_scroll_bar
 // ---------------------------------------------------------------------------
 
@@ -130,19 +163,50 @@ pub struct Window {
     /// The embedded container. A `Window` *is* a group: its state, draw, and
     /// event routing are the group's.
     group: Group,
-    /// The frame child's id. [`zoom`](Self::zoom) pushes the zoomed flag through
-    /// it.
+    /// The frame child's id. The maximize/restore + border primitives push the
+    /// zoomed / border-visible flags through it.
     frame_id: ViewId,
     /// The decoration flags.
     flags: WindowFlags,
-    /// The saved bounds for un-zoom, consumed by [`zoom`](Self::zoom).
-    zoom_rect: Rect,
+    /// The saved bounds for un-maximize. `None` ⇔ not maximized. The single
+    /// restore slot shared by the `ZOOM` command and fullscreen-Desktop (so they
+    /// cannot desync). See [`maximize`](Self::maximize) / [`restore`](Self::restore).
+    restore_rect: Option<Rect>,
+    /// Whether the frame border is drawn (default `true`). An **independent**
+    /// primitive, decoupled from [`fullscreen`](Self::fullscreen): toggled by
+    /// [`set_bordered`](Self::set_bordered), which also reflows content. Read by
+    /// [`client_rect`](Self::client_rect) and the drag-start guard.
+    bordered: bool,
+    /// The id of the vertical (right-edge) scroll bar minted by
+    /// [`standard_scroll_bar`](Self::standard_scroll_bar), if any. Chrome
+    /// (edge-anchored), so a border toggle re-derives its rect rather than
+    /// applying the content transform. Also used by `client_rect` to exclude
+    /// the bar lane from the content area.
+    vsb_id: Option<ViewId>,
+    /// The id of the horizontal (bottom-edge) scroll bar minted by
+    /// [`standard_scroll_bar`](Self::standard_scroll_bar), if any. Chrome
+    /// (edge-anchored), so a border toggle re-derives its rect rather than
+    /// applying the content transform. Also used by `client_rect` to exclude
+    /// the bar lane from the content area.
+    hsb_id: Option<ViewId>,
     /// The window number.
     number: i16,
     /// The colour scheme. See [`WindowPalette`].
     palette: WindowPalette,
     /// The window title.
     title: Option<String>,
+    /// Whether the window is frameless-fullscreen, and in which mode. Driven by
+    /// [`set_fullscreen`](Self::set_fullscreen); read by the `Command::FULLSCREEN`
+    /// cycler. Composed of the independent border + maximize primitives.
+    fullscreen: Fullscreen,
+    /// Whether a collapsed application menu bar (its `[⋮]` kebab) sits directly
+    /// above this window's top-right corner — true only while the window is in
+    /// `Fullscreen::Screen` *and* the program has a menu bar. Pushed down by the
+    /// pump's fullscreen layout engine (it owns that cross-tree fact) via
+    /// [`set_menu_chrome_above`](Self::set_menu_chrome_above); read by
+    /// [`scroll_bar_rect`](Self::scroll_bar_rect) to inset a right-edge vertical
+    /// scroll bar's **top** one row so its up-arrow clears the kebab.
+    menu_chrome_above: bool,
 }
 
 impl Window {
@@ -158,7 +222,7 @@ impl Window {
     /// windows that are cycled with `NEXT`/`PREV` instead of by number.
     ///
     /// Defaults set at construction: all four decoration flags enabled
-    /// (move/grow/close/zoom); the un-zoom rect set to the current bounds; the
+    /// (move/grow/close/zoom); not maximized (no restore rect) and bordered; the
     /// blue colour scheme; a drop shadow; selectable + top-of-select-group; and a
     /// relative grow-all mode (children resize proportionally with the window).
     ///
@@ -191,8 +255,6 @@ impl Window {
             ..GrowMode::grow_all()
         };
 
-        // Un-zoom rect = the current bounds.
-        let zoom_rect = group.state().get_bounds();
         let extent = group.state().get_extent();
 
         // We build the Frame directly and push owner data into it at construction;
@@ -209,10 +271,15 @@ impl Window {
             group,
             frame_id,
             flags,
-            zoom_rect,
+            restore_rect: None,
+            bordered: true,
+            vsb_id: None,
+            hsb_id: None,
             number,
             palette: WindowPalette::Blue,
             title,
+            fullscreen: Fullscreen::Off,
+            menu_chrome_above: false,
         }
     }
 
@@ -239,16 +306,28 @@ impl Window {
         self.flags
     }
 
-    /// The pre-zoom bounds, saved when the window zooms in to fill its owner,
-    /// used to restore the original size when it un-zooms.
+    /// The saved pre-maximize bounds, or `None` when the window is not maximized.
     ///
-    /// When the user zooms the window to fill the owner, the window's current
-    /// bounds are stored here first; a second zoom (un-zoom) restores them from
-    /// this value. At construction `zoom_rect` equals the initial bounds. This
-    /// getter is primarily useful for testing and serialisation; normal application
-    /// code does not need to read it directly.
-    pub fn zoom_rect(&self) -> Rect {
-        self.zoom_rect
+    /// [`maximize`](Self::maximize) stores the current bounds here before growing
+    /// to fill the owner; [`restore`](Self::restore) consumes them. This is the
+    /// single restore slot shared by the `ZOOM` command and fullscreen-Desktop.
+    /// Primarily useful for testing; normal application code reads
+    /// [`is_maximized`](Self::is_maximized) instead.
+    pub fn restore_rect(&self) -> Option<Rect> {
+        self.restore_rect
+    }
+
+    /// Whether the window is currently maximized (filling its owner via
+    /// [`maximize`](Self::maximize)). Equivalent to `restore_rect().is_some()`.
+    pub fn is_maximized(&self) -> bool {
+        self.restore_rect.is_some()
+    }
+
+    /// Whether the frame border is drawn. An independent primitive (decoupled from
+    /// [`fullscreen`](Self::fullscreen)); toggle with
+    /// [`set_bordered`](Self::set_bordered).
+    pub fn bordered(&self) -> bool {
+        self.bordered
     }
 
     // NOTE: the window number is exposed via the `View::number()` trait override
@@ -275,6 +354,11 @@ impl Window {
     /// is needed here.
     pub fn title(&self) -> Option<&str> {
         self.title.as_deref()
+    }
+
+    /// The window's current [`Fullscreen`] state.
+    pub fn fullscreen(&self) -> Fullscreen {
+        self.fullscreen
     }
 
     /// Update the window title in both the `Window` record and the [`Frame`]
@@ -451,6 +535,164 @@ impl Window {
             .set_current(Some(id), crate::view::SelectMode::Normal, ctx);
     }
 
+    // -- client rect ---------------------------------------------------------
+
+    /// The window interior inset by the frame only (NOT the scroll-bar lanes) —
+    /// the span a standard scroll bar runs along its edge. Used by
+    /// [`scroll_bar_rect`](Self::scroll_bar_rect) to derive bar placement in
+    /// bordered mode (identical to the old client_rect formula for bordered
+    /// windows).
+    fn frame_interior(&self) -> Rect {
+        let ext = self.group.state().get_extent();
+        let bi = if self.bordered { 1 } else { 0 };
+        Rect::from_points(
+            Point::new(ext.a.x + bi, ext.a.y + bi),
+            Point::new(ext.b.x - bi, ext.b.y - bi),
+        )
+    }
+
+    /// The window's interior content rectangle (view-local). Inset by the frame
+    /// border when [`bordered`](Self::bordered). Scroll-bar lanes are always
+    /// excluded — the right column when a vertical bar is present, the bottom row
+    /// when a horizontal bar is present — so placing content at `client_rect`
+    /// never overlaps the bars regardless of border state. Apps placing window
+    /// content should key off this rather than hardcoding the frame inset.
+    pub fn client_rect(&self) -> Rect {
+        let ext = self.group.state().get_extent();
+        let bi = if self.bordered { 1 } else { 0 };
+        // The bar occupies the last column/row of the EXTENT; in bordered mode the
+        // frame inset already excludes it, so take the max (no double inset).
+        let right = bi.max(i32::from(self.vsb_id.is_some()));
+        let bottom = bi.max(i32::from(self.hsb_id.is_some()));
+        Rect::from_points(
+            Point::new(ext.a.x + bi, ext.a.y + bi),
+            Point::new(ext.b.x - right, ext.b.y - bottom),
+        )
+    }
+
+    // -- border (independent primitive) --------------------------------------
+
+    /// Show or hide the frame border, reflowing content to the new client area.
+    ///
+    /// Border visibility is an **independent** primitive (decoupled from
+    /// [`fullscreen`](Self::fullscreen) and maximize). Toggling it:
+    /// 1. flips the [`Frame`]'s `border_visible` (the inline downcast seam — the
+    ///    only path that reaches the frame), and
+    /// 2. reflows content via [`reflow_client`](Self::reflow_client): the client
+    ///    area grows/shrinks by the border thickness, so each content child reacts
+    ///    through its existing `grow_mode` plus a `(∓1, ∓1)` origin shift, exactly
+    ///    as on a normal resize. Owned scroll bars are re-derived from the
+    ///    `client_rect` formula (they are chrome, not content).
+    ///
+    /// Idempotent if `bordered` is unchanged.
+    pub fn set_bordered(&mut self, bordered: bool, ctx: &mut Context) {
+        if self.bordered == bordered {
+            return;
+        }
+        let old_client = self.client_rect();
+        self.bordered = bordered;
+        if let Some(frame) = self.frame_mut() {
+            frame.set_border_visible(bordered);
+        }
+        let new_client = self.client_rect();
+        self.reflow_client(old_client, new_client, ctx);
+    }
+
+    /// Reflow the window's children to a changed client inset (the window size is
+    /// unchanged; only the frame inset moved). Frame child: skipped (it always
+    /// fills the extent). Owned scroll bars: re-derived from the
+    /// [`scroll_bar_rect`](Self::scroll_bar_rect) formula for the new `bordered`
+    /// state (they anchor to an edge, not the client origin). Every other child is
+    /// content: deliver the client **size** delta through the existing grow-mode
+    /// path ([`View::calc_bounds`]), then translate by the client **origin** delta
+    /// — a fixed-grow child simply shifts; an edge-tracking child also grows.
+    fn reflow_client(&mut self, old: Rect, new: Rect, ctx: &mut Context) {
+        let win_size = self.group.state().size;
+        let size_delta = (new.b - new.a) - (old.b - old.a);
+        let origin_delta = new.a - old.a;
+        let frame_id = self.frame_id;
+        // Snapshot the bar ids before the mutable loop (borrow-checker: we need
+        // them while `self.group.child_mut` holds a mutable borrow).
+        let vsb = self.vsb_id;
+        let hsb = self.hsb_id;
+        for id in self.group.child_ids_in_order() {
+            if id == frame_id {
+                continue;
+            }
+            if Some(id) == vsb || Some(id) == hsb {
+                // Chrome: re-derive the bar's rect for the new bordered state.
+                let vertical = Some(id) == vsb;
+                let r = self.scroll_bar_rect(vertical);
+                if let Some(v) = self.group.child_mut(id) {
+                    v.change_bounds(r);
+                    v.on_bounds_changed(ctx);
+                }
+                continue;
+            }
+            // Content: grow-mode reaction to the size delta, then the origin shift.
+            if let Some(v) = self.group.child_mut(id) {
+                let resized = v.calc_bounds(win_size, size_delta);
+                let shifted = Rect::from_points(resized.a + origin_delta, resized.b + origin_delta);
+                v.change_bounds(shifted);
+                v.on_bounds_changed(ctx);
+            }
+        }
+    }
+
+    // -- fullscreen (composes border + maximize) -----------------------------
+
+    /// Set the window's frameless-fullscreen [`mode`](Fullscreen) by composing the
+    /// independent primitives:
+    /// - **Off** → [`restore`](Self::restore) (un-maximize) + re-border.
+    /// - **Desktop / Screen** → [`maximize`](Self::maximize) + drop the border.
+    ///
+    /// The window-local work (maximize/restore + border + content reflow) is done
+    /// **inline** (the pump cannot downcast to `Window`); the emitted
+    /// [`Deferred::SetFullscreen`](crate::view::Deferred::SetFullscreen) tells the
+    /// pump to do the cross-tree work (menu bar / desktop) and to track the window
+    /// for resize re-fit and removal-restore.
+    pub fn set_fullscreen(&mut self, mode: Fullscreen, ctx: &mut Context) {
+        self.fullscreen = mode;
+        match mode {
+            Fullscreen::Off => {
+                self.restore(ctx);
+                self.set_bordered(true, ctx);
+            }
+            Fullscreen::Desktop | Fullscreen::Screen => {
+                self.maximize(ctx);
+                self.set_bordered(false, ctx);
+            }
+        }
+        if let Some(id) = self.group.state().id() {
+            ctx.set_fullscreen(id, mode);
+        }
+    }
+
+    /// Record whether a collapsed menu bar's kebab sits above this window's
+    /// top-right corner and, if that changed, re-derive the right-edge vertical
+    /// scroll bar so its top clears the kebab row (see
+    /// [`menu_chrome_above`](Self::menu_chrome_above)).
+    ///
+    /// Called by the pump's fullscreen layout engine — the only owner of the
+    /// cross-tree "is there a menu bar" fact — after it re-fits the window. Only
+    /// the vertical bar is touched (the kebab is on the top row; a horizontal bar
+    /// lives on the bottom). The change guard makes repeat calls (e.g. the
+    /// per-resize maintenance pass) cheap; the vertical bar's grow mode keeps its
+    /// top fixed across resizes, so a single inset survives the grow-mode cascade.
+    pub(crate) fn set_menu_chrome_above(&mut self, above: bool, ctx: &mut Context) {
+        if self.menu_chrome_above == above {
+            return;
+        }
+        self.menu_chrome_above = above;
+        if let Some(vsb) = self.vsb_id {
+            let r = self.scroll_bar_rect(true);
+            if let Some(v) = self.group.child_mut(vsb) {
+                v.change_bounds(r);
+                v.on_bounds_changed(ctx);
+            }
+        }
+    }
+
     // -- standard scroll bar -------------------------------------------------
 
     /// Insert a standard scroll bar on the right or bottom edge and return its
@@ -462,10 +704,14 @@ impl Window {
     ///
     /// The bar is sized to fit exactly inside the frame without covering the
     /// frame corners:
-    /// - **Vertical** (right edge): occupies `(width−1, 1) .. (width, height−1)` —
-    ///   one cell wide, inset one row from each frame corner.
-    /// - **Horizontal** (bottom edge): occupies `(2, height−1) .. (width−2, height)` —
-    ///   one cell tall, inset two columns from each frame corner.
+    /// - **Vertical** (right edge): one cell wide, flush against the right frame
+    ///   edge. Bordered: `(width−1, 1) .. (width, height−1)` (frame-corner inset).
+    ///   Frameless: spans from the top screen edge to the bottom, stopping one row
+    ///   above the horizontal bar's row when both bars are present.
+    /// - **Horizontal** (bottom edge): one cell tall. Bordered: `(2, height−1) ..
+    ///   (width−2, height)` (frame-corner inset). Frameless: starts at the left
+    ///   screen edge and runs to just before the vertical bar's column when both
+    ///   bars are present (no left inset).
     ///
     /// Call this method after construction and before the window is shown. The
     /// returned [`ViewId`] can be passed to a scroller or list viewer as its
@@ -475,59 +721,101 @@ impl Window {
     /// **before** boxing + inserting (the `insert` call consumes the box, so
     /// the flag must be set first).
     pub fn standard_scroll_bar(&mut self, opts: ScrollBarOptions) -> ViewId {
-        let ext = self.group.state().get_extent();
-        let r = if opts.vertical {
-            Rect::from_points(
-                Point::new(ext.b.x - 1, ext.a.y + 1),
-                Point::new(ext.b.x, ext.b.y - 1),
-            )
-        } else {
-            Rect::from_points(
-                Point::new(ext.a.x + 2, ext.b.y - 1),
-                Point::new(ext.b.x - 2, ext.b.y),
-            )
-        };
+        let r = self.scroll_bar_rect(opts.vertical);
         let sb = ScrollBar::new(r);
         let sb = if opts.handle_keyboard {
             sb.with_keyboard()
         } else {
             sb
         };
-        self.group.insert(Box::new(sb))
+        let id = self.group.insert(Box::new(sb));
+        // Record the minted bar by orientation so a border toggle can re-derive
+        // (not content-shift) its rect, and so client_rect can exclude the lane.
+        if opts.vertical {
+            self.vsb_id = Some(id);
+        } else {
+            self.hsb_id = Some(id);
+        }
+        id
     }
 
-    // -- zoom ----------------------------------------------------------------
+    /// The edge-anchored rect for a standard scroll bar in the **current**
+    /// `bordered` state — the single formula shared by
+    /// [`standard_scroll_bar`](Self::standard_scroll_bar) (at insert time) and
+    /// [`reflow_client`](Self::reflow_client) (on a border toggle).
+    ///
+    /// Bordered: the bar is inset by the frame corners (identical to the
+    /// pre-existing behaviour). Frameless: the bar extends to the window edges,
+    /// stopping just short of the companion bar's lane (if both bars are present),
+    /// and — when a collapsed menu bar's kebab sits above the top-right corner
+    /// ([`menu_chrome_above`](Self::menu_chrome_above)) — insets its **top** one
+    /// row so the up-arrow is not occluded by (and does not steal clicks from) the
+    /// kebab.
+    fn scroll_bar_rect(&self, vertical: bool) -> Rect {
+        let ext = self.group.state().get_extent();
+        let fi = self.frame_interior();
+        if vertical {
+            // Right column. Bordered: clears the frame corners (unchanged).
+            // Frameless: full height, stopping one row above the h-bar; the top is
+            // nudged down one row when a menu kebab covers the top-right corner.
+            let (top, bottom) = if self.bordered {
+                (fi.a.y, fi.b.y)
+            } else {
+                (
+                    ext.a.y + i32::from(self.menu_chrome_above),
+                    ext.b.y - i32::from(self.hsb_id.is_some()),
+                )
+            };
+            Rect::from_points(Point::new(ext.b.x - 1, top), Point::new(ext.b.x, bottom))
+        } else {
+            // Bottom row. Bordered: inset to clear the resize-grip corners (unchanged).
+            // Frameless: from the left edge to just before the v-bar.
+            let (left, right) = if self.bordered {
+                (fi.a.x + 1, fi.b.x - 1)
+            } else {
+                (ext.a.x, ext.b.x - i32::from(self.vsb_id.is_some()))
+            };
+            Rect::from_points(Point::new(left, ext.b.y - 1), Point::new(right, ext.b.y))
+        }
+    }
 
-    /// Toggle between the restored bounds and filling the owner. If the window is
-    /// not already at its maximum size, save the current bounds and grow to fill;
-    /// otherwise restore the saved bounds.
+    // -- maximize / restore (the single restore slot) ------------------------
+
+    /// Grow the window to fill its owner, saving the pre-maximize bounds into the
+    /// single [`restore_rect`](Self::restore_rect) slot (if not already maximized).
     ///
     /// The maximum size (the owner's size) is reached via the owner-extent-down
     /// channel ([`Context::owner_size`](crate::view::Context::owner_size)) instead
     /// of an up-pointer. The window's own [`size_limits`](View::size_limits)
-    /// override (max = owner size, min = 16×6) is used.
-    fn zoom(&mut self, ctx: &mut Context) {
+    /// override (max = owner size, min = 16×6) is used. Shared by the `ZOOM`
+    /// command and fullscreen-Desktop, so they cannot desync.
+    pub fn maximize(&mut self, ctx: &mut Context) {
+        if self.restore_rect.is_none() {
+            self.restore_rect = Some(self.group.state().get_bounds());
+        }
         let owner_size = ctx.owner_size();
         let (_min, max) = View::size_limits(self, owner_size);
-        let size = self.group.state().size;
-        if size != max {
-            self.zoom_rect = self.group.state().get_bounds();
-            self.locate(Rect::new(0, 0, max.x, max.y), owner_size);
-        } else {
-            let zr = self.zoom_rect;
-            self.locate(zr, owner_size);
+        self.locate(Rect::new(0, 0, max.x, max.y), owner_size);
+        self.push_zoomed(true);
+    }
+
+    /// Restore the window to its saved pre-maximize bounds (consuming the
+    /// [`restore_rect`](Self::restore_rect) slot). A no-op on the bounds if the
+    /// window was not maximized; always clears the frame's zoomed icon.
+    pub fn restore(&mut self, ctx: &mut Context) {
+        if let Some(r) = self.restore_rect.take() {
+            let owner_size = ctx.owner_size();
+            self.locate(r, owner_size);
         }
-        // The frame needs to know whether the window is maximized to pick the
-        // zoom vs unzoom icon, but it cannot read the owner's size itself, so push
-        // the bool down through the downcast seam. Re-pushed in `locate` on every
-        // bounds change, so this stays current.
-        let zoomed = self.group.state().size == max;
-        if let Some(frame) = self
-            .group
-            .child_mut(self.frame_id)
-            .and_then(|v| v.as_any_mut())
-            .and_then(|a| a.downcast_mut::<Frame>())
-        {
+        self.push_zoomed(false);
+    }
+
+    /// Push the frame's `zoomed` flag through the downcast seam (the frame cannot
+    /// read the owner's size itself, so it picks the zoom vs unzoom icon from this
+    /// bool). [`locate`](Self::locate) re-pushes it on every bounds change too, so
+    /// it stays current.
+    fn push_zoomed(&mut self, zoomed: bool) {
+        if let Some(frame) = self.frame_mut() {
             frame.set_zoomed(zoomed);
         }
     }
@@ -1130,7 +1418,8 @@ impl View for Window {
     /// Delegate to the group first, then handle the window's own commands and the
     /// focus-cycling keys:
     ///
-    /// * **zoom command** (if zoom is allowed) → [`zoom`](Self::zoom) + consume.
+    /// * **zoom command** (if zoom is allowed) → [`maximize`](Self::maximize) /
+    ///   [`restore`](Self::restore) through the single restore slot + consume.
     ///   No "is this the right window?" target guard is needed here: it is provably
     ///   vacuous in this architecture. The frame emits the zoom/close commands only
     ///   while it is active, so the target is always the *active* window; these are
@@ -1167,7 +1456,20 @@ impl View for Window {
             && c == Command::ZOOM
             && self.flags.zoom
         {
-            self.zoom(ctx);
+            // Zoom routes through the single maximize/restore slot (shared with
+            // fullscreen-Desktop, so they cannot desync). The border is an
+            // independent primitive — zoom does not touch it.
+            if self.is_maximized() {
+                self.restore(ctx);
+            } else {
+                self.maximize(ctx);
+            }
+            ev.clear();
+        }
+        if let Event::Command(c) = *ev
+            && c == Command::FULLSCREEN
+        {
+            self.set_fullscreen(self.fullscreen.next(), ctx);
             ev.clear();
         }
         // Close command. **No target guard** is needed: it is provably vacuous —
@@ -1272,7 +1574,11 @@ impl View for Window {
         // click (the desktop's positional auto-select consumes the selecting
         // click), so the drag only ever starts on the active window — no active
         // re-check needed.
-        if let Event::MouseDown(m) = *ev {
+        // A borderless window has no title bar or grow corners to drag; skip
+        // entirely (border is the independent primitive that owns the chrome).
+        if let Event::MouseDown(m) = *ev
+            && self.bordered
+        {
             let w = self.group.state().size.x;
             let h = self.group.state().size.y;
             let pos = m.position;
@@ -1397,6 +1703,14 @@ impl View for Window {
             None
         }
     }
+
+    /// Concrete-reach hook so the pump's fullscreen layout engine can push the
+    /// kebab-reservation flag (via the crate-internal `set_menu_chrome_above`).
+    /// Mirrors the menu-bar collapse downcast; without it the engine cannot reach
+    /// a `Window` behind `&mut dyn View`.
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        Some(self)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1477,8 +1791,10 @@ mod tests {
                 zoom: true,
             }
         );
-        // zoomRect == bounds.
-        assert_eq!(w.zoom_rect(), Rect::new(0, 0, 40, 15));
+        // Not maximized (no restore rect) and bordered by default.
+        assert_eq!(w.restore_rect(), None);
+        assert!(!w.is_maximized());
+        assert!(w.bordered());
         // palette == Blue.
         assert_eq!(w.palette(), WindowPalette::Blue);
         // number stored (now via the View::number() trait override).
@@ -1817,10 +2133,11 @@ mod tests {
             "first zoom fills the owner"
         );
         assert_eq!(
-            w.zoom_rect(),
-            original,
-            "zoom_rect saved the original bounds"
+            w.restore_rect(),
+            Some(original),
+            "restore_rect saved the original bounds"
         );
+        assert!(w.is_maximized(), "window is maximized after the first zoom");
         assert!(frame_zoomed(&mut w), "frame pushed zoomed = true");
 
         // Second zoom (toggle): restore.
@@ -1836,6 +2153,8 @@ mod tests {
             original,
             "second zoom restores the original bounds"
         );
+        assert_eq!(w.restore_rect(), None, "restore slot consumed on un-zoom");
+        assert!(!w.is_maximized(), "window no longer maximized");
         assert!(!frame_zoomed(&mut w), "frame pushed zoomed = false");
     }
 
@@ -2855,5 +3174,171 @@ mod tests {
             WindowPalette::Cyan,
             "with_palette must propagate to the frame child"
         );
+    }
+
+    #[test]
+    fn fullscreen_defaults_off_and_cycles() {
+        use crate::window::Fullscreen;
+        let win = Window::new(Rect::new(0, 0, 20, 8), Some("W".into()), 0);
+        assert_eq!(
+            win.fullscreen(),
+            Fullscreen::Off,
+            "new window is not fullscreen"
+        );
+        assert_eq!(Fullscreen::Off.next(), Fullscreen::Desktop);
+        assert_eq!(Fullscreen::Desktop.next(), Fullscreen::Screen);
+        assert_eq!(Fullscreen::Screen.next(), Fullscreen::Off);
+    }
+
+    #[test]
+    fn client_rect_full_when_frameless() {
+        let mut win = Window::new(Rect::new(0, 0, 20, 8), None, 0);
+        let ext = win.state().get_extent(); // (0,0,20,8)
+        // Bordered: inset by one on every side.
+        let cr = win.client_rect();
+        assert_eq!(
+            (cr.a.x, cr.a.y, cr.b.x, cr.b.y),
+            (1, 1, ext.b.x - 1, ext.b.y - 1)
+        );
+        // Frameless: the full extent. `client_rect` keys off `bordered`, not the
+        // fullscreen mode (the two are now independent primitives).
+        win.bordered = false;
+        assert_eq!(win.client_rect(), ext);
+    }
+
+    // -- R2: content reflow on a border toggle (the margin-bug regression) -----
+
+    /// Toggling the border reflows content as a grow-mode resize + an origin
+    /// shift: a content child filling the bordered interior `(1,1,w-1,h-1)` must
+    /// become the frameless full extent `(0,0,w,h)`, and back. The child tracks
+    /// the right/bottom edges (`hi_x|hi_y`) so the size delta is delivered through
+    /// the existing grow path, exactly as on a real resize.
+    #[test]
+    fn set_bordered_reflows_content_to_edges() {
+        let mut w = Window::new(Rect::new(0, 0, 40, 15), Some("W".into()), 0); // w=40,h=15
+        let mut st = ViewState::new(Rect::new(1, 1, 39, 14));
+        st.grow_mode = GrowMode {
+            hi_x: true,
+            hi_y: true,
+            ..Default::default()
+        };
+        let id = w.insert_child(Box::new(Probe { st }));
+
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+
+        // Remove the border: content reflows to the full extent.
+        with_ctx(&mut out, &mut timers, |ctx| w.set_bordered(false, ctx));
+        assert_eq!(
+            w.child_mut(id).unwrap().state().get_bounds(),
+            Rect::new(0, 0, 40, 15),
+            "content fills the full extent when frameless"
+        );
+
+        // Re-add the border: content reflows back to the interior.
+        with_ctx(&mut out, &mut timers, |ctx| w.set_bordered(true, ctx));
+        assert_eq!(
+            w.child_mut(id).unwrap().state().get_bounds(),
+            Rect::new(1, 1, 39, 14),
+            "content returns to the interior when bordered"
+        );
+    }
+
+    // -- R2: un-zoom of a fullscreen window is coherent (bug-1 regression) ------
+
+    /// Zooming a fullscreen window must produce a COHERENT state: zoom and
+    /// fullscreen share ONE restore slot, and the border is an independent
+    /// primitive. After `set_fullscreen(Desktop)` then a `ZOOM` (un-maximize) the
+    /// window returns to its pre-fullscreen bounds, is no longer maximized, the
+    /// single restore slot is consumed, and it stays frameless (zoom does not
+    /// re-border) — an intentional small borderless window, not the old accidental
+    /// small-but-frameless-with-a-stale-second-slot.
+    #[test]
+    fn unzoom_of_fullscreen_is_coherent() {
+        use crate::window::Fullscreen;
+        let mut w = Window::new(Rect::new(2, 2, 22, 10), Some("W".into()), 1); // size 20x8
+        let original = w.state().get_bounds();
+        let owner = Point::new(80, 25);
+
+        let mut out = VecDeque::new();
+        let mut timers = TimerQueue::new();
+
+        // Drive to Desktop fullscreen: maximize + drop the border.
+        with_ctx(&mut out, &mut timers, |ctx| {
+            ctx.set_owner_size(owner);
+            w.set_fullscreen(Fullscreen::Desktop, ctx);
+        });
+        assert!(w.is_maximized(), "fullscreen maximized the window");
+        assert!(!w.bordered(), "fullscreen dropped the border");
+        assert_eq!(
+            w.state().get_bounds(),
+            Rect::new(0, 0, owner.x, owner.y),
+            "maximized to fill the owner"
+        );
+
+        // ZOOM = un-maximize through the SAME restore slot.
+        with_ctx(&mut out, &mut timers, |ctx| {
+            ctx.set_owner_size(owner);
+            let mut ev = Event::Command(Command::ZOOM);
+            w.handle_event(&mut ev, ctx);
+            assert!(ev.is_nothing(), "cmZoom consumed");
+        });
+        assert!(!w.is_maximized(), "zoom un-maximized the window");
+        assert_eq!(
+            w.restore_rect(),
+            None,
+            "the single restore slot is consumed"
+        );
+        assert_eq!(
+            w.state().get_bounds(),
+            original,
+            "restored to the pre-fullscreen bounds"
+        );
+        assert!(
+            !w.bordered(),
+            "zoom does not re-border: a coherent intentional borderless window"
+        );
+    }
+
+    // -- 17. frameless window: client_rect excludes bar lanes ------------------
+
+    /// A frameless 20×10 window with BOTH a vertical and a horizontal bar.
+    /// `client_rect` must exclude the bar lanes; the bars must reach the window
+    /// edges (with the appropriate corner stop for the companion bar).
+    #[test]
+    fn client_rect_excludes_scrollbar_lanes_when_frameless() {
+        let w_sz = 20i32;
+        let h_sz = 10i32;
+        let ext = Rect::new(0, 0, w_sz, h_sz);
+
+        let mut win = Window::new(ext, Some("Test".to_string()), 0);
+        win.bordered = false;
+
+        // Inject fake ids (minted via ViewId::next so they are valid NonZeroU64s
+        // but not inserted into any group; client_rect / scroll_bar_rect only
+        // test `.is_some()`, they never resolve).
+        let fake_vsb = ViewId::next();
+        let fake_hsb = ViewId::next();
+        win.vsb_id = Some(fake_vsb);
+        win.hsb_id = Some(fake_hsb);
+
+        // Content rect: full area minus the scroll-bar lanes.
+        let cr = win.client_rect();
+        assert_eq!(cr.a, Point::new(0, 0), "content starts at top-left");
+        assert_eq!(
+            cr.b,
+            Point::new(w_sz - 1, h_sz - 1),
+            "content excludes bar lanes (right column + bottom row)"
+        );
+
+        // Vertical bar: right column, full height stopping above the h-bar corner.
+        let vr = win.scroll_bar_rect(true);
+        assert_eq!(vr.a, Point::new(w_sz - 1, 0), "v-bar starts at top-right");
+        assert_eq!(vr.b, Point::new(w_sz, h_sz - 1), "v-bar stops above h-bar");
+
+        // Horizontal bar: bottom row, from left edge to just before the v-bar.
+        let hr = win.scroll_bar_rect(false);
+        assert_eq!(hr.a, Point::new(0, h_sz - 1), "h-bar starts at bottom-left");
+        assert_eq!(hr.b, Point::new(w_sz - 1, h_sz), "h-bar stops before v-bar");
     }
 }

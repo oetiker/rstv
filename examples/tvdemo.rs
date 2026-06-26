@@ -12,6 +12,8 @@
 //! Run it: `cargo run --example tvdemo [file ...]`
 //!   - `Alt-X` or File → Exit quits.
 //!   - `F10` opens the menu.
+//!   - `F4` cycles the active window: normal → frameless (fills the desktop) →
+//!     fullscreen (covers the menu, which collapses to a `⋮` kebab) → normal.
 
 use std::io;
 use std::path::PathBuf;
@@ -19,7 +21,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use tvision_rs::{
     Backend, Button, ButtonFlags, ButtonRowAlign, Color, ColorPicker, Command, Constraints,
-    CrosstermBackend, Desktop, Dialog, DrawCtx, Event, Frame, Key, KeyEvent, KeyModifiers, Menu,
+    CrosstermBackend, Desktop, Dialog, DrawCtx, Event, GrowMode, Key, KeyEvent, KeyModifiers, Menu,
     MenuBar, Program, Rect, Role, ScrollBarOptions, Scroller, Splitter, StaticText, StatusDef,
     StatusLine, SystemClock, Tab, Theme, View, ViewId, ViewState, Window, WindowFlags, alt,
     delegate,
@@ -321,22 +323,13 @@ struct PuzzleWindow {
 impl PuzzleWindow {
     fn new() -> Self {
         let mut window = Window::new(Rect::new(1, 1, 21, 7), Some("Puzzle".to_string()), 0);
-        // Disable grow and zoom: flags &= ~(wfZoom | wfGrow)
-        {
-            let frame_id = window.frame_id();
-            if let Some(frame) = window
-                .child_mut(frame_id)
-                .and_then(|v| v.as_any_mut())
-                .and_then(|a| a.downcast_mut::<Frame>())
-            {
-                frame.set_flags(WindowFlags {
-                    r#move: true,
-                    grow: false,
-                    close: true,
-                    zoom: false,
-                });
-            }
-        }
+        // Disable grow and zoom — set_flags syncs both Window and its Frame.
+        window.set_flags(WindowFlags {
+            r#move: true,
+            grow: false,
+            close: true,
+            zoom: false,
+        });
         window.state_mut().grow_mode = Default::default();
 
         let ext = window.state().get_extent();
@@ -537,21 +530,13 @@ impl AsciiWindow {
     fn new() -> Self {
         // Window size: 34 × 12 (32 chars wide + frame, 8 rows + report + frame).
         let mut window = Window::new(Rect::new(0, 0, 34, 12), Some("ASCII Chart".to_string()), 0);
-        {
-            let frame_id = window.frame_id();
-            if let Some(frame) = window
-                .child_mut(frame_id)
-                .and_then(|v| v.as_any_mut())
-                .and_then(|a| a.downcast_mut::<Frame>())
-            {
-                frame.set_flags(WindowFlags {
-                    r#move: true,
-                    grow: false,
-                    close: true,
-                    zoom: false,
-                });
-            }
-        }
+        // Disable grow and zoom — set_flags syncs both Window and its Frame.
+        window.set_flags(WindowFlags {
+            r#move: true,
+            grow: false,
+            close: true,
+            zoom: false,
+        });
         window.state_mut().grow_mode = Default::default();
         window.state_mut().options.center_x = true;
         window.state_mut().options.center_y = true;
@@ -824,21 +809,13 @@ struct CalendarWindow {
 impl CalendarWindow {
     fn new() -> Self {
         let mut window = Window::new(Rect::new(1, 1, 24, 12), Some("Calendar".to_string()), 0);
-        {
-            let frame_id = window.frame_id();
-            if let Some(frame) = window
-                .child_mut(frame_id)
-                .and_then(|v| v.as_any_mut())
-                .and_then(|a| a.downcast_mut::<Frame>())
-            {
-                frame.set_flags(WindowFlags {
-                    r#move: true,
-                    grow: false,
-                    close: true,
-                    zoom: false,
-                });
-            }
-        }
+        // Disable grow and zoom — set_flags syncs both Window and its Frame.
+        window.set_flags(WindowFlags {
+            r#move: true,
+            grow: false,
+            close: true,
+            zoom: false,
+        });
         window.state_mut().grow_mode = Default::default();
 
         let ext = window.state().get_extent();
@@ -1205,8 +1182,14 @@ struct EventLog {
 
 impl EventLog {
     fn new(bounds: Rect, h: Option<ViewId>, v: Option<ViewId>) -> Self {
+        let mut scroller = Scroller::new(bounds, h, v);
+        scroller.state_mut().grow_mode = GrowMode {
+            hi_x: true,
+            hi_y: true,
+            ..Default::default()
+        };
         EventLog {
-            scroller: Scroller::new(bounds, h, v),
+            scroller,
             lines: Vec::new(),
         }
     }
@@ -1328,7 +1311,12 @@ struct FileViewer {
 
 impl FileViewer {
     fn new(bounds: Rect, h: Option<ViewId>, v: Option<ViewId>, path: &std::path::Path) -> Self {
-        let scroller = Scroller::new(bounds, h, v);
+        let mut scroller = Scroller::new(bounds, h, v);
+        scroller.state_mut().grow_mode = GrowMode {
+            hi_x: true,
+            hi_y: true,
+            ..Default::default()
+        };
         let mut fv = FileViewer {
             scroller,
             lines: vec![],
@@ -1507,6 +1495,7 @@ impl TVDemo {
                     .item("~F10~ Menu", KeyEvent::from(Key::F(10)), Command::MENU)
                     .item("~F3~ Open", KeyEvent::from(Key::F(3)), CMD_OPEN)
                     .item("~F5~ Zoom", KeyEvent::from(Key::F(5)), Command::ZOOM)
+                    .item("~F4~ Full", KeyEvent::from(Key::F(4)), Command::FULLSCREEN)
                     .item("~F6~ Next", KeyEvent::from(Key::F(6)), Command::NEXT)
                     .item("~Alt-F3~ Close", alt_f3(), Command::CLOSE)
                     .key_item(ctrl_f5(), Command::RESIZE)
@@ -1538,6 +1527,12 @@ impl TVDemo {
             .submenu("~W~indows", alt('w'), |m| {
                 m.command_key("~S~ize/move", Command::RESIZE, ctrl_f5(), "Ctrl-F5")
                     .command_key("~Z~oom", Command::ZOOM, KeyEvent::from(Key::F(5)), "F5")
+                    .command_key(
+                        "~F~ull screen",
+                        Command::FULLSCREEN,
+                        KeyEvent::from(Key::F(4)),
+                        "F4",
+                    )
                     .command("~T~ile", Command::TILE)
                     .command("C~a~scade", Command::CASCADE)
                     .command_key("~N~ext", Command::NEXT, KeyEvent::from(Key::F(6)), "F6")
@@ -1557,7 +1552,7 @@ impl TVDemo {
         dlg.state_mut().options.center_y = true;
         dlg.insert_child(Box::new(StaticText::new(
             Rect::new(9, 2, 30, 9),
-            "\x03Turbo Vision Demo\n\n\x03Rust Version\n\n\x03Copyright (c) 2025\n\n\x03Faithfully Ported".to_string(),
+            "\x03Turbo Vision Demo\n\n\x03tvision-rs\n\n\x03Copyright (c) 2026\n\n\x03Faithfully Ported".to_string(),
         )));
         dlg.insert_child(Box::new(Button::new(
             Rect::new(14, 10, 26, 12),

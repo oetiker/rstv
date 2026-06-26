@@ -107,6 +107,11 @@ pub struct Frame {
     /// (owner-data-down). Empty = today's plain frame, so non-joined windows are
     /// byte-for-byte unchanged. See [`set_junction_marks`](Frame::set_junction_marks).
     junction_marks: Vec<JunctionMark>,
+    /// Whether to draw the border box, title, and icons. `false` for a borderless
+    /// window — the interior background fill stays unconditional, but every
+    /// edge/title/icon is suppressed. Pushed down by the owning window like
+    /// [`zoomed`]. See [`set_border_visible`](Frame::set_border_visible).
+    border_visible: bool,
 }
 
 impl Frame {
@@ -138,6 +143,7 @@ impl Frame {
             abs_origin: Point::new(0, 0),
             close_pressed: false,
             junction_marks: Vec::new(),
+            border_visible: true,
         }
     }
 
@@ -181,6 +187,14 @@ impl Frame {
     /// Whether the window is maximized.
     pub fn zoomed(&self) -> bool {
         self.zoomed
+    }
+
+    /// Show or hide the border box, title, and icons (the interior fill is
+    /// unaffected). The owning [`Window`](crate::window::Window) pushes this from
+    /// its independent `set_bordered` primitive, via the same `child_mut` +
+    /// downcast seam as [`set_zoomed`](Frame::set_zoomed).
+    pub(crate) fn set_border_visible(&mut self, v: bool) {
+        self.border_visible = v;
     }
 
     /// Set the owner's colour scheme (pushed down by the owning window).
@@ -332,103 +346,105 @@ impl View for Frame {
             )
         };
 
-        // -- 1. The box (all in the border style). --------------------------
-        // Top row: tl, ─ (or a tee at a marked cell) across the interior, tr.
-        ctx.put_char(0, 0, tl, border);
-        for x in 1..w - 1 {
-            let ch = self
-                .junction_at(Edge::Top, x, bar, &glyphs)
-                .unwrap_or(h_edge);
-            ctx.put_char(x, 0, ch, border);
-        }
-        if w >= 2 {
-            ctx.put_char(w - 1, 0, tr, border);
-        }
-        // Middle rows: │ (or a tee at a marked cell), spaces, │ (or a tee).
+        // -- 1a. Interior background fill (UNCONDITIONAL — a frameless window still
+        // paints its body; content overdraws this). Same `border` role that paints
+        // a bordered window's interior.
         for y in 1..h - 1 {
-            let lch = self
-                .junction_at(Edge::Left, y, bar, &glyphs)
-                .unwrap_or(v_edge);
-            ctx.put_char(0, y, lch, border);
             for x in 1..w - 1 {
                 ctx.put_char(x, y, ' ', border);
             }
-            if w >= 2 {
-                let rch = self
-                    .junction_at(Edge::Right, y, bar, &glyphs)
-                    .unwrap_or(v_edge);
-                ctx.put_char(w - 1, y, rch, border);
-            }
         }
-        // Bottom row: bl, ─ (or a tee at a marked cell) across, br.
-        if h >= 2 {
-            ctx.put_char(0, h - 1, bl, border);
+
+        // -- 1b..6. Border box, title, number, and icons — only when bordered.
+        if self.border_visible {
+            // Top row: tl, ─ (or a tee at a marked cell) across the interior, tr.
+            ctx.put_char(0, 0, tl, border);
             for x in 1..w - 1 {
                 let ch = self
-                    .junction_at(Edge::Bottom, x, bar, &glyphs)
+                    .junction_at(Edge::Top, x, bar, &glyphs)
                     .unwrap_or(h_edge);
-                ctx.put_char(x, h - 1, ch, border);
+                ctx.put_char(x, 0, ch, border);
             }
             if w >= 2 {
-                ctx.put_char(w - 1, h - 1, br, border);
+                ctx.put_char(w - 1, 0, tr, border);
             }
-        }
-
-        // -- 2. Title budget (dropped). ------------------------------------
-        // The original computed a width budget to pass to its title getter, but the
-        // base window's getter ignores that argument and returns the full title;
-        // the drawn width is then recomputed as min(title width, width-10). So the
-        // budget never caps the drawn title for a base window (a subclass could
-        // abbreviate). It is therefore dead here and not computed; we cap the
-        // *drawn* title to `width - 10` in step 4.
-
-        // -- 3. Window number (top row). -----------------------------------
-        // Drawn only when a number is set and is a single digit.
-        if let Some(n) = self.number
-            && n < 10
-        {
-            let i = if self.flags.zoom { 7 } else { 3 };
-            if let Some(digit) = char::from_digit(u32::from(n), 10) {
-                ctx.put_char(w - i, 0, digit, border);
+            // Middle-row left/right edges (interior already filled above).
+            for y in 1..h - 1 {
+                let lch = self
+                    .junction_at(Edge::Left, y, bar, &glyphs)
+                    .unwrap_or(v_edge);
+                ctx.put_char(0, y, lch, border);
+                if w >= 2 {
+                    let rch = self
+                        .junction_at(Edge::Right, y, bar, &glyphs)
+                        .unwrap_or(v_edge);
+                    ctx.put_char(w - 1, y, rch, border);
+                }
             }
-        }
-
-        // -- 4. Title (top row), centered. ---------------------------------
-        // The effective cap is `width - 10`; truncation goes through text::scroll.
-        if let Some(title) = &self.title {
-            let cap = w - 10;
-            let (end, lw) = crate::text::scroll(title, cap, false);
-            let lw = lw as i32;
-            let truncated = &title[..end];
-            // Center at i=(width-lw)>>1 with flanking spaces at i-1 and i+lw, drawn
-            // unconditionally once the title is Some (so Some("") and the w<10
-            // clamp-to-0 case still punch two spaces into the border center).
-            // Flanking spaces + title, all in the border style.
-            let i = (w - lw) >> 1;
-            ctx.put_char(i - 1, 0, ' ', border);
-            ctx.put_str(i, 0, truncated, border);
-            ctx.put_char(i + lw, 0, ' ', border);
-        }
-
-        // -- 5. Active-only icons (top row). -------------------------------
-        if self.st.state.active {
-            if self.flags.close {
-                ctx.put_cstr(2, 0, glyphs.close_icon, border, icon);
+            // Bottom row.
+            if h >= 2 {
+                ctx.put_char(0, h - 1, bl, border);
+                for x in 1..w - 1 {
+                    let ch = self
+                        .junction_at(Edge::Bottom, x, bar, &glyphs)
+                        .unwrap_or(h_edge);
+                    ctx.put_char(x, h - 1, ch, border);
+                }
+                if w >= 2 {
+                    ctx.put_char(w - 1, h - 1, br, border);
+                }
             }
-            if self.flags.zoom {
-                let zi = if self.zoomed {
-                    glyphs.unzoom_icon
-                } else {
-                    glyphs.zoom_icon
-                };
-                ctx.put_cstr(w - 5, 0, zi, border, icon);
-            }
-        }
 
-        // -- 6. Active + grow resize icons (bottom row). -------------------
-        if self.st.state.active && self.flags.grow && h >= 2 {
-            ctx.put_cstr(0, h - 1, glyphs.drag_left_icon, border, icon);
-            ctx.put_cstr(w - 2, h - 1, glyphs.drag_icon, border, icon);
+            // -- 2. Title budget (dropped). ------------------------------------
+            // The original computed a width budget to pass to its title getter, but the
+            // base window's getter ignores that argument and returns the full title;
+            // the drawn width is then recomputed as min(title width, width-10). So the
+            // budget never caps the drawn title for a base window (a subclass could
+            // abbreviate). It is therefore dead here and not computed; we cap the
+            // *drawn* title to `width - 10` in step 4.
+
+            // Window number (top row).
+            if let Some(n) = self.number
+                && n < 10
+            {
+                let i = if self.flags.zoom { 7 } else { 3 };
+                if let Some(digit) = char::from_digit(u32::from(n), 10) {
+                    ctx.put_char(w - i, 0, digit, border);
+                }
+            }
+
+            // Title (top row), centered.
+            if let Some(title) = &self.title {
+                let cap = w - 10;
+                let (end, lw) = crate::text::scroll(title, cap, false);
+                let lw = lw as i32;
+                let truncated = &title[..end];
+                let i = (w - lw) >> 1;
+                ctx.put_char(i - 1, 0, ' ', border);
+                ctx.put_str(i, 0, truncated, border);
+                ctx.put_char(i + lw, 0, ' ', border);
+            }
+
+            // Active-only icons (top row).
+            if self.st.state.active {
+                if self.flags.close {
+                    ctx.put_cstr(2, 0, glyphs.close_icon, border, icon);
+                }
+                if self.flags.zoom {
+                    let zi = if self.zoomed {
+                        glyphs.unzoom_icon
+                    } else {
+                        glyphs.zoom_icon
+                    };
+                    ctx.put_cstr(w - 5, 0, zi, border, icon);
+                }
+            }
+
+            // Active + grow resize icons (bottom row).
+            if self.st.state.active && self.flags.grow && h >= 2 {
+                ctx.put_cstr(0, h - 1, glyphs.drag_left_icon, border, icon);
+                ctx.put_cstr(w - 2, h - 1, glyphs.drag_icon, border, icon);
+            }
         }
     }
 
@@ -458,6 +474,9 @@ impl View for Frame {
     fn handle_event(&mut self, ev: &mut Event, ctx: &mut Context) {
         match *ev {
             Event::MouseDown(m) => {
+                if !self.border_visible {
+                    return; // frameless: no close/zoom/drag hotspots
+                }
                 let w = self.st.size.x;
                 if m.position.y == 0 && self.st.state.active {
                     if self.flags.close && (2..=4).contains(&m.position.x) {
@@ -501,7 +520,7 @@ impl View for Frame {
             // button is released over the close zone. Guarded by `close_pressed`
             // against stray MouseUp events.
             // ---------------------------------------------------------------
-            Event::MouseUp(m) if self.close_pressed => {
+            Event::MouseUp(m) if self.close_pressed && self.border_visible => {
                 self.close_pressed = false;
                 // Confirm the release is on the top row, over the close zone.
                 if m.position.y == 0 && (2..=4).contains(&m.position.x) {
@@ -1179,6 +1198,32 @@ mod tests {
         }]);
         let buf = render_frame(&mut f, 20, 6);
         assert_eq!(buf.get(8, 0).symbol(), "╤", "double bar + single stem → ╤");
+    }
+
+    // -- frameless: no border, no title, no icons ------------------------------
+
+    #[test]
+    fn frameless_draws_no_border() {
+        // A frame with border_visible=false fills its interior background but draws
+        // no box edges, title, or icons.
+        let theme = crate::theme::Theme::classic_blue();
+        let (backend, screen) = crate::backend::HeadlessBackend::new(12, 4);
+        let mut r = crate::backend::Renderer::new(Box::new(backend));
+        let mut frame = Frame::new(Rect::new(0, 0, 12, 4));
+        frame.set_title(Some("Hi".into()));
+        frame.st.state.active = true;
+        frame.set_border_visible(false);
+        r.render(|buf: &mut crate::screen::Buffer| {
+            let b = frame.st.get_bounds();
+            let mut dc = crate::view::DrawCtx::new(buf, &theme, b, b.a);
+            frame.draw(&mut dc);
+        });
+        let snap = screen.snapshot();
+        assert!(
+            !snap.contains('═') && !snap.contains('║'),
+            "no double-line border"
+        );
+        assert!(!snap.contains("Hi"), "no title when frameless");
     }
 
     /// The downcast seam: `Frame` overrides `as_any_mut` so an owner can reach

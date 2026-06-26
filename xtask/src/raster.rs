@@ -1,15 +1,16 @@
 //! Rasterize a grid of styled cells (from [`crate::ansi_html::parse_grid`]) to
-//! an RGBA image, using a bundled DejaVu Sans Mono font. The cell box is sized
+//! an RGBA image, using a bundled JetBrains Mono font. The cell box is sized
 //! from the font's own advance/line metrics so box-drawing glyphs (┌─┐│└┘═║…)
-//! tile seamlessly.
+//! tile seamlessly. (JetBrains Mono covers the `⋮` kebab and arrow glyphs the
+//! TUI uses; box-drawing and block/shade glyphs are drawn manually below.)
 
 use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
 use image::{Rgba, RgbaImage};
 
 use crate::ansi_html::Cell;
 
-const FONT_REGULAR: &[u8] = include_bytes!("../assets/DejaVuSansMono.ttf");
-const FONT_BOLD: &[u8] = include_bytes!("../assets/DejaVuSansMono-Bold.ttf");
+const FONT_REGULAR: &[u8] = include_bytes!("../assets/JetBrainsMono-Regular.ttf");
+const FONT_BOLD: &[u8] = include_bytes!("../assets/JetBrainsMono-Bold.ttf");
 
 /// Font pixel size. 18px gives a crisp, readable terminal at 2x-ish zoom.
 const PX: f32 = 18.0;

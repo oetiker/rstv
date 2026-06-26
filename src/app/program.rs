@@ -283,6 +283,18 @@ impl CaptureHandler for ModalFrame {
 /// Boxed per-idle-pass callback registered via [`Program::set_on_idle`].
 type IdleHook = Box<dyn FnMut(&mut Program)>;
 
+/// Loop-owned record of the window currently in frameless-fullscreen, used to
+/// re-fit on resize and restore chrome if the window is removed out from under us.
+///
+/// The window owns its own restore (the single `restore_rect` slot) and toggled
+/// its own border inline, so the slot tracks only what the **pump** must: the
+/// window id + the mode (the desktop top and menu collapse differ by mode).
+#[derive(Clone, Copy)]
+struct FullscreenSlot {
+    window: crate::view::ViewId,
+    mode: crate::window::Fullscreen,
+}
+
 /// Ports `TProgram` (`tprogram.cpp`). The original derived an application class
 /// from this root by inheritance; here [`Application`] embeds a `Program` and
 /// forwards to it (deviation D2), and the single event loop replaces the nested
@@ -331,6 +343,8 @@ pub struct Program {
     /// pre-routing in [`pump_once`](Self::pump_once) reads it to hand keyDown /
     /// over-the-line mouseDown events to the line first.
     status_line: Option<ViewId>,
+    /// The window currently in frameless-fullscreen, if any (loop-owned).
+    fullscreen: Option<FullscreenSlot>,
     /// The global mouse auto-repeat synthesizer: while a real mouse button is
     /// held, idle pump passes synthesize [`Event::MouseAuto`] on the 440 ms /
     /// 110 ms cadence (see [`MouseAutoState`]).
@@ -586,6 +600,7 @@ impl Program {
             desktop,
             menu_bar,
             status_line,
+            fullscreen: None,
             mouse_auto: MouseAutoState::default(),
             end_state: None,
             command_set_changed: true, // first idle pump broadcasts cmCommandSetChanged so startup-disabled buttons self-gray
@@ -2003,11 +2018,10 @@ impl Program {
             deferred,
             disabled_commands,
             desktop,
-            // The menu bar is not read by the pump (its events route through the
-            // normal group dispatch / preProcess phase); bind it `_` so the
-            // exhaustive destructure does not trip `-D warnings`.
-            menu_bar: _,
+            // The menu bar is used by the fullscreen layout engine (apply_fullscreen).
+            menu_bar,
             status_line,
+            fullscreen,
             mouse_auto,
             end_state,
             command_set_changed,
@@ -2027,13 +2041,49 @@ impl Program {
         //    Event::Resize variant (avoids enum churn).
         let (w, h) = renderer.backend().size();
         let cur = group.state().size;
-        if cur.x != w as i32 || cur.y != h as i32 {
+        let size_changed = cur.x != w as i32 || cur.y != h as i32;
+        if size_changed {
             renderer.resize(w, h);
             group.change_bounds(Rect::new(0, 0, w as i32, h as i32));
         }
 
         // 2. Sample the clock once for this pass.
         let now = clock.now_ms();
+
+        // 2a. Fullscreen layout maintenance: re-fit the tracked window after a
+        //     resize (the growMode cascade just re-stretched the collapsed menu
+        //     bar — re-shrink it), or restore chrome if the window was removed.
+        if let Some(slot) = *fullscreen {
+            let mut ctx = Context::new(out_events, timers, now, deferred);
+            ctx.set_disabled_commands(disabled_commands.clone());
+            ctx.set_clipboard_snapshot(*clipboard_editor_id, *clipboard_has_selection);
+            let kebab_w = unicode_width::UnicodeWidthStr::width(theme.glyphs().menu_kebab) as i32;
+            if group.find_mut(slot.window).is_none() {
+                apply_fullscreen(
+                    group,
+                    *desktop,
+                    *menu_bar,
+                    *status_line,
+                    fullscreen,
+                    slot.window,
+                    crate::window::Fullscreen::Off,
+                    kebab_w,
+                    &mut ctx,
+                );
+            } else if size_changed {
+                apply_fullscreen(
+                    group,
+                    *desktop,
+                    *menu_bar,
+                    *status_line,
+                    fullscreen,
+                    slot.window,
+                    slot.mode,
+                    kebab_w,
+                    &mut ctx,
+                );
+            }
+        }
 
         // 2b. Settle pending insert-time currency cascades BEFORE the event
         //     pick, so the dispatched event sees C++-equivalent currency: in C++
@@ -2358,6 +2408,25 @@ impl Program {
                             // nested exec_view loop observes it.
                             Deferred::EndModal(cmd) => {
                                 *end_state = Some(cmd);
+                            }
+                            // Frameless-fullscreen cross-tree layout engine: collapse/
+                            // restore the menu bar, re-bound the desktop, and re-fit
+                            // the window — all through the View trait, no downcast.
+                            Deferred::SetFullscreen { window, mode } => {
+                                let kebab_w = unicode_width::UnicodeWidthStr::width(
+                                    theme.glyphs().menu_kebab,
+                                ) as i32;
+                                apply_fullscreen(
+                                    group,
+                                    *desktop,
+                                    *menu_bar,
+                                    *status_line,
+                                    fullscreen,
+                                    window,
+                                    mode,
+                                    kebab_w,
+                                    &mut ctx,
+                                );
                             }
                             // -- TScroller cross-view broker --------
                             //
@@ -3308,6 +3377,118 @@ fn centered_msgbox_rect_for(group: &Group, desktop: Option<ViewId>, msg: &str) -
     r
 }
 
+/// Apply a fullscreen `mode` to `window` across the tree. The window already did
+/// its own window-local work **inline** in `Window::set_fullscreen` (maximize /
+/// restore via its single `restore_rect` slot, the border toggle, and the content
+/// reflow). This performs only the **cross-tree** work — collapse/restore the menu
+/// bar (+ its bounds) and re-bound the desktop — plus the loop-owned `slot`
+/// tracking. Almost all via the `View` trait; the only downcasts are two single-
+/// bool cross-tree pushes a leaf cannot self-determine — the menu-bar collapse
+/// flag (step 1) and the window's kebab-reservation flag (step 3b). Reused by the
+/// deferred drain and the resize/vanish path.
+///
+/// `kebab_w` is the display width of the themed kebab glyph; it sets the
+/// collapsed menu-bar width (column span at the top-right corner). The kebab's
+/// **height** (one row) is what step 3b reserves against a window scroll bar.
+#[allow(clippy::too_many_arguments)]
+fn apply_fullscreen(
+    group: &mut Group,
+    desktop: Option<ViewId>,
+    menu_bar: Option<ViewId>,
+    status_line: Option<ViewId>,
+    slot: &mut Option<FullscreenSlot>,
+    window: ViewId,
+    mode: crate::window::Fullscreen,
+    kebab_w: i32,
+    ctx: &mut Context,
+) {
+    use crate::window::Fullscreen;
+    let screen = group.state().size;
+    let (w, h) = (screen.x, screen.y);
+    let menu_present = menu_bar.is_some();
+    let status_h = i32::from(status_line.is_some());
+
+    // On exit (Off), the window restored its own bounds inline. Capture them BEFORE
+    // the desktop is re-bounded below, so the desktop-shrink grow-mode cascade does
+    // not perturb the just-restored window — we re-pin them afterwards. (For
+    // mode != Off the window is re-filled to the new desktop, so no pin is needed;
+    // for the vanish path the window is gone, so this is None and nothing happens.)
+    let pinned = if mode == Fullscreen::Off {
+        group.find_mut(window).map(|v| v.state().get_bounds())
+    } else {
+        None
+    };
+
+    // 1. Menu bar: collapse + bounds (kebab-width when Screen, full top row otherwise).
+    if let Some(mb) = menu_bar {
+        let collapsed = mode == Fullscreen::Screen;
+        if let Some(v) = group.find_mut(mb) {
+            if let Some(bar) = v
+                .as_any_mut()
+                .and_then(|a| a.downcast_mut::<crate::menu::MenuBar>())
+            {
+                bar.set_collapsed(collapsed);
+            }
+            let bounds = if collapsed {
+                Rect::new(w - kebab_w, 0, w, 1)
+            } else {
+                Rect::new(0, 0, w, 1)
+            };
+            v.change_bounds(bounds);
+        }
+    }
+
+    // 2. Desktop bounds: top row 0 when Screen, else below the menu bar.
+    let top = if mode == Fullscreen::Screen {
+        0
+    } else {
+        i32::from(menu_present)
+    };
+    if let Some(dt) = desktop
+        && let Some(v) = group.find_mut(dt)
+    {
+        v.change_bounds(Rect::new(0, top, w, h - status_h));
+    }
+
+    // 3. Window bounds:
+    //    - mode != Off: re-fill to the (now-sized) desktop. Screen needs this after
+    //      the desktop expanded to row 0; Desktop already fills inline but re-filling
+    //      is harmless and keeps the resize path uniform.
+    //    - Off: re-pin the inline-restored bounds (undoing the desktop-shrink
+    //      cascade above). The window owns the restore; the pump only preserves it.
+    let target = if mode == Fullscreen::Off {
+        pinned
+    } else {
+        let dh = (h - status_h) - top;
+        Some(Rect::new(0, 0, w, dh)) // desktop-local: the window fills its owner
+    };
+    if let Some(rect) = target
+        && let Some(v) = group.find_mut(window)
+    {
+        v.change_bounds(rect);
+        v.on_bounds_changed(ctx);
+    }
+
+    // 3b. Kebab reservation: tell the (now re-fit) window whether a collapsed menu
+    //     bar's [⋮] kebab sits above its top-right corner — true only when Screen
+    //     AND a menu bar is present. The window insets its right vertical scroll
+    //     bar's top one row so the up-arrow clears the kebab. This is the second
+    //     (and last) Window downcast in this engine, symmetric with the menu-bar
+    //     collapse downcast in step 1; both push a single bool of cross-tree state
+    //     the leaf cannot know on its own.
+    let kebab_above = mode == Fullscreen::Screen && menu_present;
+    if let Some(v) = group.find_mut(window)
+        && let Some(win) = v
+            .as_any_mut()
+            .and_then(|a| a.downcast_mut::<crate::window::Window>())
+    {
+        win.set_menu_chrome_above(kebab_above, ctx);
+    }
+
+    // 4. Slot tracking: set while fullscreen, cleared on exit / vanish.
+    *slot = (mode != Fullscreen::Off).then_some(FullscreenSlot { window, mode });
+}
+
 /// Run a [`ModalCompletion`] as a DIRECT `group` mutation, while the modal
 /// is still in the tree by `modal_id`. NOT a deferred queue entry (that drain
 /// fires only when a `Some(ev)` pump pass runs inside `pump_once`, and would
@@ -4101,6 +4282,596 @@ mod tests {
         assert!(
             !win_selected(&mut program, w1),
             "window 1 deselected (focus moved to w2)"
+        );
+    }
+
+    // -- Deferred::SetFullscreen wires through the pump ------------------
+
+    /// Build a `Program` with a desktop (one window inside), a stubbed status
+    /// line, and a real `MenuBar`. Returns `(program, window_id, desktop_id)`.
+    /// The menu bar id is available via `program.menu_bar()` after construction.
+    fn program_with_fullscreen_scaffold(
+        w: u16,
+        h: u16,
+    ) -> (Program, crate::view::ViewId, crate::view::ViewId) {
+        use crate::menu::MenuBar;
+        use crate::window::Window;
+        let (backend, _handle) = HeadlessBackend::new(w, h);
+        let theme = Theme::classic_blue();
+        let clock = Rc::new(ManualClock::new(0));
+        let win_id: Rc<RefCell<Option<crate::view::ViewId>>> = Rc::new(RefCell::new(None));
+        let win_id_cap = win_id.clone();
+        let w_i32 = w as i32;
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            theme,
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                let win = Window::new(Rect::new(2, 2, 20, 8), Some("Test".into()), 1);
+                *win_id_cap.borrow_mut() = Some(desktop.insert_view(Box::new(win)));
+                Some(Box::new(desktop))
+            },
+            |_r| None, // no status line
+            move |_r| {
+                Some(Box::new(MenuBar::new(
+                    Rect::new(0, 0, w_i32, 1),
+                    modal_menu(),
+                )))
+            },
+        );
+        program.out_events.clear();
+        let window_id = win_id.borrow().unwrap();
+        let desktop_id = program.desktop.unwrap();
+        (program, window_id, desktop_id)
+    }
+
+    /// End-to-end: `Deferred::SetFullscreen { mode: Screen }` collapses the menu
+    /// bar to the `[⋮]` kebab (3 cells), expands the desktop to cover row 0, and
+    /// records the fullscreen slot.
+    #[test]
+    fn set_fullscreen_screen_collapses_menu_and_covers_top() {
+        use crate::view::Deferred;
+        use crate::window::Fullscreen;
+
+        let (mut program, window_id, desktop_id) = program_with_fullscreen_scaffold(40, 12);
+
+        // Push the fullscreen request and a benign broadcast so the deferred
+        // drain runs (the drain requires an event dispatch pass).
+        program.deferred.push(Deferred::SetFullscreen {
+            window: window_id,
+            mode: Fullscreen::Screen,
+        });
+        program.out_events.push_back(Event::Broadcast {
+            command: Command::custom("test.noop"),
+            source: None,
+        });
+        program.pump_once();
+
+        // Menu bar collapsed to the [⋮] kebab (top-right 3 cells).
+        let mb_id = program.menu_bar().expect("menu bar present");
+        let mb = program
+            .group_mut()
+            .find_mut(mb_id)
+            .expect("menu bar")
+            .state()
+            .get_bounds();
+        assert_eq!(
+            (mb.a.x, mb.b.x, mb.a.y, mb.b.y),
+            (37, 40, 0, 1),
+            "menu bar is the [⋮] kebab at top-right (3 cells)"
+        );
+
+        // Desktop top moved to row 0 (covers the former menu row).
+        let dt = program
+            .group_mut()
+            .find_mut(desktop_id)
+            .expect("desktop")
+            .state()
+            .get_bounds();
+        assert_eq!(
+            dt.a.y, 0,
+            "desktop covers the menu row after Screen fullscreen"
+        );
+
+        // The fullscreen slot is recorded.
+        assert!(
+            program.fullscreen.is_some(),
+            "fullscreen slot set after SetFullscreen"
+        );
+    }
+
+    /// End-to-end: `Command::FULLSCREEN` routed to the active window cycles it
+    /// through Desktop → Screen modes; pump effects confirm the cross-tree layout.
+    #[test]
+    fn fullscreen_command_cycles_to_screen() {
+        use crate::window::Fullscreen;
+
+        let (mut program, window_id, desktop_id) = program_with_fullscreen_scaffold(40, 12);
+
+        // Select the numbered window so the focused FULLSCREEN command routes to it.
+        program.out_events.push_back(alt_digit('1'));
+        program.pump_once();
+        program.out_events.clear();
+
+        // Cycle Off -> Desktop, then Desktop -> Screen (one command per pump pass;
+        // the window updates its own `fullscreen` inline, so the 2nd read sees Desktop).
+        program
+            .out_events
+            .push_back(Event::Command(Command::FULLSCREEN));
+        program.pump_once();
+        program
+            .out_events
+            .push_back(Event::Command(Command::FULLSCREEN));
+        program.pump_once();
+
+        // The slot records Screen for our window.
+        let slot = program.fullscreen.as_ref().expect("fullscreen slot set");
+        assert_eq!(slot.mode, Fullscreen::Screen);
+        assert_eq!(slot.window, window_id);
+
+        // Menu bar collapsed to the [⋮] kebab (top-right 3 cells).
+        let mb_id = program.menu_bar().unwrap();
+        let mb = program
+            .group_mut()
+            .find_mut(mb_id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        assert_eq!((mb.a.x, mb.b.x, mb.a.y, mb.b.y), (37, 40, 0, 1));
+
+        // Desktop covers the menu row.
+        let dt = program
+            .group_mut()
+            .find_mut(desktop_id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        assert_eq!(dt.a.y, 0);
+    }
+
+    /// A `Screen`-fullscreen window owning a right-edge vertical scroll bar insets
+    /// that bar's **top** one row so its up-arrow clears the collapsed menu bar's
+    /// `[⋮]` kebab (which covers the top-right corner, incl. the bar's column).
+    /// On exit (`Off`) the bar returns to its bordered position.
+    ///
+    /// REGRESSION SIGNAL: if step 3b of `apply_fullscreen` stops pushing the kebab
+    /// flag (or `scroll_bar_rect` stops honouring it), the bar's top snaps back to
+    /// row 0 and the kebab occludes — and steals the click from — the up-arrow.
+    #[test]
+    fn screen_fullscreen_insets_vertical_scrollbar_below_kebab() {
+        use crate::menu::MenuBar;
+        use crate::window::{Fullscreen, ScrollBarOptions, Window};
+
+        let (w, h) = (40u16, 12u16);
+        let (backend, _handle) = HeadlessBackend::new(w, h);
+        let theme = Theme::classic_blue();
+        let clock = Rc::new(ManualClock::new(0));
+        let win_id: Rc<RefCell<Option<crate::view::ViewId>>> = Rc::new(RefCell::new(None));
+        let vsb_id: Rc<RefCell<Option<crate::view::ViewId>>> = Rc::new(RefCell::new(None));
+        let win_cap = win_id.clone();
+        let vsb_cap = vsb_id.clone();
+        let w_i32 = w as i32;
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            theme,
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                let mut win = Window::new(Rect::new(2, 2, 20, 8), Some("Test".into()), 1);
+                *vsb_cap.borrow_mut() = Some(win.standard_scroll_bar(ScrollBarOptions {
+                    vertical: true,
+                    handle_keyboard: false,
+                }));
+                *win_cap.borrow_mut() = Some(desktop.insert_view(Box::new(win)));
+                Some(Box::new(desktop))
+            },
+            |_r| None, // no status line
+            move |_r| {
+                Some(Box::new(MenuBar::new(
+                    Rect::new(0, 0, w_i32, 1),
+                    modal_menu(),
+                )))
+            },
+        );
+        program.out_events.clear();
+        let vsb = vsb_id.borrow().unwrap();
+
+        // Select the window so FULLSCREEN routes to it, then cycle Off->Desktop->Screen.
+        program.out_events.push_back(alt_digit('1'));
+        program.pump_once();
+        program.out_events.clear();
+        program
+            .out_events
+            .push_back(Event::Command(Command::FULLSCREEN));
+        program.pump_once();
+        program
+            .out_events
+            .push_back(Event::Command(Command::FULLSCREEN));
+        program.pump_once();
+
+        assert_eq!(
+            program.fullscreen.as_ref().expect("fullscreen slot").mode,
+            Fullscreen::Screen
+        );
+
+        // The bar runs the right column (x = w-1 = 39) but its top is row 1, not 0,
+        // so the up-arrow sits just below the kebab at (37..40, 0).
+        let sb = program
+            .group_mut()
+            .find_mut(vsb)
+            .expect("vsb resolvable")
+            .state()
+            .get_bounds();
+        assert_eq!(
+            (sb.a.x, sb.a.y),
+            (39, 1),
+            "vertical scroll bar top is inset one row below the kebab"
+        );
+
+        // Screen -> Off: the bar returns to its bordered inset (window restored to
+        // (2,2,20,8); local bar column 17, top row 1 = inside the frame).
+        program
+            .out_events
+            .push_back(Event::Command(Command::FULLSCREEN));
+        program.pump_once();
+        assert!(program.fullscreen.is_none(), "fullscreen cleared on Off");
+        let sb_off = program
+            .group_mut()
+            .find_mut(vsb)
+            .expect("vsb resolvable")
+            .state()
+            .get_bounds();
+        assert_eq!(
+            (sb_off.a.x, sb_off.a.y),
+            (17, 1),
+            "vertical scroll bar restored to its bordered position after Off"
+        );
+    }
+
+    /// A scaffold variant that also returns the [`HeadlessHandle`] so tests can
+    /// call [`HeadlessHandle::resize`] to simulate a terminal resize.
+    fn program_with_fullscreen_scaffold_and_handle(
+        w: u16,
+        h: u16,
+    ) -> (
+        Program,
+        crate::view::ViewId,
+        crate::view::ViewId,
+        HeadlessHandle,
+    ) {
+        use crate::menu::MenuBar;
+        use crate::window::Window;
+        let (backend, handle) = HeadlessBackend::new(w, h);
+        let theme = Theme::classic_blue();
+        let clock = Rc::new(ManualClock::new(0));
+        let win_id: Rc<RefCell<Option<crate::view::ViewId>>> = Rc::new(RefCell::new(None));
+        let win_id_cap = win_id.clone();
+        let w_i32 = w as i32;
+        let mut program = Program::new(
+            Box::new(backend),
+            Box::new(clock),
+            theme,
+            move |r| {
+                let mut desktop = Desktop::new(r, |r2| Some(Desktop::init_background(r2)));
+                let win = Window::new(Rect::new(2, 2, 20, 8), Some("Test".into()), 1);
+                *win_id_cap.borrow_mut() = Some(desktop.insert_view(Box::new(win)));
+                Some(Box::new(desktop))
+            },
+            |_r| None,
+            move |_r| {
+                Some(Box::new(MenuBar::new(
+                    Rect::new(0, 0, w_i32, 1),
+                    modal_menu(),
+                )))
+            },
+        );
+        program.out_events.clear();
+        let window_id = win_id.borrow().unwrap();
+        let desktop_id = program.desktop.unwrap();
+        (program, window_id, desktop_id, handle)
+    }
+
+    /// **Scenario A — `Off → Screen → Off` round-trip.**
+    ///
+    /// Drives the window through all three fullscreen modes and back, asserting:
+    /// - at Screen the window fills the desktop (`(0,0,40,12)` on a 40×12 screen with
+    ///   no status line and `top == 0`);
+    /// - after the third FULLSCREEN command the slot is cleared, the window bounds
+    ///   are exactly restored, and both the menu bar and desktop top edge are
+    ///   returned to their original positions.
+    ///
+    /// REGRESSION SIGNAL: if the exit path in `apply_fullscreen` does not restore
+    /// bounds from the slot, `after != before`; if it does not clear the slot, the
+    /// `is_none()` assert fails; if `top` computation is wrong, the menu bar and
+    /// desktop asserts fail.
+    #[test]
+    fn fullscreen_off_screen_off_round_trip() {
+        use crate::window::Fullscreen;
+
+        let (mut program, window_id, desktop_id) = program_with_fullscreen_scaffold(40, 12);
+
+        // Select the window so FULLSCREEN routes to it.
+        program.out_events.push_back(alt_digit('1'));
+        program.pump_once();
+        program.out_events.clear();
+
+        // Capture pre-fullscreen bounds (the window starts at (2,2,20,8)).
+        let before = program
+            .group_mut()
+            .find_mut(window_id)
+            .unwrap()
+            .state()
+            .get_bounds();
+
+        // Off → Desktop (1st FULLSCREEN).
+        program
+            .out_events
+            .push_back(Event::Command(Command::FULLSCREEN));
+        program.pump_once();
+
+        // Desktop → Screen (2nd FULLSCREEN).
+        program
+            .out_events
+            .push_back(Event::Command(Command::FULLSCREEN));
+        program.pump_once();
+
+        // At Screen: window bounds are desktop-local (0,0,40,12).
+        // top == 0 (Screen mode), status_h == 0 (no status line) → dh = 12.
+        let win_at_screen = program
+            .group_mut()
+            .find_mut(window_id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        assert_eq!(
+            (
+                win_at_screen.a.x,
+                win_at_screen.a.y,
+                win_at_screen.b.x,
+                win_at_screen.b.y
+            ),
+            (0, 0, 40, 12),
+            "window fills desktop at Screen mode"
+        );
+        let slot = program.fullscreen.as_ref().unwrap();
+        assert_eq!(slot.mode, Fullscreen::Screen);
+
+        // Screen → Off (3rd FULLSCREEN).
+        program
+            .out_events
+            .push_back(Event::Command(Command::FULLSCREEN));
+        program.pump_once();
+
+        // Slot cleared on exit.
+        assert!(program.fullscreen.is_none(), "slot cleared after Off");
+
+        // Window bounds restored exactly.
+        let after = program
+            .group_mut()
+            .find_mut(window_id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        assert_eq!(
+            after, before,
+            "window bounds restored to pre-fullscreen value"
+        );
+
+        // Menu bar restored to the full top row (0..40, row 0).
+        let mb_id = program.menu_bar().unwrap();
+        let mb = program
+            .group_mut()
+            .find_mut(mb_id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        assert_eq!(
+            (mb.a.x, mb.b.x, mb.a.y, mb.b.y),
+            (0, 40, 0, 1),
+            "menu bar restored to full top row"
+        );
+
+        // Desktop top row back to 1 (menu bar is present → top = 1).
+        let dt = program
+            .group_mut()
+            .find_mut(desktop_id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        assert_eq!(dt.a.y, 1, "desktop top row restored after Off");
+    }
+
+    /// **Scenario B — removal-restore.**
+    ///
+    /// Drives a window to Screen fullscreen, then removes it from the tree.
+    /// The next `pump_once` maintenance block (`2a`) detects the missing window
+    /// and restores chrome.
+    ///
+    /// REGRESSION SIGNAL: if the `find_mut(slot.window).is_none()` guard in the
+    /// maintenance block is removed, the slot is never cleared and chrome is never
+    /// restored → `fullscreen.is_none()` and the menu bar / desktop asserts fail.
+    #[test]
+    fn fullscreen_window_removal_restores_chrome() {
+        let (mut program, window_id, desktop_id) = program_with_fullscreen_scaffold(40, 12);
+
+        // Select and drive to Screen (two FULLSCREEN commands).
+        program.out_events.push_back(alt_digit('1'));
+        program.pump_once();
+        program.out_events.clear();
+
+        program
+            .out_events
+            .push_back(Event::Command(Command::FULLSCREEN));
+        program.pump_once();
+        program
+            .out_events
+            .push_back(Event::Command(Command::FULLSCREEN));
+        program.pump_once();
+
+        assert!(program.fullscreen.is_some(), "slot set before removal");
+
+        // Remove the window directly (bypasses the close channel; simulates a
+        // forced remove, e.g., parent group teardown or direct removal by the app).
+        program.with_ctx(|g, ctx| g.remove_descendant(window_id, ctx));
+
+        // One pump: maintenance block detects slot.window gone → apply Off.
+        program.pump_once();
+
+        // Slot cleared.
+        assert!(
+            program.fullscreen.is_none(),
+            "slot cleared after window removed"
+        );
+
+        // Menu bar restored to the full top row.
+        let mb_id = program.menu_bar().unwrap();
+        let mb = program
+            .group_mut()
+            .find_mut(mb_id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        assert_eq!(
+            (mb.a.x, mb.b.x, mb.a.y, mb.b.y),
+            (0, 40, 0, 1),
+            "menu bar restored after window removed"
+        );
+
+        // Desktop top row back to 1.
+        let dt = program
+            .group_mut()
+            .find_mut(desktop_id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        assert_eq!(dt.a.y, 1, "desktop top row restored after window removed");
+    }
+
+    /// **Scenario C — resize re-fit.**
+    ///
+    /// Drives a window to Screen fullscreen on a 40×12 screen, then simulates a
+    /// terminal resize to 60×20 via the `HeadlessHandle`. The next `pump_once`
+    /// detects the size change and re-applies fullscreen, re-shrinking the grow-mode-
+    /// stretched collapsed menu bar back to the `⋮` cell at the new width.
+    ///
+    /// REGRESSION SIGNAL: if the `size_changed && slot.is_some()` re-apply branch
+    /// in `pump_once` (`2a`) is removed, the collapsed menu bar is left at the
+    /// grow-mode width (fills the new full row) and the `(57, 60, 0, 1)` assert fails.
+    #[test]
+    fn fullscreen_screen_refits_on_resize() {
+        let (mut program, window_id, desktop_id, handle) =
+            program_with_fullscreen_scaffold_and_handle(40, 12);
+
+        // Select and drive to Screen.
+        program.out_events.push_back(alt_digit('1'));
+        program.pump_once();
+        program.out_events.clear();
+
+        program
+            .out_events
+            .push_back(Event::Command(Command::FULLSCREEN));
+        program.pump_once();
+        program
+            .out_events
+            .push_back(Event::Command(Command::FULLSCREEN));
+        program.pump_once();
+
+        assert!(program.fullscreen.is_some(), "slot set before resize");
+
+        // Simulate a terminal resize to 60×20.
+        handle.resize(60, 20);
+
+        // One pump: size-change check fires, grow-mode cascade runs (bar stretches
+        // to 60 wide), then the 2a re-apply re-shrinks it back to the [⋮] kebab.
+        program.pump_once();
+
+        // Collapsed menu bar is at the [⋮] kebab for the new width: (57, 60, 0, 1).
+        let mb_id = program.menu_bar().unwrap();
+        let mb = program
+            .group_mut()
+            .find_mut(mb_id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        assert_eq!(
+            (mb.a.x, mb.b.x, mb.a.y, mb.b.y),
+            (57, 60, 0, 1),
+            "collapsed bar re-shrunk to [⋮] kebab at new width after resize"
+        );
+
+        // Desktop still covers row 0 (Screen mode active).
+        let dt = program
+            .group_mut()
+            .find_mut(desktop_id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        assert_eq!(dt.a.y, 0, "desktop still covers row 0 after resize");
+        assert_eq!(dt.b.x, 60, "desktop right edge matches new width");
+
+        // Window still fills the new desktop.
+        let win = program
+            .group_mut()
+            .find_mut(window_id)
+            .unwrap()
+            .state()
+            .get_bounds();
+        assert_eq!(
+            (win.a.x, win.a.y, win.b.x, win.b.y),
+            (0, 0, 60, 20),
+            "window re-fit to full new desktop after resize"
+        );
+    }
+
+    /// **Scenario D — corner-popup activation.**
+    ///
+    /// After Screen fullscreen collapses the menu bar to the `[⋮]` kebab at
+    /// columns `(37..40, 0)`, a `MouseDown` anywhere in those 3 cells routes to
+    /// the collapsed `MenuBar::handle_event` which calls `popup_menu`. The
+    /// deferred-apply phase of the same pump inserts a `MenuBox` into the root
+    /// group and arms a `MenuSession` on the capture stack.
+    ///
+    /// REGRESSION SIGNAL: if `MenuBar::handle_event` does not check `collapsed` or
+    /// does not call `popup_menu` on a `MouseDown`, neither the capture nor the box
+    /// appears → both asserts fail.
+    #[test]
+    fn collapsed_menu_bar_click_opens_popup() {
+        let (mut program, _window_id, _desktop_id) = program_with_fullscreen_scaffold(40, 12);
+
+        // Select and drive to Screen.
+        program.out_events.push_back(alt_digit('1'));
+        program.pump_once();
+        program.out_events.clear();
+
+        program
+            .out_events
+            .push_back(Event::Command(Command::FULLSCREEN));
+        program.pump_once();
+        program
+            .out_events
+            .push_back(Event::Command(Command::FULLSCREEN));
+        program.pump_once();
+
+        // Baseline: no menu session active.
+        assert_eq!(program.capture_len(), 0, "no capture before menu click");
+        let group_len_before = program.group_mut().len();
+
+        // Click within the [⋮] kebab at absolute (39, 0) — inside the 3-cell bar (37..40, 0).
+        program.out_events.push_back(mouse_down_at(39, 0));
+        program.pump_once();
+
+        // A MenuSession was pushed to the capture stack.
+        assert_eq!(
+            program.capture_len(),
+            1,
+            "MenuSession armed on capture stack after clicking ⋮"
+        );
+        // A MenuBox was inserted into the root group.
+        assert_eq!(
+            program.group_mut().len(),
+            group_len_before + 1,
+            "MenuBox inserted into root group after clicking ⋮"
         );
     }
 
