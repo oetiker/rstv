@@ -12,6 +12,14 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.4.0 - 2026-06-30
+
+### New
+
 - `ListViewer` incremental **find mode** (`FindMode::Off`/`Highlight`/`Filter`,
   opt-in via `ListBox::with_find` / `SortedListBox::with_find`): type while a
   list is focused to accumulate a query that highlights the matched substring in
@@ -22,7 +30,6 @@ moves it into a dated, versioned section when a release is cut.
 - `tvdemo` splitter window's "list pane" is now a live filtering `ListBox`
   (fruit items, `FindMode::Filter`): type to narrow, Backspace to widen, Escape
   to clear. The `cargo xtask demo` tour now includes four filter-demo scenes.
-
 ### Changed
 
 ### Fixed
