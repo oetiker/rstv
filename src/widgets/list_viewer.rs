@@ -76,7 +76,7 @@
 
 use crate::capture::TrackMask;
 use crate::command::Command;
-use crate::event::{Event, Key, ctrl_to_arrow};
+use crate::event::{Event, Key, KeyEvent, ctrl_to_arrow};
 use crate::theme::Role;
 use crate::view::{Context, DrawCtx, Point, StateFlag, View, ViewId, ViewState};
 
@@ -616,6 +616,52 @@ pub fn set_state<L: ListViewer + ?Sized>(
     }
 }
 
+/// Route a keystroke into the find query when find mode is active. Returns
+/// `true` if the key was a find key (and the event was consumed), `false` if it
+/// is not a find key (the caller continues with normal navigation). Backspace
+/// on an empty query and Esc on an empty query both return `false` so they
+/// propagate (an empty-query Esc lets a host dialog close).
+fn find_route_key<L: ListViewer + ?Sized>(
+    this: &mut L,
+    ke: KeyEvent,
+    ev: &mut Event,
+    ctx: &mut Context,
+) -> bool {
+    match ke.key {
+        Key::Char(c) if !ke.modifiers.ctrl && !ke.modifiers.alt => {
+            this.lv_mut().query.push(c);
+            find_after_change(this, ev, ctx);
+            true
+        }
+        Key::Backspace => {
+            if this.lv().query.is_empty() {
+                return false;
+            }
+            this.lv_mut().query.pop();
+            find_after_change(this, ev, ctx);
+            true
+        }
+        Key::Esc => {
+            if this.lv().query.is_empty() {
+                return false;
+            }
+            this.lv_mut().query.clear();
+            find_after_change(this, ev, ctx);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Common tail after the query changes: broadcast the change (self as `source`,
+/// mirroring `select_item` / `ScrollBar`), run the self-filter hook, consume.
+fn find_after_change<L: ListViewer + ?Sized>(this: &mut L, ev: &mut Event, ctx: &mut Context) {
+    let source = this.lv().state.id();
+    ctx.broadcast(Command::LIST_FIND_CHANGED, source);
+    this.on_query_changed(ctx);
+    ev.clear();
+}
+
 /// Mouse + keyboard nav + the scrollbar broadcast filter. Reused verbatim by
 /// concrete list widgets.
 ///
@@ -805,6 +851,12 @@ pub fn handle_event<L: ListViewer + ?Sized>(this: &mut L, ev: &mut Event, ctx: &
         // evKeyDown — Space → select, else the nav switch (via ctrlToArrow).
         // -------------------------------------------------------------------
         Event::KeyDown(ke) => {
+            // Find mode (opt-in) intercepts query keys before navigation; a
+            // non-query key (arrows, Enter, …) falls through to the nav below.
+            if this.lv().find_mode != FindMode::Off && find_route_key(this, ke, ev, ctx) {
+                return;
+            }
+
             let focused = this.lv().focused;
             let range = this.lv().range;
             let size_y = this.lv().state.size.y;
@@ -1090,6 +1142,12 @@ pub fn sorted_handle_event<L: SortedSearch + ?Sized>(
 ) {
     let old_value = this.lv().focused;
     handle_event(this, ev, ctx); // (1) base first
+
+    // Find mode replaces the type-to-search prefix lookup entirely; the base
+    // call above already routed any find key.
+    if this.lv().find_mode != FindMode::Off {
+        return;
+    }
 
     // (2) reset search on focus change OR a released-focus broadcast.
     let released = matches!(ev,
@@ -2440,5 +2498,97 @@ mod tests {
             vec!["banana".to_string(), "orange".into()],
             "Filter narrows, order preserved"
         );
+    }
+
+    // -- find key routing (Task 3) -------------------------------------------
+
+    #[test]
+    fn find_mode_accumulates_query_and_broadcasts_on_change() {
+        let mut fake = FakeList::new(Rect::new(0, 0, 10, 5), 1, items(5), None, None);
+        fake.lv.find_mode = FindMode::Highlight;
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred = vec![];
+        for c in ['a', 'b', ' ', 'c'] {
+            let mut ev = key_ev(Key::Char(c));
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            fake.handle_event(&mut ev, &mut ctx);
+            assert!(ev.is_nothing(), "find key consumed");
+        }
+        assert_eq!(fake.lv.query, "ab c", "Space appends to the query");
+        let broadcasts = out
+            .iter()
+            .filter(|e| {
+                matches!(e,
+                Event::Broadcast { command, .. } if *command == Command::LIST_FIND_CHANGED)
+            })
+            .count();
+        assert_eq!(broadcasts, 4, "one broadcast per query change");
+    }
+
+    #[test]
+    fn find_backspace_and_esc_behaviour() {
+        let mut fake = FakeList::new(Rect::new(0, 0, 10, 5), 1, items(5), None, None);
+        fake.lv.find_mode = FindMode::Highlight;
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred = vec![];
+
+        // Backspace pops; consumed.
+        fake.lv.query = "ab".into();
+        {
+            let mut ev = key_ev(Key::Backspace);
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            fake.handle_event(&mut ev, &mut ctx);
+            assert!(ev.is_nothing());
+        }
+        assert_eq!(fake.lv.query, "a");
+
+        // Backspace on empty: no change, no broadcast, NOT consumed (propagates).
+        fake.lv.query.clear();
+        out.clear();
+        {
+            let mut ev = key_ev(Key::Backspace);
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            fake.handle_event(&mut ev, &mut ctx);
+            assert!(!ev.is_nothing(), "empty Backspace propagates");
+        }
+        assert!(out.is_empty(), "no broadcast on a no-op Backspace");
+
+        // Esc with a query: clears + consumes.
+        fake.lv.query = "ab".into();
+        {
+            let mut ev = key_ev(Key::Esc);
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            fake.handle_event(&mut ev, &mut ctx);
+            assert!(ev.is_nothing(), "Esc with a query is consumed");
+        }
+        assert_eq!(fake.lv.query, "");
+
+        // Esc with empty query: propagates (a host dialog can still close).
+        {
+            let mut ev = key_ev(Key::Esc);
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            fake.handle_event(&mut ev, &mut ctx);
+            assert!(!ev.is_nothing(), "empty-query Esc propagates");
+        }
+    }
+
+    #[test]
+    fn find_mode_lets_arrows_navigate_and_keeps_query() {
+        let mut fake = FakeList::new(Rect::new(0, 0, 10, 5), 1, items(5), None, None);
+        fake.lv.find_mode = FindMode::Highlight;
+        fake.lv.query = "a".into();
+        fake.lv.focused = 0;
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred = vec![];
+        let mut ev = key_ev(Key::Down);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            fake.handle_event(&mut ev, &mut ctx);
+        }
+        assert_eq!(fake.lv.focused, 1, "Down still navigates in find mode");
+        assert_eq!(fake.lv.query, "a", "query persists across navigation");
     }
 }
