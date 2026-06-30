@@ -44,6 +44,7 @@ See [The application skeleton](../getting-started/skeleton.md) for the
 | `TScroller` | [`Scroller`](../api/tvision_rs/widgets/struct.Scroller.html) |
 | `TListViewer` | [`ListViewer`](../api/tvision_rs/widgets/list_viewer/trait.ListViewer.html) (trait) |
 | `TListBox` | [`ListBox`](../api/tvision_rs/widgets/struct.ListBox.html) |
+| `TSortedListBox` | [`SortedListBox`](../api/tvision_rs/widgets/struct.SortedListBox.html) |
 | `TOutline` | [`Outline`](../api/tvision_rs/widgets/outline/struct.Outline.html) / [`OutlineViewer`](../api/tvision_rs/widgets/outline/trait.OutlineViewer.html) |
 | `TEditor` | [`Editor`](../api/tvision_rs/widgets/struct.Editor.html) |
 | `TEditWindow` | [`EditWindow`](../api/tvision_rs/widgets/struct.EditWindow.html) |
