@@ -454,6 +454,43 @@ pub fn set_range<L: ListViewer + ?Sized>(this: &mut L, a_range: i32, ctx: &mut C
     }
 }
 
+/// The displayed view of `source` for a find mode/query: the full source unless
+/// `Filter` mode with a non-empty query narrows it to the rows containing the
+/// query (case-insensitive substring), preserving `source` order.
+#[allow(dead_code)] // consumed by later tasks (Task 3+)
+pub(crate) fn filtered_view(source: &[String], mode: FindMode, query: &str) -> Vec<String> {
+    if mode == FindMode::Filter && !query.is_empty() {
+        source
+            .iter()
+            .filter(|s| find_match(s, query).is_some())
+            .cloned()
+            .collect()
+    } else {
+        source.to_vec()
+    }
+}
+
+/// Republish `len` as the range and place focus: to the top when `reset_focus`
+/// (a fresh `new_list`), else clamp the existing focus into the new range (a
+/// query change). The shared tail of both concrete widgets' `rebuild_view`.
+#[allow(dead_code)] // consumed by later tasks (Task 3+)
+pub(crate) fn apply_view_len<L: ListViewer + ?Sized>(
+    this: &mut L,
+    len: i32,
+    reset_focus: bool,
+    ctx: &mut Context,
+) {
+    set_range(this, len, ctx);
+    if reset_focus {
+        if len > 0 {
+            focus_item(this, 0, ctx);
+        }
+    } else {
+        let f = this.lv().focused.min(len - 1).max(0);
+        focus_item_num(this, f, ctx);
+    }
+}
+
 /// The body of the scroll-bar-changed read-sync, called by the pump (the read
 /// broker) after it resolves both bars and reads their `value`s.
 ///
@@ -974,6 +1011,38 @@ pub fn focused_cursor<L: ListViewer + ?Sized>(this: &L) -> Option<Point> {
 /// incremental-search state machine captures it at the `search_pos -1↔0`
 /// transition; file/dir subclasses test `shift_state() & KB_SHIFT`.
 pub const KB_SHIFT: u8 = 0x03;
+
+/// Case-insensitive equality of two `char`s. Cheap ASCII path first, then a
+/// Unicode `to_lowercase` sequence compare (per-char, so indices stay aligned).
+#[allow(dead_code)] // used by find_match; both consumed by later tasks (Task 3+)
+fn ci_char_eq(a: char, b: char) -> bool {
+    a == b || a.eq_ignore_ascii_case(&b) || a.to_lowercase().eq(b.to_lowercase())
+}
+
+/// The half-open `[start, end)` **char** index range of the first
+/// case-insensitive occurrence of `query` in `text`, or `None`. Returns `None`
+/// for an empty query or a query longer than `text`. Char-indexed: each query
+/// char matches exactly one text char, so the range is safe to slice by `char`.
+#[allow(dead_code)] // consumed by later tasks (Task 3+) and filtered_view
+pub(crate) fn find_match(text: &str, query: &str) -> Option<(usize, usize)> {
+    let q: Vec<char> = query.chars().collect();
+    if q.is_empty() {
+        return None;
+    }
+    let t: Vec<char> = text.chars().collect();
+    if q.len() > t.len() {
+        return None;
+    }
+    'outer: for start in 0..=(t.len() - q.len()) {
+        for k in 0..q.len() {
+            if !ci_char_eq(t[start + k], q[k]) {
+                continue 'outer;
+            }
+        }
+        return Some((start, start + q.len()));
+    }
+    None
+}
 
 /// Case-insensitive equality of the first `n` chars.
 fn ci_prefix_eq(a: &[char], b: &[char], n: usize) -> bool {
@@ -2320,5 +2389,56 @@ mod tests {
         assert_eq!(fake.find_query(), Some("ab"));
         fake.lv.find_mode = FindMode::Off;
         assert_eq!(fake.find_query(), None, "Off overrides a non-empty query");
+    }
+
+    #[test]
+    fn find_match_first_occurrence_char_indexed() {
+        assert_eq!(find_match("banana", "an"), Some((1, 3)), "middle");
+        assert_eq!(find_match("banana", "ba"), Some((0, 2)), "start");
+        assert_eq!(find_match("banana", "na"), Some((2, 4)), "first of repeats");
+        assert_eq!(
+            find_match("Banana", "an"),
+            Some((1, 3)),
+            "case-insensitive text"
+        );
+        assert_eq!(
+            find_match("banana", "BAN"),
+            Some((0, 3)),
+            "case-insensitive query"
+        );
+        assert_eq!(find_match("banana", "xyz"), None, "no match");
+        assert_eq!(find_match("ab", ""), None, "empty query");
+        assert_eq!(find_match("a", "abc"), None, "query longer than text");
+        assert_eq!(
+            find_match("café", "é"),
+            Some((3, 4)),
+            "multibyte char index"
+        );
+        assert_eq!(find_match("naïve", "ï"), Some((2, 3)), "multibyte mid-word");
+    }
+
+    #[test]
+    fn filtered_view_narrows_only_in_filter_mode() {
+        let src = vec!["apple".to_string(), "banana".into(), "orange".into()];
+        assert_eq!(
+            filtered_view(&src, FindMode::Off, "an"),
+            src,
+            "Off: full source"
+        );
+        assert_eq!(
+            filtered_view(&src, FindMode::Highlight, "an"),
+            src,
+            "Highlight: full source"
+        );
+        assert_eq!(
+            filtered_view(&src, FindMode::Filter, ""),
+            src,
+            "empty query: full source"
+        );
+        assert_eq!(
+            filtered_view(&src, FindMode::Filter, "an"),
+            vec!["banana".to_string(), "orange".into()],
+            "Filter narrows, order preserved"
+        );
     }
 }
