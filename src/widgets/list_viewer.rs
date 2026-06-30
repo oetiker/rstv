@@ -457,7 +457,6 @@ pub fn set_range<L: ListViewer + ?Sized>(this: &mut L, a_range: i32, ctx: &mut C
 /// The displayed view of `source` for a find mode/query: the full source unless
 /// `Filter` mode with a non-empty query narrows it to the rows containing the
 /// query (case-insensitive substring), preserving `source` order.
-#[allow(dead_code)] // consumed by later tasks (Task 3+)
 pub(crate) fn filtered_view(source: &[String], mode: FindMode, query: &str) -> Vec<String> {
     if mode == FindMode::Filter && !query.is_empty() {
         source
@@ -473,7 +472,6 @@ pub(crate) fn filtered_view(source: &[String], mode: FindMode, query: &str) -> V
 /// Republish `len` as the range and place focus: to the top when `reset_focus`
 /// (a fresh `new_list`), else clamp the existing focus into the new range (a
 /// query change). The shared tail of both concrete widgets' `rebuild_view`.
-#[allow(dead_code)] // consumed by later tasks (Task 3+)
 pub(crate) fn apply_view_len<L: ListViewer + ?Sized>(
     this: &mut L,
     len: i32,
