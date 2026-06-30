@@ -122,7 +122,9 @@ impl ListBox {
     /// Use this to inspect or copy the items without modifying them.  To
     /// replace the collection, call [`new_list`](Self::new_list) — that
     /// method also republishes the scroll-bar range, which a direct
-    /// `Vec` write would miss.
+    /// `Vec` write would miss.  In [`FindMode::Filter`](crate::widgets::list_viewer::FindMode)
+    /// with an active query, the returned slice is the query-narrowed view, not the full
+    /// set supplied via `new_list`; clearing the query restores the full set.
     pub fn list(&self) -> &[String] {
         &self.items
     }
@@ -332,7 +334,10 @@ impl SortedListBox {
     ///
     /// The slice is always in the order established by the last
     /// [`new_list`](Self::new_list) call (ASCII case-folded lexicographic).
-    /// Use it to read the items; to replace them call `new_list`.
+    /// Use it to read the items; to replace them call `new_list`.  In
+    /// [`FindMode::Filter`](crate::widgets::list_viewer::FindMode) with an active query,
+    /// the returned slice is the query-narrowed view, not the full set supplied via
+    /// `new_list`; clearing the query restores the full set.
     pub fn list(&self) -> &[String] {
         &self.items
     }
