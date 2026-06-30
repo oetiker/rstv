@@ -79,6 +79,21 @@ and wide text behave correctly.
   needed to publish the scroll range to its bars), then it handles selection and
   navigation for you. [`SortedListBox`](../api/tvision_rs/widgets/struct.SortedListBox.html)
   keeps the items ordered.
+
+  Both support an opt-in incremental find via
+  [`with_find(FindMode)`](../api/tvision_rs/widgets/list_viewer/enum.FindMode.html):
+  `FindMode::Highlight` owns the query and highlights the matched substring in
+  every visible row; `FindMode::Filter` additionally self-filters the list to
+  rows that contain the query (showing `No match: <query>` when nothing survives).
+  `FindMode::Off` is the default — the classic type-to-jump lookup is unchanged
+  for existing consumers. While find is active, printable keys (including Space)
+  append to the query, Backspace deletes, and Esc clears (an empty-query Esc still
+  propagates so a host dialog can close). The current query is readable via
+  `find_query()` and clearable externally via `clear_find()`. Every query change
+  broadcasts `Command::LIST_FIND_CHANGED` with the list's own `ViewId` as `source`
+  — the same notify-by-broadcast pattern
+  [`ScrollBar`](../api/tvision_rs/widgets/struct.ScrollBar.html) uses — so a host
+  can mirror the query or drive an async search.
 - [`ScrollBar`](../api/tvision_rs/widgets/struct.ScrollBar.html) — a vertical or
   horizontal bar (orientation inferred from its 1×N or N×1 bounds). It broadcasts
   a *changed* message when its value moves, naming itself as the source so a

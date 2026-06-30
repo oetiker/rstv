@@ -91,7 +91,10 @@ Read-only text with word-wrap; a leading `\x03` centers a line.
 
 A scrollable single-column list wired to a vertical scroll bar. Its items are
 filled on the first event tick, because `new_list` needs a `Context` — the thin
-wrapper view is the idiomatic deferred-init pattern.
+wrapper view is the idiomatic deferred-init pattern. Opt-in incremental find
+(`with_find(FindMode::Filter)` or `FindMode::Highlight`) lets the list own its
+query and highlight or self-filter while focused — see
+[Controls](apps/controls.md).
 
 {{#include screens/listbox.html}}
 

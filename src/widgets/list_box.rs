@@ -50,7 +50,10 @@ use crate::widgets::list_viewer::{self, ListViewer, ListViewerState};
 /// See the module doc for the two-step population wiring protocol.
 pub struct ListBox {
     lv: ListViewerState,
+    /// The displayed rows (the source narrowed by the query in `Filter` mode).
     items: Vec<String>,
+    /// The full host-supplied set; `items` is derived from this.
+    source: Vec<String>,
 }
 
 impl ListBox {
@@ -77,7 +80,16 @@ impl ListBox {
         ListBox {
             lv: ListViewerState::new(bounds, num_cols, h, v),
             items: Vec::new(),
+            source: Vec::new(),
         }
+    }
+
+    /// Enable find mode (default [`FindMode::Off`] keeps the classic lookup).
+    /// `Filter` makes the list narrow its own source by the query; `Highlight`
+    /// only owns the query + highlight (the host supplies the rows).
+    pub fn with_find(mut self, mode: crate::widgets::list_viewer::FindMode) -> Self {
+        self.lv.find_mode = mode;
+        self
     }
 
     /// Replace the item collection, update the scroll-bar range, and focus item 0.
@@ -93,12 +105,16 @@ impl ListBox {
     /// item 0 — to restore a prior selection scatter the index back afterwards
     /// with [`set_value_ctx`](View::set_value_ctx).
     pub fn new_list(&mut self, items: Vec<String>, ctx: &mut Context) {
-        self.items = items;
+        self.source = items;
+        self.rebuild_view(ctx, true);
+    }
+
+    /// Re-derive `items` from `source` (narrowing by the query in `Filter`
+    /// mode), then republish the range and place focus via the shared helpers.
+    fn rebuild_view(&mut self, ctx: &mut Context, reset_focus: bool) {
+        self.items = list_viewer::filtered_view(&self.source, self.lv.find_mode, &self.lv.query);
         let len = self.items.len() as i32;
-        list_viewer::set_range(self, len, ctx);
-        if self.lv.range > 0 {
-            list_viewer::focus_item(self, 0, ctx);
-        }
+        list_viewer::apply_view_len(self, len, reset_focus, ctx);
     }
 
     /// The current item collection as a read-only slice.
@@ -106,7 +122,9 @@ impl ListBox {
     /// Use this to inspect or copy the items without modifying them.  To
     /// replace the collection, call [`new_list`](Self::new_list) — that
     /// method also republishes the scroll-bar range, which a direct
-    /// `Vec` write would miss.
+    /// `Vec` write would miss.  In [`FindMode::Filter`](crate::widgets::list_viewer::FindMode)
+    /// with an active query, the returned slice is the query-narrowed view, not the full
+    /// set supplied via `new_list`; clearing the query restores the full set.
     pub fn list(&self) -> &[String] {
         &self.items
     }
@@ -126,6 +144,12 @@ impl ListViewer for ListBox {
     /// An out-of-bounds index (including an empty list) returns an empty string.
     fn get_text(&self, item: i32) -> String {
         self.items.get(item as usize).cloned().unwrap_or_default()
+    }
+
+    fn on_query_changed(&mut self, ctx: &mut Context) {
+        if self.lv.find_mode == crate::widgets::list_viewer::FindMode::Filter {
+            self.rebuild_view(ctx, false);
+        }
     }
     // is_selected / select_item: inherit the base (item == focused, and the base
     // broadcasts that an item was selected). Not overridden here.
@@ -233,7 +257,10 @@ fn ci_cmp(a: &str, b: &str) -> core::cmp::Ordering {
 /// the owned, case-insensitively sorted `Vec<String>`.
 pub struct SortedListBox {
     lv: ListViewerState,
+    /// The displayed rows (the source narrowed by the query in `Filter` mode).
     items: Vec<String>,
+    /// The full host-supplied set, kept sorted; `items` is derived from this.
+    source: Vec<String>,
     /// The index of the last matched char in the focused item's text; -1 = no
     /// active search.
     search_pos: i32,
@@ -263,9 +290,18 @@ impl SortedListBox {
         SortedListBox {
             lv,
             items: Vec::new(),
+            source: Vec::new(),
             search_pos: -1,
             shift_state: 0,
         }
+    }
+
+    /// Enable find mode (default [`FindMode::Off`] keeps the classic lookup).
+    /// `Filter` makes the list narrow its own (already-sorted) source by the
+    /// query, so the narrowed view stays in sorted order.
+    pub fn with_find(mut self, mode: crate::widgets::list_viewer::FindMode) -> Self {
+        self.lv.find_mode = mode;
+        self
     }
 
     /// Replace the item collection, sort it case-insensitively, and reset the search state.
@@ -280,20 +316,28 @@ impl SortedListBox {
     /// `new_list` sorts them for you.
     pub fn new_list(&mut self, mut items: Vec<String>, ctx: &mut Context) {
         items.sort_by(|a, b| ci_cmp(a, b));
-        self.items = items;
-        let len = self.items.len() as i32;
-        list_viewer::set_range(self, len, ctx);
-        if self.lv.range > 0 {
-            list_viewer::focus_item(self, 0, ctx);
-        }
+        self.source = items;
         self.search_pos = -1;
+        self.rebuild_view(ctx, true);
+    }
+
+    /// Re-derive `items` by narrowing the already-sorted `source` with the query
+    /// (in `Filter` mode); the narrowed view stays sorted because `source` is
+    /// sorted and `filtered_view` preserves order.
+    fn rebuild_view(&mut self, ctx: &mut Context, reset_focus: bool) {
+        self.items = list_viewer::filtered_view(&self.source, self.lv.find_mode, &self.lv.query);
+        let len = self.items.len() as i32;
+        list_viewer::apply_view_len(self, len, reset_focus, ctx);
     }
 
     /// The current item collection as a read-only, case-insensitively sorted slice.
     ///
     /// The slice is always in the order established by the last
     /// [`new_list`](Self::new_list) call (ASCII case-folded lexicographic).
-    /// Use it to read the items; to replace them call `new_list`.
+    /// Use it to read the items; to replace them call `new_list`.  In
+    /// [`FindMode::Filter`](crate::widgets::list_viewer::FindMode) with an active query,
+    /// the returned slice is the query-narrowed view, not the full set supplied via
+    /// `new_list`; clearing the query restores the full set.
     pub fn list(&self) -> &[String] {
         &self.items
     }
@@ -317,6 +361,12 @@ impl ListViewer for SortedListBox {
     /// Return the text for `item` from the owned Vec.
     fn get_text(&self, item: i32) -> String {
         self.items.get(item as usize).cloned().unwrap_or_default()
+    }
+
+    fn on_query_changed(&mut self, ctx: &mut Context) {
+        if self.lv.find_mode == crate::widgets::list_viewer::FindMode::Filter {
+            self.rebuild_view(ctx, false);
+        }
     }
     // is_selected / select_item: inherit the base (item == focused, and the base
     // broadcasts that an item was selected). Not overridden here.
@@ -445,6 +495,7 @@ mod tests {
     use crate::screen::Buffer;
     use crate::theme::Theme;
     use crate::view::{Deferred, Group, Rect};
+    use crate::widgets::list_viewer::{FindMode, ListViewer};
     use std::collections::VecDeque;
 
     fn make_ctx<'a>(
@@ -1105,5 +1156,118 @@ mod tests {
             Some(FieldValue::Int(1)),
             "focus unchanged after Text variant"
         );
+    }
+
+    // -- find / self-filter ---------------------------------------------------
+
+    #[test]
+    fn list_box_self_filter_narrows_and_restores() {
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred = vec![];
+        let mut lb =
+            ListBox::new(Rect::new(0, 0, 14, 5), 1, None, None).with_find(FindMode::Filter);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            lb.new_list(
+                vec![
+                    "apple".into(),
+                    "banana".into(),
+                    "grape".into(),
+                    "orange".into(),
+                ],
+                &mut ctx,
+            );
+        }
+        assert_eq!(lb.lv.range, 4, "empty query shows the full source");
+
+        lb.lv.query = "an".into();
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            lb.on_query_changed(&mut ctx);
+        }
+        assert_eq!(lb.lv.range, 2, "only rows containing 'an' survive");
+        assert_eq!(lb.get_text(0), "banana");
+        assert_eq!(lb.get_text(1), "orange", "insertion order preserved");
+
+        lb.lv.query.clear();
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            lb.on_query_changed(&mut ctx);
+        }
+        assert_eq!(
+            lb.lv.range, 4,
+            "clearing the query restores the full source"
+        );
+        assert_eq!(lb.get_text(0), "apple");
+    }
+
+    #[test]
+    fn sorted_list_box_self_filter_keeps_sorted_order() {
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred = vec![];
+        let mut slb =
+            SortedListBox::new(Rect::new(0, 0, 14, 5), 1, None, None).with_find(FindMode::Filter);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            slb.new_list(
+                vec![
+                    "orange".into(),
+                    "apple".into(),
+                    "banana".into(),
+                    "grape".into(),
+                ],
+                &mut ctx,
+            );
+        }
+        // Sorted: apple, banana, grape, orange.
+        assert_eq!(slb.get_text(0), "apple");
+        assert_eq!(slb.lv.range, 4);
+
+        slb.lv.query = "an".into();
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            slb.on_query_changed(&mut ctx);
+        }
+        // Containing "an", in sorted order: banana, orange.
+        assert_eq!(slb.lv.range, 2);
+        assert_eq!(slb.get_text(0), "banana");
+        assert_eq!(slb.get_text(1), "orange");
+
+        slb.lv.query.clear();
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            slb.on_query_changed(&mut ctx);
+        }
+        assert_eq!(slb.lv.range, 4, "clearing restores the full sorted source");
+    }
+
+    #[test]
+    fn list_box_self_filter_clamps_focus() {
+        let mut out = VecDeque::new();
+        let mut timers = crate::timer::TimerQueue::new();
+        let mut deferred = vec![];
+        let mut lb =
+            ListBox::new(Rect::new(0, 0, 14, 5), 1, None, None).with_find(FindMode::Filter);
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            lb.new_list(
+                vec![
+                    "apple".into(),
+                    "banana".into(),
+                    "grape".into(),
+                    "orange".into(),
+                ],
+                &mut ctx,
+            );
+        }
+        lb.lv.focused = 3;
+        lb.lv.query = "an".into();
+        {
+            let mut ctx = make_ctx(&mut out, &mut timers, &mut deferred);
+            lb.on_query_changed(&mut ctx);
+        }
+        assert!(lb.lv.focused <= 1, "focus clamped into the narrowed range");
     }
 }

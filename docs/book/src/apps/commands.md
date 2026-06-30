@@ -94,9 +94,12 @@ The `source` is an optional [`ViewId`](../api/tvision_rs/view/struct.ViewId.html
 naming *which view the broadcast is about* — the resolvable successor to C++'s
 `infoPtr` void-pointer. It is a filter, not a payload: a receiver checks "is this
 broadcast from the scrollbar I care about?" and ignores the rest. `None` means
-the broadcast concerns no particular view. Because a leaf view cannot reach
-across the tree to its sibling, the event loop itself brokers the read/write
-between the two views when it applies the broadcast — see
+the broadcast concerns no particular view. List find-mode uses the same pattern:
+a list box broadcasts `Command::LIST_FIND_CHANGED` with its own `ViewId` as
+`source` whenever the typed query changes, so a host can mirror the query or
+kick off an async search. Because a leaf view cannot reach across the tree to its
+sibling, the event loop itself brokers the read/write between the two views when
+it applies the broadcast — see
 [Cross-view brokering & ViewId](../internals/brokering.md).
 
 ## Where to go next

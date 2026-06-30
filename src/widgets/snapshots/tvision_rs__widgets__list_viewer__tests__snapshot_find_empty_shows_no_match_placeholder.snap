@@ -1,0 +1,17 @@
+---
+source: src/widgets/list_viewer.rs
+expression: "render(&mut fake, 16, 3)"
+---
+size: 16x3
+cursor: hidden
+text:
+| No match: xyz  |
+|                |
+|                |
+attr:
+|aaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaa|
+|aaaaaaaaaaaaaaaa|
+legend:
+  . default
+  a fg=RGB(0,0,0) bg=RGB(0,170,170)

@@ -288,6 +288,11 @@ impl Command {
     /// Listen for this broadcast in a parent view to react to item selection
     /// (e.g. open a document, populate a detail pane).
     pub const LIST_ITEM_SELECTED: Command = Command("tv.list_item_selected");
+    /// The find query changed (incremental find-and-highlight); `source` is the
+    /// list viewer's `ViewId`. Mirrors [`SCROLL_BAR_CHANGED`]'s notify-by-
+    /// broadcast — a parent filters on `source` to drive an external search
+    /// (e.g. submit an async query and re-feed results).
+    pub const LIST_FIND_CHANGED: Command = Command("tv.list_find_changed");
     /// The terminal size changed — broadcast by `Program` after a SIGWINCH /
     /// crossterm resize event; all views resize in response.
     ///
