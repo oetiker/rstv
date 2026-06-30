@@ -933,6 +933,46 @@ pub fn handle_event<L: ListViewer + ?Sized>(this: &mut L, ev: &mut Event, ctx: &
     }
 }
 
+/// Draw `text` at `(x, y)` after skipping `indent` leading display columns,
+/// painting the half-open **char** range `[m0, m1)` in `accent` and the rest in
+/// `base`. Splits the row into before/match/after and emits up to three
+/// `put_str_part` calls, threading the horizontal-scroll `indent` budget across
+/// the pieces (a piece fully left of the scroll offset draws nothing and just
+/// consumes the budget). The split is by `char`, so it is multibyte-safe; the
+/// per-piece column accounting assumes one column per char (wide CJK glyphs in a
+/// horizontally-scrolled list are the one imperfect case — acceptable: the
+/// default has no h-scroll, and the classic lookup shares the assumption).
+#[allow(clippy::too_many_arguments)]
+fn draw_highlighted(
+    ctx: &mut DrawCtx,
+    x: i32,
+    y: i32,
+    text: &str,
+    indent: i32,
+    base: crate::color::Style,
+    accent: crate::color::Style,
+    m0: usize,
+    m1: usize,
+) {
+    let chars: Vec<char> = text.chars().collect();
+    let before: String = chars[..m0].iter().collect();
+    let matched: String = chars[m0..m1].iter().collect();
+    let after: String = chars[m1..].iter().collect();
+    let mut cx = x;
+    let mut rem = indent;
+    for (piece, style) in [(before, base), (matched, accent), (after, base)] {
+        let w = piece.chars().count() as i32;
+        if rem >= w {
+            // Entirely scrolled off to the left; just consume the indent budget.
+            rem -= w;
+        } else {
+            let drawn = ctx.put_str_part(cx, y, &piece, rem, style);
+            cx += drawn;
+            rem = 0;
+        }
+    }
+}
+
 /// Render the `range` items in `num_cols` columns. Reused verbatim by concrete
 /// list widgets; calls back into [`get_text`](ListViewer::get_text) /
 /// [`is_selected`](ListViewer::is_selected).
@@ -973,6 +1013,10 @@ pub fn draw<L: ListViewer + ?Sized>(this: &mut L, ctx: &mut DrawCtx) {
     };
     let divider_color = ctx.style(roles.divider);
     let empty_color = ctx.style(roles.normal_active);
+    // The find-highlight accent reuses the list's `selected` role: it pops on
+    // normal (cyan) and focused (green) rows; on a multi-select-selected row it
+    // matches the row colour (acceptable — selection already marks that row).
+    let accent = ctx.style(roles.selected);
 
     let size = lv.state.size;
     let indent = lv.indent; // the CACHE (not a live h-bar read).
@@ -1010,10 +1054,27 @@ pub fn draw<L: ListViewer + ?Sized>(this: &mut L, ctx: &mut DrawCtx) {
                 // Draw the item text from column +1, skipping `indent` leading
                 // columns (the horizontal scroll offset).
                 let text = this.get_text(item);
-                ctx.put_str_part(cur_col + 1, i, &text, indent, color);
+                match this.find_query().and_then(|q| find_match(&text, q)) {
+                    Some((m0, m1)) => {
+                        draw_highlighted(ctx, cur_col + 1, i, &text, indent, color, accent, m0, m1);
+                    }
+                    None => {
+                        ctx.put_str_part(cur_col + 1, i, &text, indent, color);
+                    }
+                }
             } else if i == 0 && j == 0 {
-                // Past the end of an empty list: the placeholder text.
-                ctx.put_str(cur_col + 1, i, EMPTY_TEXT, empty_color);
+                // Past the end of the list. With an active find query the empty
+                // view means "no row survived the filter" — show the query so an
+                // over-typed/mistyped query is always visible.
+                match this.find_query() {
+                    Some(q) => {
+                        let msg = format!("No match: {q}");
+                        ctx.put_str(cur_col + 1, i, &msg, empty_color);
+                    }
+                    None => {
+                        ctx.put_str(cur_col + 1, i, EMPTY_TEXT, empty_color);
+                    }
+                }
             }
 
             // The inter-column divider at the right edge of the cell.
@@ -1066,7 +1127,6 @@ pub const KB_SHIFT: u8 = 0x03;
 
 /// Case-insensitive equality of two `char`s. Cheap ASCII path first, then a
 /// Unicode `to_lowercase` sequence compare (per-char, so indices stay aligned).
-#[allow(dead_code)] // used by find_match; both consumed by later tasks (Task 3+)
 fn ci_char_eq(a: char, b: char) -> bool {
     a == b || a.eq_ignore_ascii_case(&b) || a.to_lowercase().eq(b.to_lowercase())
 }
@@ -1075,7 +1135,6 @@ fn ci_char_eq(a: char, b: char) -> bool {
 /// case-insensitive occurrence of `query` in `text`, or `None`. Returns `None`
 /// for an empty query or a query longer than `text`. Char-indexed: each query
 /// char matches exactly one text char, so the range is safe to slice by `char`.
-#[allow(dead_code)] // consumed by later tasks (Task 3+) and filtered_view
 pub(crate) fn find_match(text: &str, query: &str) -> Option<(usize, usize)> {
     let q: Vec<char> = query.chars().collect();
     if q.is_empty() {
@@ -1972,6 +2031,34 @@ mod tests {
         l.lv.state.state.selected = true;
         l.lv.state.state.active = true;
         insta::assert_snapshot!(render(&mut l, 12, 3));
+    }
+
+    #[test]
+    fn snapshot_find_highlights_first_match() {
+        let mut fake = FakeList::new(
+            Rect::new(0, 0, 14, 4),
+            1,
+            vec!["banana".into(), "orange".into(), "grape".into()],
+            None,
+            None,
+        );
+        fake.lv.state.state.selected = true;
+        fake.lv.state.state.active = true;
+        fake.lv.range = 3;
+        fake.lv.find_mode = FindMode::Highlight;
+        fake.lv.query = "an".into();
+        insta::assert_snapshot!(render(&mut fake, 14, 4));
+    }
+
+    #[test]
+    fn snapshot_find_empty_shows_no_match_placeholder() {
+        let mut fake = FakeList::new(Rect::new(0, 0, 16, 3), 1, vec![], None, None);
+        fake.lv.state.state.selected = true;
+        fake.lv.state.state.active = true;
+        fake.lv.range = 0;
+        fake.lv.find_mode = FindMode::Filter;
+        fake.lv.query = "xyz".into();
+        insta::assert_snapshot!(render(&mut fake, 16, 3));
     }
 
     // -- mouse-track: ListViewer ----------------------------------------------
