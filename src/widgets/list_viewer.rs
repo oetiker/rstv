@@ -99,6 +99,27 @@ pub(crate) struct LvTrack {
 }
 
 // ---------------------------------------------------------------------------
+// FindMode — opt-in incremental find-and-highlight mode
+// ---------------------------------------------------------------------------
+
+/// Find-and-highlight mode for a list. Opt-in; the default [`FindMode::Off`]
+/// keeps the classic type-to-search prefix lookup unchanged.
+///
+/// # Turbo Vision heritage
+///
+/// An rstv extension on top of the faithful `TListViewer` lookup — see the
+/// design note `docs/superpowers/specs/2026-06-30-listviewer-incremental-find-design.md`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FindMode {
+    /// Off — the classic prefix lookup (today's behaviour).
+    Off,
+    /// Query + highlight only; the host supplies and filters the rows.
+    Highlight,
+    /// Query + highlight + self-filter: the list narrows its own source set.
+    Filter,
+}
+
+// ---------------------------------------------------------------------------
 // ListViewerState — the data members
 // ---------------------------------------------------------------------------
 
@@ -163,6 +184,11 @@ pub struct ListViewerState {
     /// (between `MouseDown` and `MouseUp`), `None` otherwise. Guards the
     /// tracking arms against stray (untracked) events.
     pub(crate) track: Option<LvTrack>,
+    /// Find mode (opt-in). `Off` keeps the classic prefix lookup; the other
+    /// variants enable the accumulated-query find-and-highlight.
+    pub find_mode: FindMode,
+    /// The accumulated find query (find mode only; always empty when `Off`).
+    pub query: String,
 }
 
 impl ListViewerState {
@@ -203,6 +229,8 @@ impl ListViewerState {
             v_scroll_bar,
             abs_origin: Point::new(0, 0),
             track: None,
+            find_mode: FindMode::Off,
+            query: String::new(),
         }
     }
 }
@@ -318,6 +346,36 @@ pub trait ListViewer: View {
     /// Default: no-op. A file list overrides it to broadcast that the focused
     /// file changed.
     fn on_focus_changed(&mut self, _ctx: &mut Context) {}
+
+    /// The current non-empty find query, or `None` when find mode is `Off` or
+    /// the query is empty. The shared [`draw`] reads this to highlight matches;
+    /// hosts read it to mirror the query elsewhere.
+    fn find_query(&self) -> Option<&str> {
+        let lv = self.lv();
+        if lv.find_mode == FindMode::Off || lv.query.is_empty() {
+            None
+        } else {
+            Some(&lv.query)
+        }
+    }
+
+    /// Clear the find query — the host-callable Esc equivalent. No-op when find
+    /// is `Off` or the query is already empty; otherwise fires
+    /// [`Command::LIST_FIND_CHANGED`] and runs [`Self::on_query_changed`].
+    fn clear_find(&mut self, ctx: &mut Context) {
+        if self.lv().find_mode == FindMode::Off || self.lv().query.is_empty() {
+            return;
+        }
+        self.lv_mut().query.clear();
+        let source = self.lv().state.id();
+        ctx.broadcast(Command::LIST_FIND_CHANGED, source);
+        self.on_query_changed(ctx);
+    }
+
+    /// Hook fired after the find query changes (default: no-op). A self-filtering
+    /// concrete widget overrides it to re-derive its visible rows from its
+    /// source. Called by the shared `handle_event` and by [`Self::clear_find`].
+    fn on_query_changed(&mut self, _ctx: &mut Context) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -2250,5 +2308,17 @@ mod tests {
             matches!(deferred[1], Deferred::SetVisible(id, false) if id == v),
             "second op must be SetVisible(v_scroll_bar, false)"
         );
+    }
+
+    #[test]
+    fn find_query_reflects_mode_and_emptiness() {
+        let mut fake = FakeList::new(Rect::new(0, 0, 10, 5), 1, items(3), None, None);
+        assert_eq!(fake.find_query(), None, "Off → None");
+        fake.lv.find_mode = FindMode::Highlight;
+        assert_eq!(fake.find_query(), None, "empty query → None");
+        fake.lv.query = "ab".into();
+        assert_eq!(fake.find_query(), Some("ab"));
+        fake.lv.find_mode = FindMode::Off;
+        assert_eq!(fake.find_query(), None, "Off overrides a non-empty query");
     }
 }
