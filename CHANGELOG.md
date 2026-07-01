@@ -12,6 +12,14 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+### Changed
+
+### Fixed
+
+## 0.5.0 - 2026-07-01
+
+### New
+
 - `Role::OutlineNormalInactive`: a focus-aware surface for an `Outline`'s normal
   rows. A focused outline paints normal rows with `Role::OutlineNormal`, an
   unfocused one recedes to `Role::OutlineNormalInactive`, so splitter-pane
@@ -19,7 +27,6 @@ moves it into a dated, versioned section when a release is cut.
   `TOutlineViewer` (which has no active/inactive normal). In `classic_blue` it
   maps identically to `OutlineNormal`, so existing themes and snapshots are
   pixel-identical.
-
 ### Changed
 
 ### Fixed
