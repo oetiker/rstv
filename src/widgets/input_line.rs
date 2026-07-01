@@ -716,8 +716,15 @@ impl View for InputLine {
         // this value, mirroring the Button `abs_origin` pattern.
         self.abs_origin = ctx.origin();
         let size = self.state.size;
-        // Focused and unfocused both use the normal input role.
-        let color = ctx.style(Role::InputNormal);
+        // C++ TInputLine::draw picks the background via getColor(sfFocused ? 2 : 1):
+        // the active (focused) surface is cpInputLine[2] == Role::InputNormal, the
+        // passive (unfocused) surface is cpInputLine[1] == Role::InputPassive. In
+        // classic_blue both are identical; a theme may dim InputPassive to signal focus.
+        let color = ctx.style(if self.state.state.focused {
+            Role::InputNormal
+        } else {
+            Role::InputPassive
+        });
         let arrow = ctx.style(Role::InputArrow);
         let selected = ctx.style(Role::InputSelected);
         let left_arrow = ctx.glyphs().input_left_arrow;
@@ -2428,5 +2435,50 @@ mod tests {
         // Clearing it removes the constraint.
         line.set_validator(None);
         assert!(line.validator.is_none());
+    }
+
+    // -- focus-aware background --------------------------------------------
+
+    /// Render `il` with `theme` into a fresh buffer and return the background
+    /// colour of the fill cell at column 8 (past the "hello" text, inside the
+    /// row fill, away from any selection highlight).
+    fn fill_bg(il: &mut InputLine, theme: &Theme) -> crate::color::Color {
+        let size = il.state.size;
+        let mut buf = Buffer::new(size.x as u16, size.y as u16);
+        let bounds = il.state.get_bounds();
+        let mut dc = DrawCtx::new(&mut buf, theme, bounds, bounds.a);
+        il.draw(&mut dc);
+        buf.get(8, 0).style().bg
+    }
+
+    /// InputLine honours `sfFocused` for its background: a focused field uses
+    /// `Role::InputNormal`, an unfocused one `Role::InputPassive`. Uses a theme
+    /// where the two roles differ so the difference is observable (classic_blue
+    /// makes them identical).
+    #[test]
+    fn background_is_focus_aware() {
+        use crate::color::{Color, Style};
+
+        let mut theme = Theme::classic_blue();
+        // Dim the passive surface to a distinct colour to prove the predicate.
+        theme.set_style(
+            Role::InputPassive,
+            Style::new(Color::Bios(0x7), Color::Bios(0x4)),
+        );
+        let normal_bg = theme.style(Role::InputNormal).bg;
+        let passive_bg = theme.style(Role::InputPassive).bg;
+        assert_ne!(
+            normal_bg, passive_bg,
+            "test theme must distinguish the roles"
+        );
+
+        let mut il = field(12, "hello");
+        il.first_pos = 0;
+
+        il.state.state.focused = true;
+        assert_eq!(fill_bg(&mut il, &theme), normal_bg);
+
+        il.state.state.focused = false;
+        assert_eq!(fill_bg(&mut il, &theme), passive_bg);
     }
 }

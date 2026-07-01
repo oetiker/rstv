@@ -5,6 +5,32 @@
 > / what's next" lives in [`docs/HANDOVER.md`](file:///home/oetiker/checkouts/rstv/docs/HANDOVER.md).
 > Add a new section at the top each session; do not rewrite history.
 
+## Focus-aware surfaces for InputLine and Outline (2026-07-01)
+
+Two widgets now signal keyboard focus through their background surface, for the
+benefit of splitter-pane layouts (downstream: edaptor's three-pane UI).
+
+**`InputLine` — a fidelity fix.** C++ `TInputLine::draw` selects its background
+via `getColor(sfFocused ? 2 : 1)` (palette `cpInputLine`: entry 1 = passive,
+entry 2 = active). The rstv port had collapsed this to always `Role::InputNormal`,
+ignoring `sfFocused`. Restored: focused → `Role::InputNormal` (`cpInputLine[2]`),
+unfocused → the new `Role::InputPassive` (`cpInputLine[1]`).
+
+**`Outline` — a documented deviation.** C++ `TOutlineViewer` has no
+active/inactive normal-row colour. We add one: normal rows use `Role::OutlineNormal`
+when the outline is focused, else the new `Role::OutlineNormalInactive`. The
+focused-node colour already keyed on `state.focused`.
+
+`ListViewer` was left faithful (`selected && active`) — unchanged.
+
+`ROLE_COUNT` went 75 → 77; the two new roles were **appended** (indices 75, 76)
+so no existing role renumbers. In `classic_blue` both new roles map to the same
+bios attrs as their active siblings, so every existing snapshot/consumer renders
+pixel-identical; the new behaviour is only visible when a theme sets the inactive
+roles to distinct colours. New unit tests build such a theme and assert the
+predicate directly (snapshots can't see identical attrs). Whole suite green, no
+snapshots regenerated.
+
 ## snake example: growing tail; synchronized output (DEC 2026); WezTerm artifact run to ground (2026-06-21/22)
 
 **`snake` example — a growing tail.** The frameless `snake` example now leaves a

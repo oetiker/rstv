@@ -340,6 +340,11 @@ pub enum Role {
     /// white on blue (`0x1F`), resolved from `cpInputLine[1]=cpInputLine[2]=0x13
     /// → cpGrayDialog[19]=0x32 → cpAppColor[50]=0x1F`.
     InputNormal,
+    /// An input line's background when it does NOT hold focus (C++
+    /// `cpInputLine[1]`, the "passive" entry — `TInputLine::draw` selects it via
+    /// `getColor(sfFocused ? 2 : 1)`). In `classic_blue` it equals
+    /// [`InputNormal`](Role::InputNormal); a theme may dim it to signal focus.
+    InputPassive,
     /// An [`InputLine`](crate::widgets::InputLine)'s selection highlight —
     /// the text region between the cursor and the mark anchor. In
     /// `classic_blue` this is white on green (`0x2F`), resolved from
@@ -435,6 +440,11 @@ pub enum Role {
     /// [`ov_draw`](crate::widgets::outline::ov_draw) for every row that is
     /// neither focused nor selected.
     OutlineNormal,
+    /// An outline's normal-row background when the outline does NOT hold focus.
+    /// A tvision-rs deviation (C++ `TOutlineViewer` has no active/inactive normal):
+    /// lets splitter-pane layouts dim unfocused trees. In `classic_blue` it
+    /// equals [`OutlineNormal`](Role::OutlineNormal).
+    OutlineNormalInactive,
     /// Style for the focused row of an outline viewer when the viewer has
     /// keyboard focus. Applied to both the graph prefix and the node text,
     /// regardless of whether the node is expanded or collapsed.
@@ -454,7 +464,7 @@ pub enum Role {
 }
 
 /// Number of [`Role`] variants — the fixed length of [`Theme`]'s style array.
-pub(crate) const ROLE_COUNT: usize = 75;
+pub(crate) const ROLE_COUNT: usize = 77;
 
 /// All role variants in index order (appended families grouped semantically) — used by the theme editor.
 pub(crate) const ALL: [Role; ROLE_COUNT] = [
@@ -499,6 +509,7 @@ pub(crate) const ALL: [Role; ROLE_COUNT] = [
     Role::LabelNormalShortcut,
     Role::LabelLightShortcut,
     Role::InputNormal,
+    Role::InputPassive,
     Role::InputSelected,
     Role::InputArrow,
     Role::ScrollerNormal,
@@ -517,6 +528,7 @@ pub(crate) const ALL: [Role; ROLE_COUNT] = [
     Role::StatusSelDisabled,
     Role::InfoPane,
     Role::OutlineNormal,
+    Role::OutlineNormalInactive,
     Role::OutlineFocused,
     Role::OutlineSelected,
     Role::OutlineNotExpanded,
@@ -593,6 +605,7 @@ impl Role {
             Role::LabelNormalShortcut => "LabelNormSc",
             Role::LabelLightShortcut => "LabelLightSc",
             Role::InputNormal => "InputNormal",
+            Role::InputPassive => "InputPassive",
             Role::InputSelected => "InputSelected",
             Role::InputArrow => "InputArrow",
             Role::ScrollerNormal => "ScrollerNormal",
@@ -611,6 +624,7 @@ impl Role {
             Role::StatusSelDisabled => "StatusSelDisab",
             Role::InfoPane => "InfoPane",
             Role::OutlineNormal => "OutlineNormal",
+            Role::OutlineNormalInactive => "OutlineNormInact",
             Role::OutlineFocused => "OutlineFocused",
             Role::OutlineSelected => "OutlineSelected",
             Role::OutlineNotExpanded => "OutlineNotExpnd",
@@ -665,6 +679,7 @@ impl Role {
             Role::LabelNormalShortcut => 38,
             Role::LabelLightShortcut => 39,
             Role::InputNormal => 40,
+            Role::InputPassive => 75,
             Role::InputSelected => 41,
             Role::InputArrow => 42,
             Role::ScrollerNormal => 43,
@@ -683,6 +698,7 @@ impl Role {
             Role::StatusSelDisabled => 55,
             Role::InfoPane => 57,
             Role::OutlineNormal => 58,
+            Role::OutlineNormalInactive => 76,
             Role::OutlineFocused => 59,
             Role::OutlineSelected => 60,
             Role::OutlineNotExpanded => 61,
@@ -1114,6 +1130,7 @@ impl Theme {
         // states: the classic white-on-blue input field over the gray dialog
         // surface.
         set(&mut styles, Role::InputNormal, 0xF, 0x1); // white on blue (chain: cpInputLine[1]=cpInputLine[2]=0x13 → cpGrayDialog[19]=0x32 → cpAppColor[50]=0x1F)
+        set(&mut styles, Role::InputPassive, 0xF, 0x1); // == InputNormal (C++ cpInputLine[1]==cpInputLine[2]==0x13); themes may dim to signal focus
         set(&mut styles, Role::InputSelected, 0xF, 0x2); // white on green (chain: cpInputLine[3]=0x14 → cpGrayDialog[20]=0x33 → cpAppColor[51]=0x2F)
         set(&mut styles, Role::InputArrow, 0xA, 0x1); // lightgreen on blue (chain: cpInputLine[4]=0x15 → cpGrayDialog[21]=0x34 → cpAppColor[52]=0x1A)
 
@@ -1156,6 +1173,7 @@ impl Theme {
         // realistic owner (same owner pick as the ScrollerNormal precedent above):
         // cpOutlineViewer → cpBlueWindow → cpAppColor.
         set(&mut styles, Role::OutlineNormal, 0xE, 0x1); // yellow on blue (chain: cpOutlineViewer[1]=0x06 → cpBlueWindow[6]=0x0D → cpAppColor[13]=0x1E)
+        set(&mut styles, Role::OutlineNormalInactive, 0xE, 0x1); // == OutlineNormal; deviation so themes can dim unfocused outlines
         set(&mut styles, Role::OutlineFocused, 0x1, 0x7); // blue on lightgray (chain: cpOutlineViewer[2]=0x07 → cpBlueWindow[7]=0x0E → cpAppColor[14]=0x71)
         set(&mut styles, Role::OutlineSelected, 0xA, 0x1); // lightgreen on blue (chain: cpOutlineViewer[3]=0x03 → cpBlueWindow[3]=0x0A → cpAppColor[10]=0x1A)
         set(&mut styles, Role::OutlineNotExpanded, 0xF, 0x1); // white on blue (chain: cpOutlineViewer[4]=0x08 → cpBlueWindow[8]=0x0F → cpAppColor[15]=0x1F)
