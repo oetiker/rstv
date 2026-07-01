@@ -770,7 +770,14 @@ pub fn ov_draw<L: OutlineViewer + ?Sized>(this: &mut L, ctx: &mut DrawCtx) {
     let foc = this.ov().foc;
     let focused_state = this.ov().state.state.focused;
 
-    let nrm_color = ctx.style(Role::OutlineNormal);
+    // Normal-row surface is focus-aware (a tvision-rs deviation from C++, which has
+    // no active/inactive normal): a focused outline uses OutlineNormal, an unfocused
+    // one recedes to OutlineNormalInactive. classic_blue maps them identically.
+    let nrm_color = ctx.style(if focused_state {
+        Role::OutlineNormal
+    } else {
+        Role::OutlineNormalInactive
+    });
     let focused_color = ctx.style(Role::OutlineFocused);
     let selected_color = ctx.style(Role::OutlineSelected);
     let not_expanded_color = ctx.style(Role::OutlineNotExpanded);
@@ -2006,6 +2013,50 @@ mod tests {
         // not NotExpanded (darkgray-on-blue) — the snapshot legend makes this
         // visible and a regression to `not_expanded_color` would change it.
         insta::assert_snapshot!(render_outline(&mut outline, 20, 5));
+    }
+
+    /// Render `outline` with `theme` into a fresh buffer and return the
+    /// background colour of the cell at `(x, y)`.
+    fn cell_bg(outline: &mut Outline, theme: &Theme, x: u16, y: u16) -> crate::color::Color {
+        let bounds = outline.state().get_bounds();
+        let mut buf = Buffer::new(bounds.b.x as u16, bounds.b.y as u16);
+        let mut dc = DrawCtx::new(&mut buf, theme, bounds, bounds.a);
+        outline.draw(&mut dc);
+        buf.get(x, y).style().bg
+    }
+
+    /// The normal-row surface is focus-aware (a tvision-rs deviation): a focused
+    /// outline paints normal rows with `Role::OutlineNormal`, an unfocused one
+    /// with `Role::OutlineNormalInactive`. Uses a theme where the two roles
+    /// differ so the difference is observable (classic_blue makes them equal).
+    #[test]
+    fn normal_row_background_is_focus_aware() {
+        use crate::color::{Color, Style};
+
+        let mut theme = Theme::classic_blue();
+        // Dim the inactive surface to a distinct colour to prove the predicate.
+        theme.set_style(
+            Role::OutlineNormalInactive,
+            Style::new(Color::Bios(0x7), Color::Bios(0x4)),
+        );
+        let normal_bg = theme.style(Role::OutlineNormal).bg;
+        let inactive_bg = theme.style(Role::OutlineNormalInactive).bg;
+        assert_ne!(
+            normal_bg, inactive_bg,
+            "test theme must distinguish the roles"
+        );
+
+        // Root "Animals" (pos 0, focused) with normal children "Cats"/"Dogs".
+        let mut outline = Outline::new(Rect::new(0, 0, 20, 5), None, None, Some(animals_tree()));
+        outline.ov_mut().foc = 0;
+        outline.ov_mut().limit = Point::new(10, 3);
+
+        // Read a blank fill cell on the "Cats" row (position 1, a normal row).
+        outline.ov_mut().state.state.focused = true;
+        assert_eq!(cell_bg(&mut outline, &theme, 15, 1), normal_bg);
+
+        outline.ov_mut().state.state.focused = false;
+        assert_eq!(cell_bg(&mut outline, &theme, 15, 1), inactive_bg);
     }
 
     // -- mouse-track: Outline -------------------------------------------------

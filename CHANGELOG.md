@@ -12,9 +12,24 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+- `Role::OutlineNormalInactive`: a focus-aware surface for an `Outline`'s normal
+  rows. A focused outline paints normal rows with `Role::OutlineNormal`, an
+  unfocused one recedes to `Role::OutlineNormalInactive`, so splitter-pane
+  layouts can dim unfocused trees. This is a documented deviation from C++
+  `TOutlineViewer` (which has no active/inactive normal). In `classic_blue` it
+  maps identically to `OutlineNormal`, so existing themes and snapshots are
+  pixel-identical.
+
 ### Changed
 
 ### Fixed
+
+- `InputLine` now honours `sfFocused` when choosing its background, restoring
+  the C++ `TInputLine::draw` fidelity (`getColor(sfFocused ? 2 : 1)`): a focused
+  field uses `Role::InputNormal` (`cpInputLine[2]`), an unfocused one the new
+  `Role::InputPassive` (`cpInputLine[1]`). Previously both states used
+  `InputNormal`. In `classic_blue` the two roles are identical, so there is no
+  visual change; a theme may now dim `InputPassive` to signal focus.
 
 ## 0.4.0 - 2026-06-30
 
