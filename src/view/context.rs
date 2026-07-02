@@ -622,6 +622,11 @@ pub struct DrawCtx<'a> {
     /// View-local `(0, 0)` maps to this absolute screen position.
     origin: Point,
     theme: &'a Theme,
+    /// The owning pane is the focused one. Set by `Group::draw` from the owning
+    /// group's own `focused`; content widgets pick their surface from it. Unlike
+    /// `active` (window-wide) this is per-pane. rstv deviation — C++ focus is
+    /// per-window, with no nested panes.
+    owner_active: bool,
 }
 
 impl<'a> DrawCtx<'a> {
@@ -639,6 +644,7 @@ impl<'a> DrawCtx<'a> {
             clip,
             origin,
             theme,
+            owner_active: true,
         }
     }
 
@@ -653,6 +659,16 @@ impl<'a> DrawCtx<'a> {
     /// switch themes without touching widget code.
     pub fn style(&self, role: Role) -> Style {
         self.theme.style(role)
+    }
+
+    /// Whether the owning pane is the focused one (see [`DrawCtx`] `owner_active`).
+    pub fn owner_active(&self) -> bool {
+        self.owner_active
+    }
+
+    /// Set the owning-pane-active flag for this context. Called by `Group::draw`.
+    pub fn set_owner_active(&mut self, v: bool) {
+        self.owner_active = v;
     }
 
     /// The theme's glyph holder.
@@ -917,6 +933,7 @@ impl<'a> DrawCtx<'a> {
             clip,
             origin: self.origin + area_local.a,
             theme: self.theme,
+            owner_active: self.owner_active,
         }
     }
 }

@@ -186,16 +186,20 @@ pub enum Role {
     /// while a mouse button is held down. In `classic_blue` this is white on
     /// green (`0x2F`), matching [`Focused`](Role::Focused).
     Pressed,
-    /// A normal item in an **active** (focused) [`ListViewer`](crate::widgets::ListViewer)
-    /// — and also the empty-list fill. In `classic_blue` this is black on cyan
-    /// (`0x30`), resolved from `cpListViewer[1]=0x1A → cpGrayDialog[26]=0x39
-    /// → cpAppColor[57]=0x30`.
-    ListNormalActive,
-    /// A normal item in an **inactive** (unfocused)
-    /// [`ListViewer`](crate::widgets::ListViewer). In `classic_blue` this
-    /// matches [`ListNormalActive`](Role::ListNormalActive) — both palette
-    /// indices resolve to the same dialog entry (`0x1A`).
-    ListNormalInactive,
+    /// A normal item's row surface in a [`ListViewer`](crate::widgets::ListViewer)
+    /// whose **owning pane** is active (see
+    /// [`DrawCtx::owner_active`](crate::view::DrawCtx::owner_active)) — and also
+    /// the empty-list fill. In `classic_blue` this is black on cyan (`0x30`),
+    /// resolved from `cpListViewer[1]=0x1A → cpGrayDialog[26]=0x39 →
+    /// cpAppColor[57]=0x30`.
+    ListNormal,
+    /// A normal item's row surface in a [`ListViewer`](crate::widgets::ListViewer)
+    /// whose owning pane is inactive — recedes as a unit with the rest of the
+    /// pane's content, independent of whether this particular list is the
+    /// current control. In `classic_blue` this matches
+    /// [`ListNormal`](Role::ListNormal) — both palette indices resolve to the
+    /// same dialog entry (`0x1A`).
+    ListInactive,
     /// The focused (cursor) item of an active
     /// [`ListViewer`](crate::widgets::ListViewer). In `classic_blue` this is
     /// white on green (`0x2F`), resolved from `cpListViewer[3]=0x1B →
@@ -340,11 +344,15 @@ pub enum Role {
     /// white on blue (`0x1F`), resolved from `cpInputLine[1]=cpInputLine[2]=0x13
     /// → cpGrayDialog[19]=0x32 → cpAppColor[50]=0x1F`.
     InputNormal,
-    /// An input line's background when it does NOT hold focus (C++
-    /// `cpInputLine[1]`, the "passive" entry — `TInputLine::draw` selects it via
-    /// `getColor(sfFocused ? 2 : 1)`). In `classic_blue` it equals
-    /// [`InputNormal`](Role::InputNormal); a theme may dim it to signal focus.
-    InputPassive,
+    /// An input line's background when its **owning pane** is inactive (see
+    /// [`DrawCtx::owner_active`](crate::view::DrawCtx::owner_active)) — every
+    /// field in the pane recedes together, regardless of which field itself
+    /// holds focus. Heritage: this is the C++ `cpInputLine[1]` slot
+    /// (`TInputLine::draw` selects it via `getColor(sfFocused ? 2 : 1)`, the
+    /// unfocused entry); rstv repurposes it onto the owning-pane axis. In
+    /// `classic_blue` it equals [`InputNormal`](Role::InputNormal); a theme may
+    /// dim it to signal an inactive pane.
+    InputInactive,
     /// An [`InputLine`](crate::widgets::InputLine)'s selection highlight —
     /// the text region between the cursor and the mark anchor. In
     /// `classic_blue` this is white on green (`0x2F`), resolved from
@@ -440,11 +448,13 @@ pub enum Role {
     /// [`ov_draw`](crate::widgets::outline::ov_draw) for every row that is
     /// neither focused nor selected.
     OutlineNormal,
-    /// An outline's normal-row background when the outline does NOT hold focus.
-    /// A tvision-rs deviation (C++ `TOutlineViewer` has no active/inactive normal):
-    /// lets splitter-pane layouts dim unfocused trees. In `classic_blue` it
-    /// equals [`OutlineNormal`](Role::OutlineNormal).
-    OutlineNormalInactive,
+    /// An outline's normal-row background when its **owning pane** is inactive
+    /// (see [`DrawCtx::owner_active`](crate::view::DrawCtx::owner_active)),
+    /// regardless of the outline's own focus. A tvision-rs deviation (C++
+    /// `TOutlineViewer` has no active/inactive normal): lets splitter-pane
+    /// layouts dim unfocused trees. In `classic_blue` it equals
+    /// [`OutlineNormal`](Role::OutlineNormal).
+    OutlineInactive,
     /// Style for the focused row of an outline viewer when the viewer has
     /// keyboard focus. Applied to both the graph prefix and the node text,
     /// regardless of whether the node is expanded or collapsed.
@@ -479,8 +489,8 @@ pub(crate) const ALL: [Role; ROLE_COUNT] = [
     Role::Focused,
     Role::Disabled,
     Role::Pressed,
-    Role::ListNormalActive,
-    Role::ListNormalInactive,
+    Role::ListNormal,
+    Role::ListInactive,
     Role::ListFocused,
     Role::ListSelected,
     Role::ListDivider,
@@ -509,7 +519,7 @@ pub(crate) const ALL: [Role; ROLE_COUNT] = [
     Role::LabelNormalShortcut,
     Role::LabelLightShortcut,
     Role::InputNormal,
-    Role::InputPassive,
+    Role::InputInactive,
     Role::InputSelected,
     Role::InputArrow,
     Role::ScrollerNormal,
@@ -528,7 +538,7 @@ pub(crate) const ALL: [Role; ROLE_COUNT] = [
     Role::StatusSelDisabled,
     Role::InfoPane,
     Role::OutlineNormal,
-    Role::OutlineNormalInactive,
+    Role::OutlineInactive,
     Role::OutlineFocused,
     Role::OutlineSelected,
     Role::OutlineNotExpanded,
@@ -575,8 +585,8 @@ impl Role {
             Role::Focused => "Focused",
             Role::Disabled => "Disabled",
             Role::Pressed => "Pressed",
-            Role::ListNormalActive => "ListNormalActive",
-            Role::ListNormalInactive => "ListNormalInactv",
+            Role::ListNormal => "ListNormal",
+            Role::ListInactive => "ListInactive",
             Role::ListFocused => "ListFocused",
             Role::ListSelected => "ListSelected",
             Role::ListDivider => "ListDivider",
@@ -605,7 +615,7 @@ impl Role {
             Role::LabelNormalShortcut => "LabelNormSc",
             Role::LabelLightShortcut => "LabelLightSc",
             Role::InputNormal => "InputNormal",
-            Role::InputPassive => "InputPassive",
+            Role::InputInactive => "InputInactive",
             Role::InputSelected => "InputSelected",
             Role::InputArrow => "InputArrow",
             Role::ScrollerNormal => "ScrollerNormal",
@@ -624,7 +634,7 @@ impl Role {
             Role::StatusSelDisabled => "StatusSelDisab",
             Role::InfoPane => "InfoPane",
             Role::OutlineNormal => "OutlineNormal",
-            Role::OutlineNormalInactive => "OutlineNormInact",
+            Role::OutlineInactive => "OutlineInactive",
             Role::OutlineFocused => "OutlineFocused",
             Role::OutlineSelected => "OutlineSelected",
             Role::OutlineNotExpanded => "OutlineNotExpnd",
@@ -649,8 +659,8 @@ impl Role {
             Role::Focused => 8,
             Role::Disabled => 9,
             Role::Pressed => 10,
-            Role::ListNormalActive => 11,
-            Role::ListNormalInactive => 12,
+            Role::ListNormal => 11,
+            Role::ListInactive => 12,
             Role::ListFocused => 13,
             Role::ListSelected => 14,
             Role::ListDivider => 15,
@@ -679,7 +689,7 @@ impl Role {
             Role::LabelNormalShortcut => 38,
             Role::LabelLightShortcut => 39,
             Role::InputNormal => 40,
-            Role::InputPassive => 75,
+            Role::InputInactive => 75,
             Role::InputSelected => 41,
             Role::InputArrow => 42,
             Role::ScrollerNormal => 43,
@@ -698,7 +708,7 @@ impl Role {
             Role::StatusSelDisabled => 55,
             Role::InfoPane => 57,
             Role::OutlineNormal => 58,
-            Role::OutlineNormalInactive => 76,
+            Role::OutlineInactive => 76,
             Role::OutlineFocused => 59,
             Role::OutlineSelected => 60,
             Role::OutlineNotExpanded => 61,
@@ -1073,8 +1083,8 @@ impl Theme {
         // gray dialog — the realistic list-box case: cpListViewer → cpGrayDialog →
         // cpAppColor. Indices 1 and 2 map to the same dialog entry 26, so the
         // active and inactive normals coincide.
-        set(&mut styles, Role::ListNormalActive, 0x0, 0x3); // black on cyan (chain: cpListViewer[1]=0x1A → cpGrayDialog[26]=0x39 → cpAppColor[57]=0x30)
-        set(&mut styles, Role::ListNormalInactive, 0x0, 0x3); // black on cyan (chain: cpListViewer[2]=0x1A → cpGrayDialog[26]=0x39 → cpAppColor[57]=0x30)
+        set(&mut styles, Role::ListNormal, 0x0, 0x3); // black on cyan (chain: cpListViewer[1]=0x1A → cpGrayDialog[26]=0x39 → cpAppColor[57]=0x30)
+        set(&mut styles, Role::ListInactive, 0x0, 0x3); // black on cyan (chain: cpListViewer[2]=0x1A → cpGrayDialog[26]=0x39 → cpAppColor[57]=0x30)
         set(&mut styles, Role::ListFocused, 0xF, 0x2); // white on green (chain: cpListViewer[3]=0x1B → cpGrayDialog[27]=0x3A → cpAppColor[58]=0x2F)
         set(&mut styles, Role::ListSelected, 0xE, 0x3); // yellow on cyan (chain: cpListViewer[4]=0x1C → cpGrayDialog[28]=0x3B → cpAppColor[59]=0x3E)
         set(&mut styles, Role::ListDivider, 0x1, 0x3); // blue on cyan (chain: cpListViewer[5]=0x1D → cpGrayDialog[29]=0x3C → cpAppColor[60]=0x31)
@@ -1130,7 +1140,7 @@ impl Theme {
         // states: the classic white-on-blue input field over the gray dialog
         // surface.
         set(&mut styles, Role::InputNormal, 0xF, 0x1); // white on blue (chain: cpInputLine[1]=cpInputLine[2]=0x13 → cpGrayDialog[19]=0x32 → cpAppColor[50]=0x1F)
-        set(&mut styles, Role::InputPassive, 0xF, 0x1); // == InputNormal (C++ cpInputLine[1]==cpInputLine[2]==0x13); themes may dim to signal focus
+        set(&mut styles, Role::InputInactive, 0xF, 0x1); // == InputNormal (C++ cpInputLine[1]==cpInputLine[2]==0x13); themes may dim to signal focus
         set(&mut styles, Role::InputSelected, 0xF, 0x2); // white on green (chain: cpInputLine[3]=0x14 → cpGrayDialog[20]=0x33 → cpAppColor[51]=0x2F)
         set(&mut styles, Role::InputArrow, 0xA, 0x1); // lightgreen on blue (chain: cpInputLine[4]=0x15 → cpGrayDialog[21]=0x34 → cpAppColor[52]=0x1A)
 
@@ -1173,7 +1183,7 @@ impl Theme {
         // realistic owner (same owner pick as the ScrollerNormal precedent above):
         // cpOutlineViewer → cpBlueWindow → cpAppColor.
         set(&mut styles, Role::OutlineNormal, 0xE, 0x1); // yellow on blue (chain: cpOutlineViewer[1]=0x06 → cpBlueWindow[6]=0x0D → cpAppColor[13]=0x1E)
-        set(&mut styles, Role::OutlineNormalInactive, 0xE, 0x1); // == OutlineNormal; deviation so themes can dim unfocused outlines
+        set(&mut styles, Role::OutlineInactive, 0xE, 0x1); // == OutlineNormal; deviation so themes can dim unfocused outlines
         set(&mut styles, Role::OutlineFocused, 0x1, 0x7); // blue on lightgray (chain: cpOutlineViewer[2]=0x07 → cpBlueWindow[7]=0x0E → cpAppColor[14]=0x71)
         set(&mut styles, Role::OutlineSelected, 0xA, 0x1); // lightgreen on blue (chain: cpOutlineViewer[3]=0x03 → cpBlueWindow[3]=0x0A → cpAppColor[10]=0x1A)
         set(&mut styles, Role::OutlineNotExpanded, 0xF, 0x1); // white on blue (chain: cpOutlineViewer[4]=0x08 → cpBlueWindow[8]=0x0F → cpAppColor[15]=0x1F)

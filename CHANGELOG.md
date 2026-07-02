@@ -12,9 +12,32 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+- `DrawCtx::owner_active()` — a draw-time signal (each `Group` fans its own
+  `focused` to its children) telling a content widget whether its owning pane is
+  the focused one. Content widgets pick their surface from it, so a pane's
+  content recedes as a unit when the pane loses focus — fixing multi-field form
+  panes and multi-list widgets (e.g. a two-list shuttle) that previously could
+  not dim as a whole. rstv deviation: C++ Turbo Vision focus is per-window, with
+  no nested panes.
+
 ### Changed
 
-### Fixed
+- Renamed surface roles onto the owning-pane axis: `ListNormalActive` →
+  `ListNormal`, `ListNormalInactive` → `ListInactive`, `OutlineNormalInactive` →
+  `OutlineInactive`, `InputPassive` → `InputInactive`. In `classic_blue` each
+  `*Inactive` role resolves identically to its active counterpart, so unthemed
+  rendering is pixel-identical; a theme may dim the `*Inactive` roles so an
+  inactive pane recedes.
+- `ListViewer` (and `ListBox` / `FileList` / `DirListBox` / `HistoryViewer`) now
+  keys its current-item highlight on the list's own `state.focused` and its row
+  surface on `owner_active`, fixing a list that is current in an unfocused
+  splitter/shuttle pane still drawing bright/active.
+- `Outline` and `InputLine` now pick their row/background surface from
+  `owner_active` (the owning pane's focus) instead of the widget's own
+  `state.focused`, so their content recedes with an inactive pane.
+
+All `classic_blue` snapshots are unchanged — every `*Inactive` role resolves to
+its active colour.
 
 ## 0.5.0 - 2026-07-01
 

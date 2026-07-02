@@ -904,7 +904,7 @@ impl View for DirBox {
         let base = ctx.style(if active {
             Role::ListFocused
         } else {
-            Role::ListNormalInactive
+            Role::ListInactive
         });
         let mark = ctx.style(Role::ListSelected);
 

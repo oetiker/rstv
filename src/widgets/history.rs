@@ -249,8 +249,8 @@ impl HistoryViewer {
     /// [`ListViewer`] painter. Lives on `HistoryViewer` (not in `list_viewer.rs`)
     /// so that the base module has no dependency on history-specific roles.
     pub const LIST_ROLES: crate::widgets::ListRoles = crate::widgets::ListRoles {
-        normal_active: crate::theme::Role::HistoryViewerNormal,
-        normal_inactive: crate::theme::Role::HistoryViewerNormal,
+        normal: crate::theme::Role::HistoryViewerNormal,
+        inactive: crate::theme::Role::HistoryViewerNormal,
         focused: crate::theme::Role::HistoryViewerFocused,
         selected: crate::theme::Role::HistoryViewerNormal,
         divider: crate::theme::Role::HistoryViewerNormal,
@@ -1535,6 +1535,7 @@ mod viewer_tests {
         // Activate so the focused row renders in the distinct focused color.
         hv.lv.state.state.selected = true;
         hv.lv.state.state.active = true;
+        hv.lv.state.state.focused = true;
 
         // Call setup — None bars means the hbar block is skipped and no ViewId
         // resolution is needed, so the deferred queue stays empty.
