@@ -705,6 +705,7 @@ mod tests {
         let mut lb = ListBox::new(Rect::new(0, 0, 14, 5), 1, None, None);
         lb.lv.state.state.selected = true;
         lb.lv.state.state.active = true;
+        lb.lv.state.state.focused = true;
         // Set items directly (no Context needed for draw test; range set manually).
         lb.items = vec![
             "apple".into(),

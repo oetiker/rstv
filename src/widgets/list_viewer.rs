@@ -975,9 +975,13 @@ fn draw_highlighted(
 /// list widgets; calls back into [`get_text`](ListViewer::get_text) /
 /// [`is_selected`](ListViewer::is_selected).
 ///
-/// Draws the active/inactive color matrix, the per-cell item/column layout, the
-/// `indent` column-skip (the cached horizontal-bar value), the `<empty>`
-/// placeholder, the `│` divider, and the focused-cell cursor.
+/// Draws the two-axis color matrix — the row surface (normal/inactive) tracks
+/// [`DrawCtx::owner_active`](crate::view::DrawCtx::owner_active) (is the owning
+/// pane focused?), while the current-item highlight (focused/selected) tracks
+/// this list's own `state.focused` (is *this* list the focused control?) — the
+/// per-cell item/column layout, the `indent` column-skip (the cached
+/// horizontal-bar value), the `<empty>` placeholder, the `│` divider, and the
+/// focused-cell cursor.
 ///
 /// Also caches `abs_origin` for the mouse-track capture.
 ///
@@ -992,22 +996,21 @@ pub fn draw<L: ListViewer + ?Sized>(this: &mut L, ctx: &mut DrawCtx) {
     this.lv_mut().abs_origin = ctx.origin();
     let lv = this.lv();
     let st = &lv.state.state;
-    let active = st.selected && st.active;
+    let owner_active = ctx.owner_active(); // surface axis: is my pane focused?
+    let list_focused = st.focused; // highlight axis: am I the focused list?
 
     // Color matrix via the class's role quintet (list_roles).
     let roles = this.list_roles();
-    let (normal, selected, focused_color) = if active {
-        (
-            ctx.style(roles.normal),        // normal item
-            ctx.style(roles.selected),      // selected item
-            Some(ctx.style(roles.focused)), // focused item
-        )
+    let normal = ctx.style(if owner_active {
+        roles.normal
     } else {
-        (
-            ctx.style(roles.inactive), // normal item (inactive list)
-            ctx.style(roles.selected), // selected item
-            None,                      // focused color unused
-        )
+        roles.inactive
+    });
+    let selected = ctx.style(roles.selected);
+    let focused_color = if list_focused {
+        Some(ctx.style(roles.focused))
+    } else {
+        None
     };
     let divider_color = ctx.style(roles.divider);
     let empty_color = ctx.style(roles.normal);
@@ -1030,7 +1033,7 @@ pub fn draw<L: ListViewer + ?Sized>(this: &mut L, ctx: &mut DrawCtx) {
             let item = j * size.y + i + top_item;
             let cur_col = j * col_width;
 
-            let color = if active && focused == item && range > 0 {
+            let color = if list_focused && focused == item && range > 0 {
                 // Focused cell: drawn in the focused color; the hardware cursor for
                 // this cell is surfaced via `focused_cursor`, not set here (the
                 // read-only draw plus a top-down cursor walk derives it on demand).
@@ -2005,9 +2008,10 @@ mod tests {
     #[test]
     fn snapshot_single_col_active_focused_and_selected() {
         let mut l = FakeList::new(Rect::new(0, 0, 12, 4), 1, items(3), None, None);
-        // Active list (selected + active) so focused/selected colors show.
+        // Focused list (selected + active + focused) so focused/selected colors show.
         l.lv.state.state.selected = true;
         l.lv.state.state.active = true;
+        l.lv.state.state.focused = true;
         l.lv.focused = 1;
         l.selected.insert(2); // item 2 explicitly selected
         insta::assert_snapshot!(render(&mut l, 12, 4));
@@ -2020,6 +2024,7 @@ mod tests {
         let mut l = FakeList::new(Rect::new(0, 0, 16, 3), 2, items(8), None, None);
         l.lv.state.state.selected = true;
         l.lv.state.state.active = true;
+        l.lv.state.state.focused = true;
         insta::assert_snapshot!(render(&mut l, 16, 3));
     }
 
@@ -2042,6 +2047,7 @@ mod tests {
         );
         fake.lv.state.state.selected = true;
         fake.lv.state.state.active = true;
+        fake.lv.state.state.focused = true;
         fake.lv.range = 3;
         fake.lv.find_mode = FindMode::Highlight;
         fake.lv.query = "an".into();
@@ -2057,6 +2063,122 @@ mod tests {
         fake.lv.find_mode = FindMode::Filter;
         fake.lv.query = "xyz".into();
         insta::assert_snapshot!(render(&mut fake, 16, 3));
+    }
+
+    // -- active-aware surfaces: two-axis draw (Task 3) -----------------------
+    //
+    // The single `selected && active` predicate is split into two independent
+    // axes: the row SURFACE (`ctx.owner_active()` — is my owning pane the
+    // focused one?) and the item HIGHLIGHT (`state.focused` — am I, this
+    // specific list, the focused control?). These three tests prove each axis
+    // in isolation, then the real end-to-end splitter/shuttle scenario.
+
+    /// Surface axis: with a theme where `ListNormal != ListInactive`, the same
+    /// list draws its row background differently depending solely on
+    /// `ctx.owner_active()` — the list's own state never changes.
+    #[test]
+    fn surface_axis_tracks_owner_active_not_own_state() {
+        use crate::color::{Color, Style};
+
+        let mut theme = Theme::classic_blue();
+        // Distinct from ListNormal's fg=0x0/bg=0x3 so the two renders differ.
+        theme.set_style(
+            Role::ListInactive,
+            Style::new(Color::bios_rgb(0xE), Color::bios_rgb(0x4)),
+        );
+
+        let render_with = |owner_active: bool| {
+            let mut l = FakeList::new(Rect::new(0, 0, 10, 2), 1, items(2), None, None);
+            // The list's OWN state is held constant across both renders: only
+            // `owner_active` (a draw-context input, not list state) varies.
+            l.lv.state.state.selected = true;
+            l.lv.state.state.active = true;
+            let bounds = l.state().get_bounds();
+            let mut buf = Buffer::new(10, 2);
+            let mut dc = DrawCtx::new(&mut buf, &theme, bounds, bounds.a);
+            dc.set_owner_active(owner_active);
+            l.draw(&mut dc);
+            crate::screen::snapshot::snapshot(&buf, None)
+        };
+
+        let active_pane = render_with(true);
+        let inactive_pane = render_with(false);
+        assert_ne!(
+            active_pane, inactive_pane,
+            "row surface must track ctx.owner_active(), not the list's own state"
+        );
+    }
+
+    /// Highlight axis: with `ctx.owner_active()` held `true` both times (the
+    /// "sibling in the focused pane" case), the current row is drawn bright
+    /// (`ListFocused`) iff the list's OWN `state.focused` is true — being in a
+    /// focused pane is not enough if this particular list isn't the focused
+    /// control.
+    #[test]
+    fn highlight_axis_tracks_own_state_focused_not_owner_active() {
+        let render_with = |list_focused: bool| {
+            let mut l = FakeList::new(Rect::new(0, 0, 10, 2), 1, items(2), None, None);
+            l.lv.state.state.selected = true;
+            l.lv.state.state.active = true;
+            l.lv.state.state.focused = list_focused;
+            l.lv.focused = 0;
+            let theme = Theme::classic_blue();
+            let bounds = l.state().get_bounds();
+            let mut buf = Buffer::new(10, 2);
+            let mut dc = DrawCtx::new(&mut buf, &theme, bounds, bounds.a);
+            dc.set_owner_active(true); // owning pane IS focused in both renders
+            l.draw(&mut dc);
+            crate::screen::snapshot::snapshot(&buf, None)
+        };
+
+        let focused_list = render_with(true);
+        let unfocused_sibling = render_with(false);
+        assert_ne!(
+            focused_list, unfocused_sibling,
+            "current-row highlight must track the list's own state.focused, \
+             not merely owner_active"
+        );
+    }
+
+    /// End-to-end: a splitter Group holding two pane Groups, each holding a
+    /// list with an identical current item. Pane A is focused, pane B is not
+    /// (but pane B's list is still `selected && active`, reproducing the old
+    /// conflated predicate's trigger). Only pane A's list may show its current
+    /// row in the bright `ListFocused` color; pane B's current row falls back
+    /// to `ListSelected` (a single-select list's current item is always its
+    /// own "selected" row — see `FakeList::is_selected` — but never the bright
+    /// focused color unless that specific list has keyboard focus).
+    #[test]
+    fn list_current_item_bright_only_in_the_focused_pane() {
+        let mut list_a = FakeList::new(Rect::new(0, 0, 8, 2), 1, items(2), None, None);
+        list_a.lv.state.state.selected = true;
+        list_a.lv.state.state.active = true;
+        list_a.lv.state.state.focused = true; // pane A's list IS the focused control
+        list_a.lv.focused = 0;
+
+        let mut list_b = FakeList::new(Rect::new(0, 0, 8, 2), 1, items(2), None, None);
+        list_b.lv.state.state.selected = true;
+        list_b.lv.state.state.active = true;
+        list_b.lv.state.state.focused = false; // current in pane B, but not focused
+        list_b.lv.focused = 0;
+
+        let mut pane_a = Group::new(Rect::new(0, 0, 8, 2));
+        pane_a.insert(Box::new(list_a));
+        pane_a.state_mut().state.focused = true; // pane A has keyboard focus
+
+        let mut pane_b = Group::new(Rect::new(9, 0, 17, 2));
+        pane_b.insert(Box::new(list_b));
+        pane_b.state_mut().state.focused = false; // pane B does not
+
+        let mut splitter = Group::new(Rect::new(0, 0, 17, 2));
+        splitter.insert(Box::new(pane_a));
+        splitter.insert(Box::new(pane_b));
+
+        let theme = Theme::classic_blue();
+        let mut buf = Buffer::new(17, 2);
+        let mut dc = DrawCtx::new(&mut buf, &theme, Rect::new(0, 0, 17, 2), Point::new(0, 0));
+        splitter.draw(&mut dc);
+        insta::assert_snapshot!(crate::screen::snapshot::snapshot(&buf, None));
     }
 
     // -- mouse-track: ListViewer ----------------------------------------------

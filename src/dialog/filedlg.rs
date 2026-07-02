@@ -3298,6 +3298,7 @@ mod tests {
         // Seed directly (no Context needed for draw test).
         dlb.lv.state.state.selected = true;
         dlb.lv.state.state.active = true;
+        dlb.lv.state.state.focused = true;
         dlb.items = items;
         dlb.cur = cur;
         dlb.lv.range = dlb.items.len() as i32;
@@ -3325,6 +3326,7 @@ mod tests {
         let mut dlb = DirListBox::new(crate::view::Rect::new(0, 0, 30, 8), None, None);
         dlb.lv.state.state.selected = true;
         dlb.lv.state.state.active = true;
+        dlb.lv.state.state.focused = true;
         dlb.items = items;
         dlb.cur = cur; // cur == 2 (oetiker) remains the "selected" dir.
         dlb.lv.range = dlb.items.len() as i32;
@@ -3625,6 +3627,7 @@ mod tests {
         let mut fl = FileList::new(crate::view::Rect::new(0, 0, 30, 6), None, None);
         fl.lv.state.state.selected = true;
         fl.lv.state.state.active = true;
+        fl.lv.state.state.focused = true;
         fl.items = items;
         fl.lv.range = fl.items.len() as i32;
         fl.lv.focused = 0;
@@ -4509,6 +4512,7 @@ mod tests {
             fl.lv.focused = 0;
             fl.lv.state.state.selected = true;
             fl.lv.state.state.active = true;
+            fl.lv.state.state.focused = true;
         }
         // Set the info pane's path line deterministically.
         if let Some(fip) = fd
@@ -5191,6 +5195,7 @@ mod tests {
             dl.lv.focused = cur as i32;
             dl.lv.state.state.selected = true;
             dl.lv.state.state.active = true;
+            dl.lv.state.state.focused = true;
         }
         // Set the dirInput text deterministically (the trimmed current dir).
         if let Some(input) = cd.dialog.child_mut(cd.dir_input_id) {

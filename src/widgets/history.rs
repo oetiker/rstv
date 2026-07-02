@@ -1535,6 +1535,7 @@ mod viewer_tests {
         // Activate so the focused row renders in the distinct focused color.
         hv.lv.state.state.selected = true;
         hv.lv.state.state.active = true;
+        hv.lv.state.state.focused = true;
 
         // Call setup — None bars means the hbar block is skipped and no ViewId
         // resolution is needed, so the deferred queue stays empty.

@@ -20,6 +20,16 @@ moves it into a dated, versioned section when a release is cut.
 
 ### Fixed
 
+- `ListViewer::draw` (and its consumers `ListBox`, `FileList`, `DirListBox`,
+  `HistoryViewer`) now splits the single `state.selected && state.active`
+  predicate into two independent axes: the row surface uses
+  `DrawCtx::owner_active()` (is the owning pane focused?), and the current-item
+  highlight uses the list's own `state.focused` (is this specific list the
+  focused control?). Fixes a list that is current in an unfocused
+  splitter/shuttle pane still drawing its row bright/active. In `classic_blue`
+  flat (non-nested) layouts the two axes agree with the old predicate, so
+  existing snapshots are pixel-identical.
+
 ## 0.5.0 - 2026-07-01
 
 ### New
