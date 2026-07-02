@@ -993,10 +993,12 @@ impl View for Group {
     /// original paints top-first and tracks occlusion, which tvision-rs drops in favor
     /// of whole-tree redraw + diff.
     fn draw(&mut self, ctx: &mut DrawCtx) {
+        let owner_active = self.st.state.focused;
         for child in self.children.iter_mut() {
             if child.view.state().state.visible {
                 let bounds = child.view.state().get_bounds();
                 let mut sub = ctx.sub(bounds);
+                sub.set_owner_active(owner_active);
                 child.view.draw(&mut sub);
                 if child.view.state().state.shadow {
                     ctx.cast_shadow(bounds);
@@ -3482,6 +3484,60 @@ mod tests {
             g.get_help_ctx(),
             LEAF,
             "TGroup::getHelpCtx returns current child's context"
+        );
+    }
+
+    #[test]
+    fn group_draw_sets_child_owner_active_from_group_focused() {
+        use crate::screen::Buffer;
+        use crate::theme::Theme;
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        // A minimal spy child that records ctx.owner_active() when drawn.
+        struct Spy {
+            st: ViewState,
+            seen: Rc<Cell<Option<bool>>>,
+        }
+        impl View for Spy {
+            fn state(&self) -> &ViewState {
+                &self.st
+            }
+            fn state_mut(&mut self) -> &mut ViewState {
+                &mut self.st
+            }
+            fn draw(&mut self, ctx: &mut DrawCtx) {
+                self.seen.set(Some(ctx.owner_active()));
+            }
+        }
+
+        let seen = Rc::new(Cell::new(None));
+        let mut group = Group::new(Rect::new(0, 0, 10, 4));
+        group.insert(Box::new(Spy {
+            st: ViewState::new(Rect::new(0, 0, 10, 2)),
+            seen: seen.clone(),
+        }));
+
+        let theme = Theme::classic_blue();
+        let mut buf = Buffer::new(10, 4);
+        let mut ctx = DrawCtx::new(&mut buf, &theme, Rect::new(0, 0, 10, 4), Point::new(0, 0));
+
+        // Group NOT focused -> child sees owner_active == false.
+        group.state_mut().state.focused = false;
+        group.draw(&mut ctx);
+        assert_eq!(
+            seen.get(),
+            Some(false),
+            "unfocused group must mark children owner-inactive"
+        );
+
+        // Group focused -> child sees owner_active == true.
+        group.state_mut().state.focused = true;
+        group.draw(&mut ctx);
+        assert_eq!(
+            seen.get(),
+            Some(true),
+            "focused group must mark children owner-active"
         );
     }
 }

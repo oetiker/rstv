@@ -14,6 +14,10 @@ moves it into a dated, versioned section when a release is cut.
 
 ### Changed
 
+- `DrawCtx` carries a new `owner_active` draw-time signal, set by `Group::draw`
+  from the owning group's own `focused` flag and inherited by `sub()`. Internal
+  infra only — nothing reads it yet, so no visible/snapshot change.
+
 ### Fixed
 
 ## 0.5.0 - 2026-07-01
