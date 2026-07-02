@@ -770,10 +770,10 @@ pub fn ov_draw<L: OutlineViewer + ?Sized>(this: &mut L, ctx: &mut DrawCtx) {
     let foc = this.ov().foc;
     let focused_state = this.ov().state.state.focused;
 
-    // Normal-row surface is focus-aware (a tvision-rs deviation from C++, which has
-    // no active/inactive normal): a focused outline uses OutlineNormal, an unfocused
-    // one recedes to OutlineInactive. classic_blue maps them identically.
-    let nrm_color = ctx.style(if focused_state {
+    // Normal-row surface follows the owning PANE, not this outline's own focus:
+    // an outline in the focused pane uses OutlineNormal; in an inactive pane it
+    // recedes to OutlineInactive. classic_blue maps them identically.
+    let nrm_color = ctx.style(if ctx.owner_active() {
         Role::OutlineNormal
     } else {
         Role::OutlineInactive
@@ -2015,29 +2015,39 @@ mod tests {
         insta::assert_snapshot!(render_outline(&mut outline, 20, 5));
     }
 
-    /// Render `outline` with `theme` into a fresh buffer and return the
-    /// background colour of the cell at `(x, y)`.
-    fn cell_bg(outline: &mut Outline, theme: &Theme, x: u16, y: u16) -> crate::color::Color {
+    /// Render `outline` with `theme` into a fresh buffer, with the `DrawCtx`'s
+    /// `owner_active` set explicitly, and return the style of the cell at
+    /// `(x, y)`.
+    fn cell_style(
+        outline: &mut Outline,
+        theme: &Theme,
+        x: u16,
+        y: u16,
+        owner_active: bool,
+    ) -> crate::color::Style {
         let bounds = outline.state().get_bounds();
         let mut buf = Buffer::new(bounds.b.x as u16, bounds.b.y as u16);
         let mut dc = DrawCtx::new(&mut buf, theme, bounds, bounds.a);
+        dc.set_owner_active(owner_active);
         outline.draw(&mut dc);
-        buf.get(x, y).style().bg
+        buf.get(x, y).style()
     }
 
-    /// The normal-row surface is focus-aware (a tvision-rs deviation): a focused
-    /// outline paints normal rows with `Role::OutlineNormal`, an unfocused one
-    /// with `Role::OutlineInactive`. Uses a theme where the two roles
-    /// differ so the difference is observable (classic_blue makes them equal).
+    /// The normal-row surface follows the owning PANE (`DrawCtx::owner_active`),
+    /// NOT this outline's own `state.focused`: an outline in the focused pane
+    /// paints normal rows with `Role::OutlineNormal`; one in an inactive pane
+    /// recedes to `Role::OutlineInactive` — regardless of its own focus. Uses a
+    /// theme where the two roles differ so the difference is observable
+    /// (classic_blue makes them equal).
     #[test]
-    fn normal_row_background_is_focus_aware() {
+    fn normal_row_surface_follows_owner_active_not_own_focus() {
         use crate::color::{Color, Style};
 
         let mut theme = Theme::classic_blue();
         // Dim the inactive surface to a distinct colour to prove the predicate.
         theme.set_style(
             Role::OutlineInactive,
-            Style::new(Color::Bios(0x7), Color::Bios(0x4)),
+            Style::new(Color::bios_rgb(0x8), Color::bios_rgb(0x4)),
         );
         let normal_bg = theme.style(Role::OutlineNormal).bg;
         let inactive_bg = theme.style(Role::OutlineInactive).bg;
@@ -2046,17 +2056,60 @@ mod tests {
             "test theme must distinguish the roles"
         );
 
-        // Root "Animals" (pos 0, focused) with normal children "Cats"/"Dogs".
+        // Root "Animals" (pos 0) with normal children "Cats"/"Dogs".
         let mut outline = Outline::new(Rect::new(0, 0, 20, 5), None, None, Some(animals_tree()));
         outline.ov_mut().foc = 0;
         outline.ov_mut().limit = Point::new(10, 3);
 
-        // Read a blank fill cell on the "Cats" row (position 1, a normal row).
-        outline.ov_mut().state.state.focused = true;
-        assert_eq!(cell_bg(&mut outline, &theme, 15, 1), normal_bg);
-
+        // owner_active=true, outline's own focus=false: still Normal — proves
+        // the surface does NOT key on the outline's own focus.
         outline.ov_mut().state.state.focused = false;
-        assert_eq!(cell_bg(&mut outline, &theme, 15, 1), inactive_bg);
+        assert_eq!(
+            cell_style(&mut outline, &theme, 15, 1, true).bg,
+            normal_bg,
+            "owner_active pane uses the normal surface even when the outline itself is unfocused"
+        );
+
+        // owner_active=false, outline's own focus=true: recedes to Inactive —
+        // proves the surface DOES key on owner_active.
+        outline.ov_mut().state.state.focused = true;
+        assert_eq!(
+            cell_style(&mut outline, &theme, 15, 1, false).bg,
+            inactive_bg,
+            "inactive pane uses the inactive surface even when the outline itself is focused"
+        );
+    }
+
+    /// The focused-row HIGHLIGHT (the outline's own current position) still
+    /// follows the outline's own `state.focused`, independent of
+    /// `owner_active` — unchanged by the surface re-key above.
+    #[test]
+    fn focused_row_highlight_follows_own_focus_not_owner_active() {
+        let theme = Theme::classic_blue();
+        let focused_fg = theme.style(Role::OutlineFocused).fg;
+        let normal_fg = theme.style(Role::OutlineNormal).fg;
+        assert_ne!(
+            focused_fg, normal_fg,
+            "classic_blue must distinguish the roles"
+        );
+
+        let mut outline = Outline::new(Rect::new(0, 0, 20, 5), None, None, Some(animals_tree()));
+        outline.ov_mut().foc = 0; // root row is the outline's current position
+        outline.ov_mut().limit = Point::new(10, 3);
+
+        // owner_active=true, outline's own focus=true: highlight applies.
+        outline.ov_mut().state.state.focused = true;
+        assert_eq!(cell_style(&mut outline, &theme, 0, 0, true).fg, focused_fg);
+
+        // owner_active=false, outline's own focus=true: highlight STILL
+        // applies — the highlight ignores owner_active.
+        assert_eq!(cell_style(&mut outline, &theme, 0, 0, false).fg, focused_fg);
+
+        // owner_active=true, outline's own focus=false: highlight does NOT
+        // apply (falls back to the normal surface fg) — the highlight
+        // follows the outline's own focus.
+        outline.ov_mut().state.state.focused = false;
+        assert_ne!(cell_style(&mut outline, &theme, 0, 0, true).fg, focused_fg);
     }
 
     // -- mouse-track: Outline -------------------------------------------------
