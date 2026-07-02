@@ -772,11 +772,11 @@ pub fn ov_draw<L: OutlineViewer + ?Sized>(this: &mut L, ctx: &mut DrawCtx) {
 
     // Normal-row surface is focus-aware (a tvision-rs deviation from C++, which has
     // no active/inactive normal): a focused outline uses OutlineNormal, an unfocused
-    // one recedes to OutlineNormalInactive. classic_blue maps them identically.
+    // one recedes to OutlineInactive. classic_blue maps them identically.
     let nrm_color = ctx.style(if focused_state {
         Role::OutlineNormal
     } else {
-        Role::OutlineNormalInactive
+        Role::OutlineInactive
     });
     let focused_color = ctx.style(Role::OutlineFocused);
     let selected_color = ctx.style(Role::OutlineSelected);
@@ -2027,7 +2027,7 @@ mod tests {
 
     /// The normal-row surface is focus-aware (a tvision-rs deviation): a focused
     /// outline paints normal rows with `Role::OutlineNormal`, an unfocused one
-    /// with `Role::OutlineNormalInactive`. Uses a theme where the two roles
+    /// with `Role::OutlineInactive`. Uses a theme where the two roles
     /// differ so the difference is observable (classic_blue makes them equal).
     #[test]
     fn normal_row_background_is_focus_aware() {
@@ -2036,11 +2036,11 @@ mod tests {
         let mut theme = Theme::classic_blue();
         // Dim the inactive surface to a distinct colour to prove the predicate.
         theme.set_style(
-            Role::OutlineNormalInactive,
+            Role::OutlineInactive,
             Style::new(Color::Bios(0x7), Color::Bios(0x4)),
         );
         let normal_bg = theme.style(Role::OutlineNormal).bg;
-        let inactive_bg = theme.style(Role::OutlineNormalInactive).bg;
+        let inactive_bg = theme.style(Role::OutlineInactive).bg;
         assert_ne!(
             normal_bg, inactive_bg,
             "test theme must distinguish the roles"

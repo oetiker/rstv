@@ -717,13 +717,13 @@ impl View for InputLine {
         self.abs_origin = ctx.origin();
         let size = self.state.size;
         // C++ TInputLine::draw picks the background via getColor(sfFocused ? 2 : 1):
-        // the active (focused) surface is cpInputLine[2] == Role::InputNormal, the
-        // passive (unfocused) surface is cpInputLine[1] == Role::InputPassive. In
-        // classic_blue both are identical; a theme may dim InputPassive to signal focus.
+        // the focused surface is cpInputLine[2] == Role::InputNormal, the
+        // unfocused surface is cpInputLine[1] == Role::InputInactive. In
+        // classic_blue both are identical; a theme may dim InputInactive to signal focus.
         let color = ctx.style(if self.state.state.focused {
             Role::InputNormal
         } else {
-            Role::InputPassive
+            Role::InputInactive
         });
         let arrow = ctx.style(Role::InputArrow);
         let selected = ctx.style(Role::InputSelected);
@@ -2452,7 +2452,7 @@ mod tests {
     }
 
     /// InputLine honours `sfFocused` for its background: a focused field uses
-    /// `Role::InputNormal`, an unfocused one `Role::InputPassive`. Uses a theme
+    /// `Role::InputNormal`, an unfocused one `Role::InputInactive`. Uses a theme
     /// where the two roles differ so the difference is observable (classic_blue
     /// makes them identical).
     #[test]
@@ -2462,11 +2462,11 @@ mod tests {
         let mut theme = Theme::classic_blue();
         // Dim the passive surface to a distinct colour to prove the predicate.
         theme.set_style(
-            Role::InputPassive,
+            Role::InputInactive,
             Style::new(Color::Bios(0x7), Color::Bios(0x4)),
         );
         let normal_bg = theme.style(Role::InputNormal).bg;
-        let passive_bg = theme.style(Role::InputPassive).bg;
+        let passive_bg = theme.style(Role::InputInactive).bg;
         assert_ne!(
             normal_bg, passive_bg,
             "test theme must distinguish the roles"

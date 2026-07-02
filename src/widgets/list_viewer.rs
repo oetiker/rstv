@@ -52,8 +52,8 @@
 //!
 //! # Colors
 //!
-//! Each list role is a [`Role`]: [`Role::ListNormalActive`] /
-//! [`Role::ListNormalInactive`] / [`Role::ListFocused`] / [`Role::ListSelected`]
+//! Each list role is a [`Role`]: [`Role::ListNormal`] /
+//! [`Role::ListInactive`] / [`Role::ListFocused`] / [`Role::ListSelected`]
 //! / [`Role::ListDivider`]. A subclass that wanted a different palette surfaces a
 //! different [`ListRoles`] quintet from [`ListViewer::list_roles`].
 //!
@@ -248,11 +248,11 @@ impl ListViewerState {
 /// divider. The constant [`ListRoles::LIST_VIEWER`] holds the base quintet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ListRoles {
-    /// A normal item of an active list (also the `<empty>` fill).
-    pub normal_active: Role,
-    /// A normal item of an inactive list.
-    pub normal_inactive: Role,
-    /// The focused (cursor) item of an active list.
+    /// A normal item of an owner-active list (also the `<empty>` fill).
+    pub normal: Role,
+    /// A normal item when the owning pane is inactive.
+    pub inactive: Role,
+    /// The focused (cursor) item, shown when this list is the focused control.
     pub focused: Role,
     /// A selected item.
     pub selected: Role,
@@ -263,8 +263,8 @@ pub struct ListRoles {
 impl ListRoles {
     /// The base list-viewer role family.
     pub const LIST_VIEWER: ListRoles = ListRoles {
-        normal_active: Role::ListNormalActive,
-        normal_inactive: Role::ListNormalInactive,
+        normal: Role::ListNormal,
+        inactive: Role::ListInactive,
         focused: Role::ListFocused,
         selected: Role::ListSelected,
         divider: Role::ListDivider,
@@ -998,19 +998,19 @@ pub fn draw<L: ListViewer + ?Sized>(this: &mut L, ctx: &mut DrawCtx) {
     let roles = this.list_roles();
     let (normal, selected, focused_color) = if active {
         (
-            ctx.style(roles.normal_active), // normal item
+            ctx.style(roles.normal),        // normal item
             ctx.style(roles.selected),      // selected item
             Some(ctx.style(roles.focused)), // focused item
         )
     } else {
         (
-            ctx.style(roles.normal_inactive), // normal item (inactive list)
-            ctx.style(roles.selected),        // selected item
-            None,                             // focused color unused
+            ctx.style(roles.inactive), // normal item (inactive list)
+            ctx.style(roles.selected), // selected item
+            None,                      // focused color unused
         )
     };
     let divider_color = ctx.style(roles.divider);
-    let empty_color = ctx.style(roles.normal_active);
+    let empty_color = ctx.style(roles.normal);
     // The find-highlight accent reuses the list's `selected` role: it pops on
     // normal (cyan) and focused (green) rows; on a multi-select-selected row it
     // matches the row colour (acceptable — selection already marks that row).
