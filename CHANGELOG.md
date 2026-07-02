@@ -12,31 +12,32 @@ moves it into a dated, versioned section when a release is cut.
 
 ### New
 
+- `DrawCtx::owner_active()` — a draw-time signal (each `Group` fans its own
+  `focused` to its children) telling a content widget whether its owning pane is
+  the focused one. Content widgets pick their surface from it, so a pane's
+  content recedes as a unit when the pane loses focus — fixing multi-field form
+  panes and multi-list widgets (e.g. a two-list shuttle) that previously could
+  not dim as a whole. rstv deviation: C++ Turbo Vision focus is per-window, with
+  no nested panes.
+
 ### Changed
 
-- `DrawCtx` carries a new `owner_active` draw-time signal, set by `Group::draw`
-  from the owning group's own `focused` flag and inherited by `sub()`. Internal
-  infra only — nothing reads it yet, so no visible/snapshot change.
+- Renamed surface roles onto the owning-pane axis: `ListNormalActive` →
+  `ListNormal`, `ListNormalInactive` → `ListInactive`, `OutlineNormalInactive` →
+  `OutlineInactive`, `InputPassive` → `InputInactive`. In `classic_blue` each
+  `*Inactive` role resolves identically to its active counterpart, so unthemed
+  rendering is pixel-identical; a theme may dim the `*Inactive` roles so an
+  inactive pane recedes.
+- `ListViewer` (and `ListBox` / `FileList` / `DirListBox` / `HistoryViewer`) now
+  keys its current-item highlight on the list's own `state.focused` and its row
+  surface on `owner_active`, fixing a list that is current in an unfocused
+  splitter/shuttle pane still drawing bright/active.
+- `Outline` and `InputLine` now pick their row/background surface from
+  `owner_active` (the owning pane's focus) instead of the widget's own
+  `state.focused`, so their content recedes with an inactive pane.
 
-### Fixed
-
-- `ListViewer::draw` (and its consumers `ListBox`, `FileList`, `DirListBox`,
-  `HistoryViewer`) now splits the single `state.selected && state.active`
-  predicate into two independent axes: the row surface uses
-  `DrawCtx::owner_active()` (is the owning pane focused?), and the current-item
-  highlight uses the list's own `state.focused` (is this specific list the
-  focused control?). Fixes a list that is current in an unfocused
-  splitter/shuttle pane still drawing its row bright/active. In `classic_blue`
-  flat (non-nested) layouts the two axes agree with the old predicate, so
-  existing snapshots are pixel-identical.
-
-- `InputLine::draw` now picks its background from `DrawCtx::owner_active()`
-  (the owning pane's focus) instead of the field's own `state.focused`: within
-  a focused pane every field uses `Role::InputNormal` (the cursor marks the
-  current one), and a field in an inactive pane recedes to
-  `Role::InputInactive`. Fixes a form pane's value fields being unable to
-  recede as a group when their pane loses focus. In `classic_blue` the two
-  roles are identical, so existing snapshots are pixel-identical.
+All `classic_blue` snapshots are unchanged — every `*Inactive` role resolves to
+its active colour.
 
 ## 0.5.0 - 2026-07-01
 

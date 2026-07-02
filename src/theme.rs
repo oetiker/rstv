@@ -186,15 +186,19 @@ pub enum Role {
     /// while a mouse button is held down. In `classic_blue` this is white on
     /// green (`0x2F`), matching [`Focused`](Role::Focused).
     Pressed,
-    /// A normal item in an **active** (focused) [`ListViewer`](crate::widgets::ListViewer)
-    /// — and also the empty-list fill. In `classic_blue` this is black on cyan
-    /// (`0x30`), resolved from `cpListViewer[1]=0x1A → cpGrayDialog[26]=0x39
-    /// → cpAppColor[57]=0x30`.
+    /// A normal item's row surface in a [`ListViewer`](crate::widgets::ListViewer)
+    /// whose **owning pane** is active (see
+    /// [`DrawCtx::owner_active`](crate::view::DrawCtx::owner_active)) — and also
+    /// the empty-list fill. In `classic_blue` this is black on cyan (`0x30`),
+    /// resolved from `cpListViewer[1]=0x1A → cpGrayDialog[26]=0x39 →
+    /// cpAppColor[57]=0x30`.
     ListNormal,
-    /// A normal item in an **inactive** (unfocused)
-    /// [`ListViewer`](crate::widgets::ListViewer). In `classic_blue` this
-    /// matches [`ListNormal`](Role::ListNormal) — both palette
-    /// indices resolve to the same dialog entry (`0x1A`).
+    /// A normal item's row surface in a [`ListViewer`](crate::widgets::ListViewer)
+    /// whose owning pane is inactive — recedes as a unit with the rest of the
+    /// pane's content, independent of whether this particular list is the
+    /// current control. In `classic_blue` this matches
+    /// [`ListNormal`](Role::ListNormal) — both palette indices resolve to the
+    /// same dialog entry (`0x1A`).
     ListInactive,
     /// The focused (cursor) item of an active
     /// [`ListViewer`](crate::widgets::ListViewer). In `classic_blue` this is
@@ -340,10 +344,14 @@ pub enum Role {
     /// white on blue (`0x1F`), resolved from `cpInputLine[1]=cpInputLine[2]=0x13
     /// → cpGrayDialog[19]=0x32 → cpAppColor[50]=0x1F`.
     InputNormal,
-    /// An input line's background when it does NOT hold focus (C++
-    /// `cpInputLine[1]`, the unfocused entry — `TInputLine::draw` selects it via
-    /// `getColor(sfFocused ? 2 : 1)`). In `classic_blue` it equals
-    /// [`InputNormal`](Role::InputNormal); a theme may dim it to signal focus.
+    /// An input line's background when its **owning pane** is inactive (see
+    /// [`DrawCtx::owner_active`](crate::view::DrawCtx::owner_active)) — every
+    /// field in the pane recedes together, regardless of which field itself
+    /// holds focus. Heritage: this is the C++ `cpInputLine[1]` slot
+    /// (`TInputLine::draw` selects it via `getColor(sfFocused ? 2 : 1)`, the
+    /// unfocused entry); rstv repurposes it onto the owning-pane axis. In
+    /// `classic_blue` it equals [`InputNormal`](Role::InputNormal); a theme may
+    /// dim it to signal an inactive pane.
     InputInactive,
     /// An [`InputLine`](crate::widgets::InputLine)'s selection highlight —
     /// the text region between the cursor and the mark anchor. In
@@ -440,10 +448,12 @@ pub enum Role {
     /// [`ov_draw`](crate::widgets::outline::ov_draw) for every row that is
     /// neither focused nor selected.
     OutlineNormal,
-    /// An outline's normal-row background when the outline does NOT hold focus.
-    /// A tvision-rs deviation (C++ `TOutlineViewer` has no active/inactive normal):
-    /// lets splitter-pane layouts dim unfocused trees. In `classic_blue` it
-    /// equals [`OutlineNormal`](Role::OutlineNormal).
+    /// An outline's normal-row background when its **owning pane** is inactive
+    /// (see [`DrawCtx::owner_active`](crate::view::DrawCtx::owner_active)),
+    /// regardless of the outline's own focus. A tvision-rs deviation (C++
+    /// `TOutlineViewer` has no active/inactive normal): lets splitter-pane
+    /// layouts dim unfocused trees. In `classic_blue` it equals
+    /// [`OutlineNormal`](Role::OutlineNormal).
     OutlineInactive,
     /// Style for the focused row of an outline viewer when the viewer has
     /// keyboard focus. Applied to both the graph prefix and the node text,

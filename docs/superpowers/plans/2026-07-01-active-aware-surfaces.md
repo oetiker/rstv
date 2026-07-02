@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (Cargo workspace `tvision-rs` + `tvision-rs-macros`), `insta` snapshot tests on `HeadlessBackend`.
 
-**Design doc:** `docs/superpowers/specs/2026-07-01-uniform-pane-dimming-design.md`
+**Design doc:** `docs/superpowers/specs/2026-07-01-active-aware-surfaces-design.md`
 
 ## Global Constraints
 
