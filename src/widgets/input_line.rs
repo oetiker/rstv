@@ -700,8 +700,9 @@ impl View for InputLine {
     /// edges when the content overflows, and the selection highlight.
     ///
     /// Colors come from three theme roles: [`Role::InputNormal`] for the
-    /// background and unselected text (both focused and unfocused use the same
-    /// normal style), [`Role::InputArrow`] for the `◄`/`►` overflow indicators,
+    /// background and unselected text within an active pane
+    /// ([`Role::InputInactive`] takes over when the owning pane recedes — see
+    /// below), [`Role::InputArrow`] for the `◄`/`►` overflow indicators,
     /// and [`Role::InputSelected`] for highlighted text. Because tvision-rs has
     /// no attribute-only paint, the selected substring is **redrawn** (not just
     /// re-attributed) in the selected style at the correct scroll offset — the
@@ -716,11 +717,11 @@ impl View for InputLine {
         // this value, mirroring the Button `abs_origin` pattern.
         self.abs_origin = ctx.origin();
         let size = self.state.size;
-        // C++ TInputLine::draw picks the background via getColor(sfFocused ? 2 : 1):
-        // the focused surface is cpInputLine[2] == Role::InputNormal, the
-        // unfocused surface is cpInputLine[1] == Role::InputInactive. In
-        // classic_blue both are identical; a theme may dim InputInactive to signal focus.
-        let color = ctx.style(if self.state.state.focused {
+        // Background follows the owning pane, not this field's own focus: within
+        // the focused pane every field uses InputNormal (the cursor marks the
+        // current one); a field in an inactive pane recedes to InputInactive.
+        // classic_blue maps both to white-on-blue, so unthemed input is unchanged.
+        let color = ctx.style(if ctx.owner_active() {
             Role::InputNormal
         } else {
             Role::InputInactive
@@ -2437,48 +2438,59 @@ mod tests {
         assert!(line.validator.is_none());
     }
 
-    // -- focus-aware background --------------------------------------------
+    // -- owner-active background --------------------------------------------
 
     /// Render `il` with `theme` into a fresh buffer and return the background
     /// colour of the fill cell at column 8 (past the "hello" text, inside the
-    /// row fill, away from any selection highlight).
-    fn fill_bg(il: &mut InputLine, theme: &Theme) -> crate::color::Color {
+    /// row fill, away from any selection highlight). `owner_active` drives the
+    /// [`DrawCtx`] directly (the direct-`DrawCtx` pattern from
+    /// `Group::group_draw_sets_child_owner_active_from_group_focused`) so the
+    /// field's own `state.focused` can be varied independently.
+    fn fill_bg(il: &mut InputLine, theme: &Theme, owner_active: bool) -> crate::color::Color {
         let size = il.state.size;
         let mut buf = Buffer::new(size.x as u16, size.y as u16);
         let bounds = il.state.get_bounds();
         let mut dc = DrawCtx::new(&mut buf, theme, bounds, bounds.a);
+        dc.set_owner_active(owner_active);
         il.draw(&mut dc);
         buf.get(8, 0).style().bg
     }
 
-    /// InputLine honours `sfFocused` for its background: a focused field uses
-    /// `Role::InputNormal`, an unfocused one `Role::InputInactive`. Uses a theme
+    /// InputLine's background follows the owning pane's `owner_active`, not the
+    /// field's own focus: an active pane uses `Role::InputNormal` for every
+    /// field, an inactive pane recedes to `Role::InputInactive`. Uses a theme
     /// where the two roles differ so the difference is observable (classic_blue
-    /// makes them identical).
+    /// makes them identical). Drives `owner_active` and the field's own
+    /// `state.focused` independently to prove the surface tracks the pane, not
+    /// the field.
     #[test]
-    fn background_is_focus_aware() {
+    fn background_follows_owner_active() {
         use crate::color::{Color, Style};
 
         let mut theme = Theme::classic_blue();
-        // Dim the passive surface to a distinct colour to prove the predicate.
+        // Dim the inactive surface to a distinct colour to prove the predicate.
         theme.set_style(
             Role::InputInactive,
             Style::new(Color::Bios(0x7), Color::Bios(0x4)),
         );
         let normal_bg = theme.style(Role::InputNormal).bg;
-        let passive_bg = theme.style(Role::InputInactive).bg;
+        let inactive_bg = theme.style(Role::InputInactive).bg;
         assert_ne!(
-            normal_bg, passive_bg,
+            normal_bg, inactive_bg,
             "test theme must distinguish the roles"
         );
 
         let mut il = field(12, "hello");
         il.first_pos = 0;
 
-        il.state.state.focused = true;
-        assert_eq!(fill_bg(&mut il, &theme), normal_bg);
-
+        // owner_active=true with the field itself unfocused still yields
+        // InputNormal: within an active pane every field is "normal".
         il.state.state.focused = false;
-        assert_eq!(fill_bg(&mut il, &theme), passive_bg);
+        assert_eq!(fill_bg(&mut il, &theme, true), normal_bg);
+
+        // owner_active=false with the field itself focused still yields
+        // InputInactive: the pane recedes regardless of the field's own focus.
+        il.state.state.focused = true;
+        assert_eq!(fill_bg(&mut il, &theme, false), inactive_bg);
     }
 }

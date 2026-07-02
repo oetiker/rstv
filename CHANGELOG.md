@@ -30,6 +30,14 @@ moves it into a dated, versioned section when a release is cut.
   flat (non-nested) layouts the two axes agree with the old predicate, so
   existing snapshots are pixel-identical.
 
+- `InputLine::draw` now picks its background from `DrawCtx::owner_active()`
+  (the owning pane's focus) instead of the field's own `state.focused`: within
+  a focused pane every field uses `Role::InputNormal` (the cursor marks the
+  current one), and a field in an inactive pane recedes to
+  `Role::InputInactive`. Fixes a form pane's value fields being unable to
+  recede as a group when their pane loses focus. In `classic_blue` the two
+  roles are identical, so existing snapshots are pixel-identical.
+
 ## 0.5.0 - 2026-07-01
 
 ### New
